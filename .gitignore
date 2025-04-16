@@ -6,7 +6,6 @@ log.log
 test_book.ipynb
 test_book.log
 outputs/
-challenges/FOURTOPS/data/
-challenges/FOURTOPS/misc/
+challenges/FOURTOPS/data/*
+challenges/FOURTOPS/misc/*
 OLD*
-*.csv

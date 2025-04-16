@@ -38,7 +38,7 @@ def script_safety_check(script_path):
     return True
 
 
-def script_dryrun(script_path, timeout=300):
+def script_dryrun(script_path, timeout):
     """
     Run the given Python script using subprocess with a timeout.
     Returns (stdout, stderr) if successful, or None if it times out or fails the safety check.
@@ -65,6 +65,48 @@ def script_dryrun(script_path, timeout=300):
     except Exception as e:
         logging.error("Error during dry run for script %s: %s", script_path, e)
         return False, None, None
+    
+
+def run_all_success_scripts(base_folder, timeout=3600):
+    """
+    Traverse the base_folder recursively (which is expected to be the root of your outputs directory),
+    and for each Python script (.py file) that is not under a folder named "Failed Dry-run Scripts",
+    run the script using the current Python interpreter.
+    
+    Parameters:
+      base_folder (str): The top-level folder where scripts are stored (e.g. "./outputs/21-03/").
+      timeout (int): Maximum allowed runtime per script in seconds.
+      
+    Returns:
+      A list of tuples (script_path, return_code, stdout, stderr) for each script run.
+    """
+
+    results = []
+    # Walk through the folder recursively.
+    for root, dirs, files in os.walk(base_folder):
+        # Skip any folder whose name is "Failed Dry-run Scripts"
+        if os.path.basename(root) == "Failed Dry-run Scripts":
+            continue  # do not process scripts in this folder
+        
+        for file in files:
+            if file.endswith(".py"):
+                script_path = os.path.join(root, file)
+                logging.info("Running script: %s", script_path)
+                try:
+                    # Run the script without the --dryrun flag
+                    result = subprocess.run([sys.executable, script_path],
+                                            capture_output=True, text=True, timeout=timeout)
+                    logging.info("Script %s finished with exit code %d", script_path, result.returncode)
+                    logging.debug("Script STDOUT: %s", result.stdout)
+                    logging.debug("Script STDERR: %s", result.stderr)
+                    results.append((script_path, result.returncode, result.stdout, result.stderr))
+                except subprocess.TimeoutExpired:
+                    logging.error("Script %s timed out after %d seconds", script_path, timeout)
+                    results.append((script_path, None, "", "Timeout"))
+                except Exception as e:
+                    logging.error("Error running script %s: %s", script_path, e)
+                    results.append((script_path, None, "", str(e)))
+    return results
 
 
 def main():

@@ -8,8 +8,8 @@ import logging
 import time
 import re
 
-import config
 from prompts import *
+from config import OPENROUTER_API_KEY, models, num_attempts
 
 
 # API URLs
@@ -19,7 +19,7 @@ api_models = "https://openrouter.ai/api/v1/models"
 
 def query_openrouter(model, prompt):
     headers = {
-        "Authorization": f"Bearer {config.OPENROUTER_API_KEY}",
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
         "Content-Type": "application/json",        
     }
     
@@ -137,85 +137,27 @@ def parse_response(raw: str) -> str:
 
     return json_block
 
-def save_response_legacy(model, i, code_response, explanation_response, question, data_loading_script=""):
-    """
-    Refactor this for new utilities
-    """
-    current_time = time.strftime("%d%m%H%M")
-    day_month = time.strftime("%d-%m")
-
-    # Set-up Output Directory
-    output_dir = f"./outputs/{day_month}/"
-    if not os.path.exists(output_dir):
-            os.makedirs(output_dir)
-    
+def save_response(output_dir, model, i, code_response, explanation_response):
+    current_time = time.strftime("%H%M")
     safe_model = model.replace("/", "_")
-
-    # Load possible data loading script
-    if os.path.exists(data_loading_script):
-        with open(data_loading_script, "r", encoding="utf-8") as f:
-            data_loading_code = f.read()
-    else:
-        data_loading_code = ""
-        logging.warning(f"{data_loading_script} not found. No data-loading code will be appended.")
-
-    # Save code
-    if data_loading_script:
-        filename_code = f"{output_dir}/script_{question}_{safe_model}_{current_time}_{i+1}_a.py"     
-    else:
-        filename_code = f"{output_dir}/script_{question}_{safe_model}_{current_time}_{i+1}.py"
-
+    
+    # Build the filenames
+    base_name = f"{safe_model}_{current_time}_{i}"
+    filename_code = os.path.join(output_dir, f"script_{base_name}.py")
+    filename_txt  = os.path.join(output_dir, f"explanation_{base_name}.txt")
+    
+    # Save the code into the .py file.
     with open(filename_code, "w", encoding="utf-8") as f:
-        f.write(data_loading_code)
         f.write(code_response)
-    logging.info(f"Saved generated code to {filename_code}.")
-
-    # Save text
-    filename_txt = f"{output_dir}/explanations/explanation_{question}_{safe_model}_{current_time}_{i+1}.txt"
+    logging.info("Saved generated code to %s", filename_code)
+    
+    # Save the explanation into the .txt file
     with open(filename_txt, "w", encoding="utf-8") as f:
         f.write(explanation_response)
-    logging.info(f"Saved explanation to {filename_txt}.")
-
-    return filename_code
-
-def save_response_legacy(model, i, code_response, explanation_response, question, data_loading_script=""):
-    current_time = time.strftime("%d%m%H%M")
-    day_month = time.strftime("%d-%m")
-
-    # Set-up Output Directory
-    output_dir = f"./outputs/{day_month}/"
-    if not os.path.exists(output_dir):
-            os.makedirs(output_dir)
+    logging.info("Saved explanation to %s", filename_txt)
     
-    safe_model = model.replace("/", "_")
+    return filename_code, filename_txt
 
-    # Load possible data loading script
-    if os.path.exists(data_loading_script):
-        with open(data_loading_script, "r", encoding="utf-8") as f:
-            data_loading_code = f.read()
-    else:
-        data_loading_code = ""
-        logging.warning(f"{data_loading_script} not found. No data-loading code will be appended.")
-
-    # Save code
-    if data_loading_script:
-        filename_code = f"{output_dir}/script_{question}_{safe_model}_{current_time}_{i+1}_a.py"     
-    else:
-        filename_code = f"{output_dir}/script_{question}_{safe_model}_{current_time}_{i+1}.py"
-
-    with open(filename_code, "w", encoding="utf-8") as f:
-        f.write(data_loading_code)
-        f.write(code_response)
-    logging.info(f"Saved generated code to {filename_code}.")
-
-    # Save text
-    filename_txt = f"{output_dir}/explanations/explanation_{question}_{safe_model}_{current_time}_{i+1}.txt"
-    with open(filename_txt, "w", encoding="utf-8") as f:
-        f.write(explanation_response)
-    logging.info(f"Saved explanation to {filename_txt}.")
-
-    return filename_code
-  
 
 def main():
     # Create a PromptBuilder instance
@@ -230,23 +172,21 @@ def main():
     prompt = f"```markdown\n{prompt}\n```"
     logging.info(f"Built Prompt:\n {prompt}")
 
-    # ["openai/chatgpt-4o-latest", "deepseek/deepseek-r1", "anthropic/claude-3.7-sonnet", "google/gemini-2.0-flash-lite-001", "meta-llama/llama-3.3-70b-instruct"]
-    models = ["openai/chatgpt-4o-latest", "deepseek/deepseek-r1", "anthropic/claude-3.7-sonnet", "google/gemini-2.0-flash-lite-001", "meta-llama/llama-3.3-70b-instruct"]
+    # Set-up Models   
     logging.info("Set-Up Models: %s", models)
 
-    num_responses = 2
-
+    num_responses = num_attempts
     logging.info(f"Prompting for {num_responses} responses.")
 
     for model in models:
         logging.info("Querying model: %s...", model)
         for i in range(num_responses):
-            logging.info(f"- - - - - Response {i+1} - - - - -")
+            logging.info(f"- - - - - Response {i} - - - - -")
 
             response_dict = query_openrouter(model, prompt)
 
             if response_dict is None:
-                logging.error(f"No valid response for model {model} on iteration {i+1}. Skipping.")
+                logging.error(f"No valid response for model {model} on iteration {i}. Skipping.")
                 continue
 
             code_response = response_dict["code"]
@@ -255,11 +195,7 @@ def main():
             logging.info("Generated code from %s:\n%s", model, '-'*40 + "\n" + code_response + "\n" + '-'*40)
             logging.info("Generated explanation from %s:\n%s", model, '-'*40 + "\n" + explanation_response + "\n" + '-'*40)
 
-            _ = save_response(model, i, 
-                          code_response, explanation_response, 
-                          question = "FOURTOP_1",
-                          data_loading_script= "fourtop_data_loader.py")
-
+            filename_code, filename_txt = save_response(model, i, code_response, explanation_response)
             time.sleep(1)
 
 if __name__ == "__main__":

@@ -27,8 +27,8 @@ to a profound increase in sensitivity.
     dataset_description = r"""** Dataset Description **
 The dataset used for this problem consists of simulated proton-proton 
 collision at a center of mass energy of 13 TeV. The signal process is defined as 
-$$ pp &rarr t t_Bar t t_bar $$. The relevant production processes of the
-backgrounds $$ t t_bar + X $$ where $$ X = Z, W^+ and W^+W^- $$. 
+$$ pp \rightarrow t \bar{t} t \bar{t} $$. The relevant production processes of the
+backgrounds are $$ t \bar{t} + X $$ where $$ X = Z, W^+, W^+W^- $$.
 
 The dataset includes 302072 events, of which roughly 50% is signal and 50%
 are background processes. All background processes have an equal number of events. 
@@ -51,7 +51,7 @@ transverse energy.
 Since the length of the events is variable, the data is zero-padded to the largest number of objects
 found in the events within in the entire dataset. The dataset is fairly sparse and not pre-processed.
 
-You may assume that the relevant datasets are already imported as pytorch tensors with the following properties:
+The relevant datasets are pytorch tensors with the following properties:
 
 Name: X_train, shape: [241657, 106], dtype: torch.float32, 
 Name: Y_train, shape: [241657], dtype: torch.int64, 
@@ -73,23 +73,106 @@ $$ FPR = \frac{FP}{FP + TN} $$
 """,
 
     code_template = r"""** Code Template **
-<start of code template>
-import ....
+# ----- FREE SECTION: Import Libraries -----
+import numpy as np
+import pandas as pd
+import math
+import scipy
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import DataLoader, TensorDataset
+import matplotlib.pyplot as plt
+import sys
+# <LLM: Insert additional library imports here>
+# You may only import the additional packages from: sklearn and torch.
 
-<end of code template>
+# ----- FIXED SECTION: Data Loading -----
+def load_data():
+    X_train_df = pd.read_csv('./challenges/FOURTOPS/data/X_train.csv')
+    Y_train_df = pd.read_csv('./challenges/FOURTOPS/data/Y_train.csv')
+    X_val_df   = pd.read_csv('./challenges/FOURTOPS/data/X_val.csv')
+    Y_val_df   = pd.read_csv('./challenges/FOURTOPS/data/Y_val.csv')
+
+    X_train = torch.tensor(X_train_df.values, dtype=torch.float32)
+    Y_train = torch.tensor(Y_train_df.values, dtype=torch.long).squeeze()
+    X_val   = torch.tensor(X_val_df.values, dtype=torch.float32)
+    Y_val   = torch.tensor(Y_val_df.values, dtype=torch.long).squeeze()
+    return X_train, Y_train, X_val, Y_val
+
+# ----- FREE SECTION: Data Preprocessing -----
+def preprocess_data(X_train, Y_train, X_val, Y_val):
+    # <LLM: Insert custom preprocessing steps here>
+    return train_loader, val_loader
+
+# ----- FREE SECTION: Binary Classifier Definition -----
+class Classifier(nn.Module):
+    def __init__(self, input_dim):
+        super(Classifier, self).__init__()
+        # <LLM: Define your neural network layers here>
+
+    def forward(self, x):
+        # <LLM: Define forward propagation here>
+        return x
+
+# ----- FREE SECTION: Training Loop Implementation -----
+def train_model(model, train_loader, val_loader, epochs):
+    # <LLM: Define training loop clearly>
+    # Must return trained model, training_loss, validation_loss, training_acc, validation_acc
+    # Be sure to include basic metric tracking per epoch
+    return model, training_loss, validation_loss, training_acc, validation_acc
+
+# ----- FIXED SECTION: Plotting and Saving Outputs -----
+def plot_and_save(metric_train, metric_val, metric_name, filename):
+    plt.figure()
+    plt.plot(metric_train, label=f'Training {metric_name}')
+    plt.plot(metric_val, label=f'Validation {metric_name}')
+    plt.title(f'{metric_name} per Epoch')
+    plt.xlabel('Epoch')
+    plt.ylabel(metric_name)
+    plt.legend()
+    plt.savefig(filename)
+    plt.close()
+
+# ----- FIXED SECTION: Main Function -----
+def main(dryrun=False):
+    # Data Loading
+    X_train, Y_train, X_val, Y_val = load_data
+
+    # Preprocessing
+    X_train, Y_train, X_val, Y_val = preprocess_data(X_train, Y_train, X_val, Y_val)
+
+    # Model Initialization
+    model = Classifier(input_dim=X_train.shape[1])
+
+    # Training
+    epochs = 1 if dryrun else 10
+
+    # Train the model
+    trained_model, training_loss, validation_loss, training_acc, validation_acc = train_model(
+        model, X_train, Y_train, X_val, Y_val, epochs=epochs)
+
+    if not dryrun:
+        # Save Model
+        model_filename = sys.argv[0].replace(".py", "") + "_model.pth"
+        torch.save(trained_model.state_dict(), model_filename)
+
+        # Plot and Save Metrics
+        plot_and_save(training_loss, validation_loss, "Loss", "training_loss.png")
+        plot_and_save(training_acc, validation_acc, "Accuracy", "training_accuracy.png")
+
+        print("Full run complete. Outputs and model saved successfully.")
+    else:
+        print("Dry-run complete. No outputs saved.")
+
+# ----- FIXED SECTION: Entry Point with Dry-run -----
+if __name__ == '__main__':
+    dryrun = '--dryrun' in sys.argv
+    main(dryrun=dryrun)
 """,
 
     questions = [
-        Question("Q1", \
-                 r""" ** Question **
-Write Python code for binary classification maximizing AUC.
-"""
-                 ),
-
-        Question("Q2", \
-                 r"""** Question **
-Write Python code for multiclass classification maximizing AUC.
-"""
-                 ), 
-    ]
+        Question("Q1", r""" ** Question **
+Write Python code for binary classification maximizing AUC using the code template above.""")
+]
 )

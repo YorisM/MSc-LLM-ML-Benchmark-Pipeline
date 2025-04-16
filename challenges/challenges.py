@@ -23,10 +23,6 @@ Strictly adhere to this structure and follow these rules:
 2. Do not add any formatting, such as markdown, to the response. 
 3. Properly escape all special characters, especially new lines.
 4. After generating the JSON, internally validate its structure before outputting.
-
-The code you write must strictly limit the packages and libraries 
-that are not in the python standard library that you use in your solution 
-to the following: numpy, scipy, math, pandas, matplotlib, sklearn, pytorch. 
 """
 
 
@@ -56,9 +52,9 @@ class Challenge:
             f"{self.problem_description}\n"
             f"{self.evaluation_metric}\n"
             f"{self.dataset_description}\n"
+            f"{self.code_template}\n"
             f"{question.text}\n"
             f"{question.context}\n"
-            f"{self.code_template}\n"
             f"{self.response_format}"
         )
         return prompt

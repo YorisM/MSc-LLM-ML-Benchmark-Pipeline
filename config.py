@@ -22,15 +22,17 @@ logging.basicConfig(
 )
 
 # Models
-models = ["openai/chatgpt-4o-latest", 
-          "deepseek/deepseek-r1", 
+# 
+models = ["openai/chatgpt-4o-latest",
           "anthropic/claude-3.7-sonnet", 
           "google/gemini-2.0-flash-001", 
-          "meta-llama/llama-3.3-70b-instruct"]
+          "meta-llama/llama-3.3-70b-instruct",
+          "deepseek/deepseek-r1"]
 
 # Number of attempts to retrieve correct response
 num_attempts = 3 # set to 5 for 'normal' execution
 
-# Script Timeout Time in seconds
-timeout = 600
+# Timers
+execution_timeout = 3600
+dryrun_timeout = 600
 
