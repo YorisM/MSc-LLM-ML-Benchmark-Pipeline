@@ -3,13 +3,23 @@
 # Imports
 import os
 import sys
-import logging
 import subprocess
+import logging
 import time
-import config
+import argparse
+import psutil
+import pandas as pd
+from tqdm import tqdm
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from config import execution_timeout
 
 
-def script_safety_check(script_path):
+# - - - - - TODO - - - - - 
+#   
+# - - - - - - - - - - - - -
+
+
+def naive_safety_check(script_path):
     """
     Perform a basic (naive) safety check on the script by scanning for disallowed keywords.
     """
@@ -36,95 +46,95 @@ def script_safety_check(script_path):
             logging.error(f"Script {script_path} contains dangerous keyword: {keyword}")
             return False
     return True
+ 
+
+def collect_valid_scripts(base_folder):
+    scripts = []
+    for root, _, files in os.walk(base_folder):
+        if os.path.basename(root) == "Failed Dry-run Scripts":
+            continue
+        for f in files:
+            if f.endswith(".py"):
+                scripts.append(os.path.join(root, f))
+    return scripts
 
 
-def script_dryrun(script_path, timeout):
+def run_single_script(script_path, timeout):
     """
-    Run the given Python script using subprocess with a timeout.
-    Returns (stdout, stderr) if successful, or None if it times out or fails the safety check.
+    Runs one script, returns a tuple:
+      (path, returncode, stdout, stderr, duration_s, max_rss_kb)
     """
+    start = time.perf_counter()
+    proc = psutil.Process()
+    before_mem = proc.memory_info().rss
 
-    logging.info("Running dry run for script: %s", script_path)
     try:
         result = subprocess.run(
-            [sys.executable, script_path, "--dryrun"],
-            capture_output=True,
-            text=True,
+            [sys.executable, script_path],
+            capture_output=True, text=True,
             timeout=timeout
         )
-        if result.returncode == 0:
-            logging.info("Dry run succeeded for script: %s", script_path)
-            return True, result.stdout, result.stderr
-        else:
-            logging.error("Dry run failed for script: %s (return code %d). STDERR:\n%s",
-                          script_path, result.returncode, result.stderr)
-            return False, result.stdout, result.stderr
+        retval = result.returncode
+        out, err = result.stdout, result.stderr
+
     except subprocess.TimeoutExpired:
-        logging.error("Dry run for script %s timed out after %d seconds.", script_path, timeout)
-        return False, None, None
+        retval, out, err = None, "", "Timeout"
     except Exception as e:
-        logging.error("Error during dry run for script %s: %s", script_path, e)
-        return False, None, None
-    
+        retval, out, err = None, "", f"Exception: {e}"
 
-def run_all_success_scripts(base_folder, timeout=3600):
+    after_mem = proc.memory_info().rss
+    duration = time.perf_counter() - start
+    max_rss = after_mem - before_mem  # Kilobytes on Linux, bytes on macOS; approximate
+
+    logging.info("Ran %s → code=%s, time=%.1fs, mem=%sKB",
+                 script_path, retval, duration, max_rss)
+    return (script_path, retval, out, err, duration, max_rss)
+
+
+def execute_scripts_in_batch(base_folder, max_workers=1):
     """
-    Traverse the base_folder recursively (which is expected to be the root of your outputs directory),
-    and for each Python script (.py file) that is not under a folder named "Failed Dry-run Scripts",
-    run the script using the current Python interpreter.
-    
-    Parameters:
-      base_folder (str): The top-level folder where scripts are stored (e.g. "./outputs/21-03/").
-      timeout (int): Maximum allowed runtime per script in seconds.
-      
-    Returns:
-      A list of tuples (script_path, return_code, stdout, stderr) for each script run.
+    Finds all valid scripts, runs them (in parallel if max_workers>1),
+    shows a tqdm progress bar, and writes summary.csv at base_folder.
+    Returns list of results.
     """
 
+    scripts = collect_valid_scripts(base_folder)
+    logging.info("Found %d scripts to run under %s", len(scripts), base_folder)
     results = []
-    # Walk through the folder recursively.
-    for root, dirs, files in os.walk(base_folder):
-        # Skip any folder whose name is "Failed Dry-run Scripts"
-        if os.path.basename(root) == "Failed Dry-run Scripts":
-            continue  # do not process scripts in this folder
-        
-        for file in files:
-            if file.endswith(".py"):
-                script_path = os.path.join(root, file)
-                logging.info("Running script: %s", script_path)
+
+    if max_workers == 1:
+        # serial
+        for script in tqdm(scripts, desc="Running scripts", unit="script"):
+            results.append(run_single_script(script, execution_timeout))
+    else:
+        # parallel
+        with ThreadPoolExecutor(max_workers=max_workers) as exe:
+            futures = {exe.submit(run_single_script, s, execution_timeout): s
+                       for s in scripts}
+            for fut in tqdm(as_completed(futures),
+                            total=len(scripts),
+                            desc="Running scripts", unit="script"):
                 try:
-                    # Run the script without the --dryrun flag
-                    result = subprocess.run([sys.executable, script_path],
-                                            capture_output=True, text=True, timeout=timeout)
-                    logging.info("Script %s finished with exit code %d", script_path, result.returncode)
-                    logging.debug("Script STDOUT: %s", result.stdout)
-                    logging.debug("Script STDERR: %s", result.stderr)
-                    results.append((script_path, result.returncode, result.stdout, result.stderr))
-                except subprocess.TimeoutExpired:
-                    logging.error("Script %s timed out after %d seconds", script_path, timeout)
-                    results.append((script_path, None, "", "Timeout"))
+                    results.append(fut.result())
                 except Exception as e:
-                    logging.error("Error running script %s: %s", script_path, e)
-                    results.append((script_path, None, "", str(e)))
+                    script = futures[fut]
+                    logging.error("Unhandled exception in %s: %s", script, e)
+                    results.append((script, None, "", f"Exception: {e}", 0.0, 0))
+
+    # write summary CSV
+    df = pd.DataFrame(results,
+        columns=["script","return_code","stdout","stderr","duration_s","max_rss_kb"])
+    summary_path = os.path.join(base_folder, "summary.csv")
+    df.to_csv(summary_path, index=False)
+    logging.info("Wrote summary to %s", summary_path)
+
     return results
 
 
-def main():
-    output_dir = "./outputs/21-03/"  # example directory; adjust as needed
-    script_filename = f"{output_dir}/generated_script_openai_chatgpt-4o-latest_21031640_1_a.py" #example script
-
-    # Run the generated script with a 10-minute timeout.
-    result = script_dryrun(script_filename, timeout=3600)
-    if result:
-        stdout, stderr = result
-        print("Script Output:")
-        print(stdout)
-        if stderr:
-            print("Script Errors:")
-            print(stderr)
-    else:
-        print("Script failed to run or timed out.")
-        return
-
 if __name__ == "__main__":
-    main()
+    p = argparse.ArgumentParser()
+    p.add_argument("folder", help="Base output folder to scan/run")
+    p.add_argument("--max-workers", type=int, default=1,
+                   help="1 = serial; >1 = parallel threads")
+    args = p.parse_args()
+    execute_scripts_in_batch(args.folder, args.max_workers)

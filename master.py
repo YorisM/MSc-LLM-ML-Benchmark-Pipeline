@@ -6,11 +6,10 @@ import logging
 import shutil
 import time
 
-from prompts import *
 from generate_scripts import query_openrouter, save_response
 from run_scripts import script_dryrun
 
-from config import models, num_attempts, execution_timeout, dryrun_timeout
+from config import models, num_attempts, execution_timeout, dryrun_timeout, challenges
 from challenges.FOURTOPS.fourtops import fourtop_challenge
 
 
@@ -20,10 +19,8 @@ from challenges.FOURTOPS.fourtops import fourtop_challenge
 #   create evaluation script
 #   implement safety check for running scripts
 #   test function to see whether LLM script adheres to code template -> did it actually keep all fixed sections fixed??
+# - - - - - - - - - - - - -
 
-
-# All challenges to be included in the benchmark
-challenges = [fourtop_challenge]
 
 def move_file(file_path, destination_dir):
     """Move a single file to the destination directory."""

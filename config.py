@@ -3,12 +3,14 @@
 import os
 import logging
 from dotenv import load_dotenv
+from challenges.FOURTOPS.fourtops import fourtop_challenge
 
 # Load environment variables from the .env file
 load_dotenv()
 
 # Openrouter
-OPENROUTER_API_COMPLETIONS = "https://api.openrouter.ai/v1/completions"
+OPENROUTER_API_COMPLETIONS = "https://openrouter.ai/api/v1/completions"
+OPENROUTER_API_MODELS = "https://openrouter.ai/api/v1/models"
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
 # Configure logging
@@ -22,17 +24,19 @@ logging.basicConfig(
 )
 
 # Models
-# 
-models = ["openai/chatgpt-4o-latest",
-          "anthropic/claude-3.7-sonnet", 
-          "google/gemini-2.0-flash-001", 
+models = ["google/gemini-2.0-flash-001", 
           "meta-llama/llama-3.3-70b-instruct",
           "deepseek/deepseek-r1"]
 
+# ["openai/gpt-4o-mini",
+#  "anthropic/claude-3.7-sonnet"]
+
 # Number of attempts to retrieve correct response
-num_attempts = 3 # set to 5 for 'normal' execution
+num_attempts = 2 # set to 5 for 'normal' execution
 
 # Timers
 execution_timeout = 3600
 dryrun_timeout = 600
 
+# All the challenges in the pipeline
+challenges = [fourtop_challenge]

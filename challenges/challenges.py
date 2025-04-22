@@ -1,6 +1,19 @@
 # ./challenges/challenges.py
 
 
+# region General Prompting Structure
+# - - - - - - - - - - - - - - - - - - - - 
+# Instructions
+#   Problem Description
+#   Evaluation Metric
+#   Dataset Description
+#   Code Template
+#       Question
+#       Context
+# Response Format
+#endregion - - - - - - - - - - - - - - - 
+
+
 DEFAULT_INSTRUCTIONS = r"""** Instructions **
 You are an expert at programming in python, machine learning,
 particle and high energy physics. You will help me answer a question

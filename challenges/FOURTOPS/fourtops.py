@@ -84,6 +84,7 @@ import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
 import matplotlib.pyplot as plt
 import sys
+import os
 # <LLM: Insert additional library imports here>
 # You may only import the additional packages from: sklearn and torch.
 
@@ -137,10 +138,10 @@ def plot_and_save(metric_train, metric_val, metric_name, filename):
 # ----- FIXED SECTION: Main Function -----
 def main(dryrun=False):
     # Data Loading
-    X_train, Y_train, X_val, Y_val = load_data
+    X_train, Y_train, X_val, Y_val = load_data()
 
     # Preprocessing
-    X_train, Y_train, X_val, Y_val = preprocess_data(X_train, Y_train, X_val, Y_val)
+    train_loader, val_loader = preprocess_data(X_train, Y_train, X_val, Y_val)
 
     # Model Initialization
     model = Classifier(input_dim=X_train.shape[1])
@@ -150,20 +151,19 @@ def main(dryrun=False):
 
     # Train the model
     trained_model, training_loss, validation_loss, training_acc, validation_acc = train_model(
-        model, X_train, Y_train, X_val, Y_val, epochs=epochs)
+        model, train_loader, val_loader, epochs=epochs)
 
     if not dryrun:
         # Save Model
-        model_filename = sys.argv[0].replace(".py", "") + "_model.pth"
+        base = os.path.splitext(os.path.basename(sys.argv[0]))[0].removeprefix("script_")
+        script_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
+        model_filename = os.path.join(script_dir, f"{base}_model.pth")
+        os.makedirs(script_dir, exist_ok=True)
         torch.save(trained_model.state_dict(), model_filename)
 
         # Plot and Save Metrics
-        plot_and_save(training_loss, validation_loss, "Loss", "training_loss.png")
-        plot_and_save(training_acc, validation_acc, "Accuracy", "training_accuracy.png")
-
-        print("Full run complete. Outputs and model saved successfully.")
-    else:
-        print("Dry-run complete. No outputs saved.")
+        plot_and_save(training_loss, validation_loss, f"Loss - {base}", os.path.join(script_dir, f"{base}_loss.png"))
+        plot_and_save(training_acc, validation_acc, f"Accuracy - {base}", os.path.join(script_dir, f"{base}_accuracy.png"))
 
 # ----- FIXED SECTION: Entry Point with Dry-run -----
 if __name__ == '__main__':
