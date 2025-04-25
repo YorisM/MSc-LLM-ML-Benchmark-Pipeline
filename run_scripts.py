@@ -15,7 +15,9 @@ from config import execution_timeout
 
 
 # - - - - - TODO - - - - - 
-#   
+#   Add more logging messages for INFO during execution
+#   add naive safety check to pipeline
+#   properly containerize scripts using docker
 # - - - - - - - - - - - - -
 
 
@@ -45,6 +47,7 @@ def naive_safety_check(script_path):
         if keyword in code:
             logging.error(f"Script {script_path} contains dangerous keyword: {keyword}")
             return False
+    logging.info("Successfully passed naïve safety check.")    
     return True
  
 
@@ -56,6 +59,7 @@ def collect_valid_scripts(base_folder):
         for f in files:
             if f.endswith(".py"):
                 scripts.append(os.path.join(root, f))
+    logging.info(f"Collected valid scripts for execution: {scripts}")
     return scripts
 
 
@@ -64,10 +68,18 @@ def run_single_script(script_path, timeout):
     Runs one script, returns a tuple:
       (path, returncode, stdout, stderr, duration_s, max_rss_kb)
     """
+
     start = time.perf_counter()
     proc = psutil.Process()
     before_mem = proc.memory_info().rss
+    logging.info(f"Executing script: {script_path}...")
 
+    # Implement Safety Measures
+    logging.info("Performing naive safety check on script: %s", script_path)
+    if not naive_safety_check(script_path):
+        logging.error(f"Failed naive safety check on script: {script_path}")
+        return (script_path, None, "", "Failed naive safety check", 0.0, 0.0)
+  
     try:
         result = subprocess.run(
             [sys.executable, script_path],
@@ -84,7 +96,7 @@ def run_single_script(script_path, timeout):
 
     after_mem = proc.memory_info().rss
     duration = time.perf_counter() - start
-    max_rss = after_mem - before_mem  # Kilobytes on Linux, bytes on macOS; approximate
+    max_rss = after_mem - before_mem  # Kilobytes
 
     logging.info("Ran %s → code=%s, time=%.1fs, mem=%sKB",
                  script_path, retval, duration, max_rss)
@@ -127,7 +139,6 @@ def execute_scripts_in_batch(base_folder, max_workers=1):
     summary_path = os.path.join(base_folder, "summary.csv")
     df.to_csv(summary_path, index=False)
     logging.info("Wrote summary to %s", summary_path)
-
     return results
 
 

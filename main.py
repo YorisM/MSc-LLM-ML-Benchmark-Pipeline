@@ -5,10 +5,13 @@ import argparse
 import logging
 from generate_and_dryrun import generate_and_dryrun
 from run_scripts import execute_scripts_in_batch
-# from evaluate_scripts import evaluate_results
+from evaluate_scripts import evaluate_results, challenge_evaluators
 from datetime import datetime
 from config import models, challenges
 
+# - - - - - TODO: - - - - - 
+#   make sure that we have dimensional agnostic model inputs
+# - - - - - - - - - - - - -
 
 # - - - - - Usage Examples  - - - - -
 #
@@ -66,15 +69,16 @@ def main():
         logging.info(f"Mode: Execute scripts. Input directory: {input_dir}")
         execute_scripts_in_batch(input_dir)
 
-    # elif args.evaluate:
-        # input_dir = args.input_dir or get_default_output_dir()
-        # logging.info(f"Mode: Evaluate script outputs. Input directory: {input_dir}")
-        # evaluate_results(input_dir)
+    elif args.eval:
+        input_dir = args.input_dir or get_default_output_dir()
+        logging.info(f"Mode: Evaluate script outputs. Input directory: {input_dir}")
+        evaluate_results(input_dir)
 
     elif args.all:
         logging.info("Mode: Full pipeline execution.")
 
         # Step 1: Generation and Dry-run
+        logging.info("Start generation and dryrun.")
         generate_and_dryrun()
 
         # Determine the directory automatically
@@ -82,10 +86,12 @@ def main():
         logging.info(f"Using auto-generated directory for script execution & evaluation: {input_dir}")
 
         # Step 2: Run scripts
+        logging.info("Start script execution.")
         execute_scripts_in_batch(input_dir)
 
         # Step 3: Evaluation
-        # evaluate_results(input_dir)
+        logging.info("Start model evaluation.")
+        evaluate_results(input_dir)
 
     logging.info("Completed LLM Challenge Pipeline.")
 

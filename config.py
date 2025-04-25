@@ -15,7 +15,7 @@ OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
 # Configure logging
 LOG_FILE = "log.log"
-LOG_LEVEL = logging.DEBUG
+LOG_LEVEL = logging.INFO
 LOG_FORMAT = "%(asctime)s - %(filename)s - %(levelname)s - %(message)s"
 logging.basicConfig(
     filename=LOG_FILE,
@@ -24,15 +24,14 @@ logging.basicConfig(
 )
 
 # Models
-models = ["google/gemini-2.0-flash-001", 
+models = ["openai/gpt-4o-mini",
+          "anthropic/claude-3.7-sonnet",
+          "google/gemini-2.0-flash-001", 
           "meta-llama/llama-3.3-70b-instruct",
           "deepseek/deepseek-r1"]
 
-# ["openai/gpt-4o-mini",
-#  "anthropic/claude-3.7-sonnet"]
-
 # Number of attempts to retrieve correct response
-num_attempts = 2 # set to 5 for 'normal' execution
+num_attempts = 5 # set to 5 for 'normal' execution
 
 # Timers
 execution_timeout = 3600

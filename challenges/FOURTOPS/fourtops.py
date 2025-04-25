@@ -3,7 +3,7 @@
 from challenges.challenges import Challenge, Question
 
 fourtop_challenge = Challenge(
-    name = "FOURTOP",
+    name = "FOURTOPS",
 
     dataset = {
     "X_train": "./challenges/FOURTOPS/data/X_train.csv",
@@ -37,7 +37,7 @@ There is not cut on the maximum number of objects and there is no order.
 The contents of the data sets (X_train & X_val) are given below.
 The specific line format is as follows:
 
-weight, E_T_miss, phi_{E_t}_miss, obj_1, E_1, p_T1, eta_1, phi_1, obj_2, E_2, p_t2, eta_2, phi_2, ....
+E_T_miss, phi_{E_t}_miss, obj_1, E_1, p_T1, eta_1, phi_1, obj_2, E_2, p_t2, eta_2, phi_2, ....
 
 Such that each object is represented by a string that starts with an identifier "obj_n", which is an
 integer value representing a particular object in the event. The object identifier is
@@ -53,9 +53,9 @@ found in the events within in the entire dataset. The dataset is fairly sparse a
 
 The relevant datasets are pytorch tensors with the following properties:
 
-Name: X_train, shape: [241657, 106], dtype: torch.float32, 
+Name: X_train, shape: [241657, 105], dtype: torch.float32, 
 Name: Y_train, shape: [241657], dtype: torch.int64, 
-Name: X_val, shape: [30272, 106], dtype: torch.float32, 
+Name: X_val, shape: [30272, 105], dtype: torch.float32, 
 Name: Y_val, shape: [30272], dtype: torch.int64, 
 """,
 
@@ -73,20 +73,15 @@ $$ FPR = \frac{FP}{FP + TN} $$
 """,
 
     code_template = r"""** Code Template **
-# ----- FREE SECTION: Import Libraries -----
-import numpy as np
+# ----- FIXED SECTION: Import Libraries -----
+import os, sys, torch
 import pandas as pd
-import math
-import scipy
-import torch
-import torch.nn as nn
-import torch.optim as optim
-from torch.utils.data import DataLoader, TensorDataset
+import numpy as np
 import matplotlib.pyplot as plt
-import sys
-import os
-# <LLM: Insert additional library imports here>
-# You may only import the additional packages from: sklearn and torch.
+from torch import nn
+from torch.utils.data import TensorDataset, DataLoader
+from sklearn.metrics import roc_auc_score, accuracy_score
+# <FREE: You may only import python and torch native modules here. NO OTHER MODULES.>
 
 # ----- FIXED SECTION: Data Loading -----
 def load_data():
@@ -102,9 +97,36 @@ def load_data():
     return X_train, Y_train, X_val, Y_val
 
 # ----- FREE SECTION: Data Preprocessing -----
-def preprocess_data(X_train, Y_train, X_val, Y_val):
-    # <LLM: Insert custom preprocessing steps here>
-    return train_loader, val_loader
+class PreprocessModule(torch.nn.Module):
+    # TorchScript-compatible module applying pre-fitted transformations.
+    # All fitted statistics/constants must be registered as buffers.
+    # Torch operations ONLY (no numpy, no pandas).
+    # Deterministic behavior required (no randomness in forward pass).
+    def __init__(self, **kwargs):
+        super().__init__()
+        # Example pattern for saving constants:
+        # self.register_buffer("my_const", kwargs["my_const"])
+        # <LLM: register any statistics / masks / embeddings here>
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # <LLM: transform x using the stored buffers>
+        return x
+
+def preprocess_data(X_train, Y_train, X_val, Y_val, batch_size):
+    # derive statistics / encodings from training set
+    # <LLM: derive any needed constants here>
+
+    preproc = PreprocessModule()
+
+    X_train_p = preproc(X_train)
+    X_val_p   = preproc(X_val)
+
+    train_ds = TensorDataset(X_train_p, Y_train)
+    val_ds   = TensorDataset(X_val_p,   Y_val)
+
+    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
+    val_loader   = DataLoader(val_ds,   batch_size=batch_size)
+
+    return train_loader, val_loader, preproc
 
 # ----- FREE SECTION: Binary Classifier Definition -----
 class Classifier(nn.Module):
@@ -141,10 +163,11 @@ def main(dryrun=False):
     X_train, Y_train, X_val, Y_val = load_data()
 
     # Preprocessing
-    train_loader, val_loader = preprocess_data(X_train, Y_train, X_val, Y_val)
+    train_loader, val_loader, preproc = preprocess_data(X_train, Y_train, X_val, Y_val)
 
     # Model Initialization
-    model = Classifier(input_dim=X_train.shape[1])
+    sample_X, _, = next(iter(train_loader))
+    model = Classifier(input_dim=sample_X.shape[1])
 
     # Training
     epochs = 1 if dryrun else 10
@@ -154,12 +177,22 @@ def main(dryrun=False):
         model, train_loader, val_loader, epochs=epochs)
 
     if not dryrun:
-        # Save Model
-        base = os.path.splitext(os.path.basename(sys.argv[0]))[0].removeprefix("script_")
+        # determine base name & script directory
+        base       = os.path.splitext(os.path.basename(sys.argv[0]))[0].removeprefix("script_")
         script_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
-        model_filename = os.path.join(script_dir, f"{base}_model.pth")
         os.makedirs(script_dir, exist_ok=True)
-        torch.save(trained_model.state_dict(), model_filename)
+
+        # save model
+        model_path = os.path.join(script_dir, f"{base}_model.pth")
+        torch.save(trained_model.state_dict(), model_path)
+
+        # save scripted model
+        scripted_path = os.path.join(script_dir, f"{base}_scripted.pt")
+        torch.jit.script(trained_model).save(scripted_path)
+
+        # save preprocessor
+        scripted_preproc = torch.jit.script(preproc)
+        scripted_preproc.save(os.path.join(script_dir, f"{base}_preproc.pt"))
 
         # Plot and Save Metrics
         plot_and_save(training_loss, validation_loss, f"Loss - {base}", os.path.join(script_dir, f"{base}_loss.png"))
@@ -174,5 +207,12 @@ if __name__ == '__main__':
     questions = [
         Question("Q1", r""" ** Question **
 Write Python code for binary classification maximizing AUC using the code template above.""")
+
+#       Question("Q2", r"""** Question **)
+# Write Python code for a Transformer based binary classifier maximizing the AUC using the code template above."""),
+
+#       Question("Q3", r"""** Question **)
+# Write Python code for a Transformer based binary classifier maximizing the AUC using the code template above.
+# In your forward pass, """),
 ]
 )
