@@ -39,3 +39,7 @@ dryrun_timeout = 600
 
 # All the challenges in the pipeline
 challenges = [fourtop_challenge]
+
+# Docker Image
+DOCKER_IMAGE = "llm-script-sandbox:latest"
+

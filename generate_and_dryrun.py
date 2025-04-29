@@ -1,17 +1,8 @@
 # generate_and_dryrun.py
 
 # Imports
-import os
-import requests
-import json
-import logging
-import shutil
-import time
-import re
-import sys
-import subprocess
-from config import OPENROUTER_API_KEY, OPENROUTER_API_COMPLETIONS, models, num_attempts, dryrun_timeout, challenges
-
+import os, requests, json, logging, shutil, time, re, sys, subprocess
+from config import OPENROUTER_API_KEY, OPENROUTER_API_COMPLETIONS, DOCKER_IMAGE, models, num_attempts, dryrun_timeout, challenges
 
 def query_openrouter(model, prompt):
     headers = {

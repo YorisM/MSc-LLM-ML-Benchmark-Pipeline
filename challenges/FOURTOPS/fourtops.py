@@ -205,14 +205,15 @@ if __name__ == '__main__':
 """,
 
     questions = [
-        Question("Q1", r""" ** Question **
-Write Python code for binary classification maximizing AUC using the code template above.""")
+#        Question("Q1", r""" ** Question **
+# Write Python code for binary classification maximizing AUC using the code template above.""")
 
 #       Question("Q2", r"""** Question **)
 # Write Python code for a Transformer based binary classifier maximizing the AUC using the code template above."""),
 
-#       Question("Q3", r"""** Question **)
-# Write Python code for a Transformer based binary classifier maximizing the AUC using the code template above.
-# In your forward pass, """),
+       Question("Q3", r"""** Question **)
+Write Python code for a Transformer based binary classifier which utilizes a "Slot-Attention" mechanism that explicitly groups particles corresponding to top quark decays.
+Inform the model of known physics by creating augmented particle features which complement model architecture. Use the code template above.
+"""),
 ]
 )
