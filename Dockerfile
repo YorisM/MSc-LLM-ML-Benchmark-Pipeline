@@ -1,5 +1,5 @@
 # 1. Pick a minimal, official Python runtime
-FROM python:3.13-slim
+FROM python:3.13.3-slim
 
 # 2. Create a non‑root user for isolation
 RUN useradd --create-home --shell /bin/bash sandboxuser

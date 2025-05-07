@@ -5,14 +5,17 @@ import os, sys, subprocess, logging, time, argparse, psutil
 import pandas as pd
 from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from config import execution_timeout, DOCKER_IMAGE
+from config import dryrun_timeout, execution_timeout, DOCKER_IMAGE
 from utils import WSL_path
-
 
 # - - - - - TODO - - - - - 
 #   properly containerize scripts using docker
 # - - - - - - - - - - - - -
 
+# Execution Flow
+# (main.py)  ─▶ execute_scripts_in_batch(...)
+#                 └─▶ run_single_script(..., dryrun=?, use_docker=?)
+#                        └─▶ execute_script(...)
 
 def naive_safety_check(script_path):
     """
@@ -82,67 +85,41 @@ def execute_script(
         return False, None, "", "Safety check", 0.0, 0.0
     
     rel_script = os.path.relpath(script_path, os.getcwd())
-    logging.info("Relative script path: %s", rel_script)
+    # logging.info("Relative script path: %s", rel_script)
 
     rel_script = rel_script.replace("\\", "/")
-    logging.info("Relative script path: %s", rel_script)
+    # logging.info("Relative script path: %s", rel_script)
 
     cmd = []
 
-    """
-    # build command
-    if use_docker:
-        mount_src = os.path.abspath(os.getcwd()).replace("\\", "/")
-
-        volume_arg = f'{mount_src}:/workspace'
-        logging.info("Docker volume arg: %s", volume_arg)
-
-        WSL_arg = WSL_path(volume_arg)
-        logging.info("WSL path: %s", WSL_arg)
-
-        cmd = [
-            "docker", "run", "--rm",
-            "-v", WSL_arg,
-            "-w", "/workspace",
-            DOCKER_IMAGE,
-            "python", rel_script
-        ]
-        logging.info("Docker CMD: %s", " ".join(cmd))
-        if dryrun:
-            cmd.append("--dryrun")
-    """
-
     # path to mount on host, with forward slashes
     mount_src = os.path.abspath(os.getcwd()).replace("\\", "/")
-    logging.info("Docker mount_src: %s", mount_src)
+    # logging.info("Docker mount_src: %s", mount_src)
 
     # build the plain “host:container” volume spec—no embedded quotes!
     volume_arg = f"{mount_src}:/workspace"
-    logging.info("Docker volume_arg: %s", volume_arg)
+    # logging.info("Docker volume_arg: %s", volume_arg)
 
-    # convert to WSL path
-    volume_arg = WSL_path(volume_arg)
-    logging.info("WSL volume_arg: %s", volume_arg)
+    if use_docker:
+        cmd = [
+            "docker", "run", "--rm",
+            "-v", volume_arg,
+            "-w", "/workspace",
+            DOCKER_IMAGE,
+            rel_script
+        ]
+        if dryrun:
+            cmd.append("--dryrun")
+        
+        # logging.info("Final CMD list: %r", cmd)
+        proc = psutil.Process()
+        mem_before = proc.memory_info().rss
+        t0 = time.perf_counter()
 
-    cmd = [
-        "docker", "run", "--rm",
-        "-v", volume_arg,            # exactly one colon in this string
-        "-w", "/workspace",
-        DOCKER_IMAGE,
-        rel_script,        # rel_script already uses forward slashes
-    ]
-
-    if dryrun:
-        cmd.append("--dryrun")
     else:
         cmd = [sys.executable, script_path]
         if dryrun:
             cmd.append("--dryrun")
-    
-    logging.info("Final CMD list: %r", cmd)
-    proc = psutil.Process()
-    mem_before = proc.memory_info().rss
-    t0 = time.perf_counter()
 
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=execution_timeout)
@@ -161,46 +138,19 @@ def execute_script(
     logging.info("%s %s → code=%s time=%.2fs mem=%dKB", "Dry-run" if dryrun else "Run", script_path, ret, duration, max_rss)
     return (script_path, success, ret, out, err, duration, max_rss)
 
+def run_single_script(script_path: str, *, dryrun: bool = False, 
+                      use_docker: bool = True, timeout: float | None = None,
+                      ) -> tuple:
+    t = timeout or (dryrun_timeout if dryrun else execution_timeout)
+    return execute_script(
+        script_path   = script_path,
+        timeout       = t,
+        dryrun        = dryrun,
+        use_docker    = use_docker,
+        safety_check  = naive_safety_check,
+    )
 
-def run_single_script(script_path, timeout):
-    """
-    Runs one script, returns a tuple:
-      (path, returncode, stdout, stderr, duration_s, max_rss_kb)
-    """
-
-    start = time.perf_counter()
-    proc = psutil.Process()
-    before_mem = proc.memory_info().rss
-    logging.info(f"Executing script: {script_path}...")
-
-    # Implement Safety Measures
-    logging.info("Performing naive safety check on script: %s", script_path)
-    if not naive_safety_check(script_path):
-        logging.error(f"Failed naive safety check on script: {script_path}")
-        return (script_path, None, "", "Failed naive safety check", 0.0, 0.0)
-  
-    try:
-        result = subprocess.run(
-            [sys.executable, script_path],
-            capture_output=True, text=True,
-            timeout=timeout
-        )
-        retval = result.returncode
-        out, err = result.stdout, result.stderr
-
-    except subprocess.TimeoutExpired:
-        retval, out, err = None, "", "Timeout"
-    except Exception as e:
-        retval, out, err = None, "", f"Exception: {e}"
-
-    after_mem = proc.memory_info().rss
-    duration = time.perf_counter() - start
-    max_rss = after_mem - before_mem  # Kilobytes
-
-    logging.info("Ran %s → code=%s, time=%.1fs, mem=%sKB", script_path, retval, duration, max_rss)
-    return (script_path, retval, out, err, duration, max_rss)
-
-def execute_scripts_in_batch(base_folder, max_workers=1):
+def execute_scripts_in_batch(base_folder, max_workers=1, *, dryrun=False, use_docker=True):
     """
     Finds all valid scripts, runs them (in parallel if max_workers>1),
     shows a tqdm progress bar, and writes summary.csv at base_folder.
@@ -214,12 +164,13 @@ def execute_scripts_in_batch(base_folder, max_workers=1):
     if max_workers == 1:
         # serial
         for script in tqdm(scripts, desc="Running scripts", unit="script"):
-            results.append(run_single_script(script, execution_timeout))
+            results.append(run_single_script(script, dryrun = dryrun, 
+                                                     use_docker = use_docker))
     else:
         # parallel
         with ThreadPoolExecutor(max_workers=max_workers) as exe:
-            futures = {exe.submit(run_single_script, s, execution_timeout): s
-                       for s in scripts}
+            futures = {exe.submit(run_single_script, s, execution_timeout,
+                                dryrun, use_docker): s for s in scripts}
             for fut in tqdm(as_completed(futures),
                             total=len(scripts),
                             desc="Running scripts", unit="script"):
@@ -231,8 +182,18 @@ def execute_scripts_in_batch(base_folder, max_workers=1):
                     results.append((script, None, "", f"Exception: {e}", 0.0, 0))
 
     # write summary CSV
-    df = pd.DataFrame(results,
-        columns=["script","return_code","stdout","stderr","duration_s","max_rss_kb"])
+    df = pd.DataFrame(
+        results,
+        columns=[
+            "script",          # absolute path
+            "success",         # True / False
+            "return_code",     # int | None
+            "stdout",          # str
+            "stderr",          # str
+            "duration_s",      # float
+            "max_rss_kb",      # int
+        ],
+    )
     summary_path = os.path.join(base_folder, "summary.csv")
     df.to_csv(summary_path, index=False)
     logging.info("Wrote summary to %s", summary_path)

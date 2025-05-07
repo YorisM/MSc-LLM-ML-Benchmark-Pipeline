@@ -24,11 +24,12 @@ logging.basicConfig(
 )
 
 # Models
-models = ["openai/gpt-4o-mini",
+models = ["openai/gpt-4.1",
           "anthropic/claude-3.7-sonnet",
-          "google/gemini-2.0-flash-001", 
-          "meta-llama/llama-3.3-70b-instruct",
-          "deepseek/deepseek-r1"]
+          "google/gemini-2.5-pro-preview-03-25", 
+          "x-ai/grok-3-beta",
+          "deepseek/deepseek-chat-v3-0324"]
+
 
 # Number of attempts to retrieve correct response
 num_attempts = 5 # set to 5 for 'normal' execution

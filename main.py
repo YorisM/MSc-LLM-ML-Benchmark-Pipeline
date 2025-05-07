@@ -87,7 +87,7 @@ def main():
 
         # Step 2: Run scripts
         logging.info("Start script execution.")
-        execute_scripts_in_batch(input_dir)
+        execute_scripts_in_batch(input_dir, use_docker=True, dryrun=False)
 
         # Step 3: Evaluation
         logging.info("Start model evaluation.")

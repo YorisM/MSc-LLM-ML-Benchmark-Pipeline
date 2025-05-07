@@ -3,3 +3,7 @@ numpy
 torch
 matplotlib
 scikit-learn
+
+psutil
+tqdm
+dotenv

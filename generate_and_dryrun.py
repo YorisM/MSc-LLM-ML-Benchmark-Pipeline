@@ -3,6 +3,7 @@
 # Imports
 import os, requests, json, logging, shutil, time, re, sys, subprocess
 from config import OPENROUTER_API_KEY, OPENROUTER_API_COMPLETIONS, DOCKER_IMAGE, models, num_attempts, dryrun_timeout, challenges
+from run_scripts import run_single_script
 
 def query_openrouter(model, prompt):
     headers = {
@@ -15,7 +16,7 @@ def query_openrouter(model, prompt):
         "prompt": prompt,
         "response_format": {"type": "json_object"}, 
         # Look into reasoning / CoT / etc. tokens
-        "max_tokens": (8*4096), # change this later
+        "max_tokens": (16*4096), # change this later
     }
     
     response = requests.post(OPENROUTER_API_COMPLETIONS, headers=headers, json=payload)
@@ -153,33 +154,14 @@ def move_file(file_path, destination_dir):
     except Exception as e:
         logging.error("Failed to move file %s: %s", file_path, e)
 
-def script_dryrun(script_path, timeout):
-    """
-    Run the given Python script using subprocess with a timeout.
-    Returns (stdout, stderr) if successful, or None if it times out or fails the safety check.
-    """
-
-    logging.info("Running dry run for script: %s", script_path)
-    try:
-        result = subprocess.run(
-            [sys.executable, script_path, "--dryrun"],
-            capture_output=True,
-            text=True,
-            timeout=timeout
-        )
-        if result.returncode == 0:
-            logging.info("Dry run succeeded for script: %s", script_path)
-            return True, result.stdout, result.stderr
-        else:
-            logging.error("Dry run failed for script: %s (return code %d). STDERR:\n%s",
-                          script_path, result.returncode, result.stderr)
-            return False, result.stdout, result.stderr
-    except subprocess.TimeoutExpired:
-        logging.error("Dry run for script %s timed out after %d seconds.", script_path, timeout)
-        return False, None, None
-    except Exception as e:
-        logging.error("Error during dry run for script %s: %s", script_path, e)
-        return False, None, None
+def script_dryrun(script_path):
+    """dry-run a script *inside Docker* and return (success, stdout, stderr)"""
+    _, success, _, stdout, stderr, _, _ = run_single_script(
+        script_path,
+        dryrun=True,
+        use_docker=True
+    )
+    return success, stdout, stderr
     
 def generate_and_dryrun():
     for challenge in challenges:
@@ -214,13 +196,16 @@ def generate_and_dryrun():
 
                     py_file, txt_file = save_response(output_dir, safe_model, attempt, code, explanation)
 
-                    run_success, _, _ = script_dryrun(py_file, timeout=dryrun_timeout)
+                    run_success, stdout, stderr = script_dryrun(py_file)
                     if run_success:
                         dest_folder = os.path.join(output_dir, safe_model)
                         move_file(py_file, dest_folder)
                         move_file(txt_file, dest_folder)
                         break
                     else:
+                        logging.error(f"Model {model} failed dry-run on attempt {attempt}.\n\
+                                      STDOUT: {stdout}\n\
+                                      STDERR: {stderr}")
                         failed_folder = os.path.join(output_dir, "Failed Dry-run Scripts")
                         move_file(py_file, failed_folder)
                         move_file(txt_file, failed_folder)
