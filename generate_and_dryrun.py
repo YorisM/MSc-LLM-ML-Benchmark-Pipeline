@@ -3,6 +3,7 @@
 # Imports
 import os, requests, json, logging, shutil, time, re, sys, subprocess
 from config import OPENROUTER_API_KEY, OPENROUTER_API_COMPLETIONS, DOCKER_IMAGE, models, num_attempts, dryrun_timeout, challenges
+from static_checks import run_pylint, run_bandit
 from run_scripts import run_single_script
 
 def query_openrouter(model, prompt):
@@ -195,7 +196,15 @@ def generate_and_dryrun():
                         continue
 
                     py_file, txt_file = save_response(output_dir, safe_model, attempt, code, explanation)
-
+                    
+                    # PyLint & Bandit Checks
+                    if not run_pylint(py_file) or run_bandit(py_file):
+                        failed_folder = os.path.join(output_dir, "StaticFail")
+                        move_file(py_file, failed_folder)
+                        move_file(txt_file, failed_folder)
+                        continue
+                        
+                    # Perform Dry-Run
                     run_success, stdout, stderr = script_dryrun(py_file)
                     if run_success:
                         dest_folder = os.path.join(output_dir, safe_model)
