@@ -1,0 +1,12 @@
+This code defines a complete solution for binary classification (signal vs. background) on sparse LHC collision event data, maximizing ROC AUC.
+
+1. Preprocessor (PhysicsPreprocessor):
+- Extracts and standardizes the relevant features from the zero-padded flat input. For each object (max 18), E, pt, and eta are z-scored, phi is scaled. The object ID is numerically encoded, and presence (mask for real objects) is used to construct aggregate features. The preprocessor also computes event-level features: number of objects, mean E and pt, standard deviation of eta, etc., yielding a small set of informative non-linear physical features. All outputs are deterministic and picklable.
+
+2. Model (FourTopClassifier):
+- A compact feed-forward neural network with three hidden layers. Each layer is regularized with dropout and batch norm (helps sparse zero-padded input), and uses ReLU activations. Its size is set to be expressive enough for 96 inputs and at the same time light (<50MB). The output layer is a scalar logit for binary classification.
+
+3. Training Loop:
+- Uses Adam optimizer with weight decay (L2) and binary cross-entropy with logits loss (BCEWithLogitsLoss), which is numerically stable. Implements full epoch-based training, tracking train/val loss and accuracy. After every epoch, computes the ROC-AUC; the best model state is preserved to avoid overfitting. Early stopping is not used to ensure reproducible training during the competition.
+
+Summary: With physics-motivated preprocessing (object-level and aggregate features), batch norm and dropout for regularization, and explicit maximization of ROC AUC on the validation data, this implementation aims to get the highest discrimination power possible given the challenge's constraints.

@@ -1,0 +1,12 @@
+The solution consists of three main components: a preprocessor, a neural network classifier, and a training loop designed for robust binary classification with AUC maximization for rare processes in LHC event data.
+
+1. **Preprocessor (`make_preprocessor`)**: 
+   - The `PhysicsPreprocessor` class standardizes each column (feature) using stats computed only on non-zero entries, crucial given the dataset's heavy zero-padding from variable event lengths. Standardization is done column-wise, and outlier values for energy features are clipped to prevent adverse effects from rare backgrounds with extreme kinematic variables. An extra derived feature, the number of objects in each event, is added as it often has discriminating power in collider physics between signal and background. Output is a dense NumPy array for PyTorch consumption.
+   
+2. **Model (`make_model`)**:
+   - The neural net (`ParticleNet`) is a wide and deep fully connected (feedforward) network. BatchNorm on input helps with global feature stability (important for mixed scale physics data). Dropout (decreasing towards output) regularizes to avoid overfitting and helps generalization. Deep enough (4 hidden layers) to capture composite features (e.g., event topology, energy sums, object patterns), but not so deep as to lose interpretability. Output is a single logit per event to be thresholded for binary classification (using BCEWithLogitsLoss).
+
+3. **Training (`train_model`)**:
+   - The training loop uses AdamW (better generalization for decent batch sizes) with ReduceLROnPlateau (responsive to validation AUC stagnation). After each epoch, accuracy and validation metrics are recorded, and the best model (by AUC) is retained. Direct computation of ROC AUC (with sklearn.metrics) ensures that the model is always optimized with this metric in perspective. The loop outputs epoch-wise loss and acc histories.
+   
+**Physics Motivation**: The design exploits the structure of collider event data, exploits padding, and uses kinematics-physics knowledge (clipping, object counting) to help NN quickly and robustly learn differences between rare signal and multiple, overlapping backgrounds. The model is tailored to maximize AUC (discriminative ranking) rather than just accuracy, which is more robust in imbalanced or edge-case-heavy HEP datasets.

@@ -1,0 +1,86 @@
+script,success,return_code,stdout,stderr,duration_s,max_rss_kb
+./outputs/15-05/FOURTOPS/Q1/openai_gpt-4.1\script_openai_gpt-4.1_1640_4.py,False,1,,"/usr/local/lib/python3.13/site-packages/sklearn/impute/_base.py:635: UserWarning: Skipping features without any observed values: [ 87  88  89  90  91  92  93  94  95  96  97  98  99 100 101 102 103 104]. At least one non-missing value is needed for imputation with strategy='median'.
+  warnings.warn(
+/usr/local/lib/python3.13/site-packages/sklearn/impute/_base.py:635: UserWarning: Skipping features without any observed values: [ 87  88  89  90  91  92  93  94  95  96  97  98  99 100 101 102 103 104]. At least one non-missing value is needed for imputation with strategy='median'.
+  warnings.warn(
+/usr/local/lib/python3.13/site-packages/sklearn/impute/_base.py:635: UserWarning: Skipping features without any observed values: [ 87  88  89  90  91  92  93  94  95  96  97  98  99 100 101 102 103 104]. At least one non-missing value is needed for imputation with strategy='median'.
+  warnings.warn(
+Traceback (most recent call last):
+  File ""/workspace/outputs/15-05/FOURTOPS/Q1/openai_gpt-4.1/script_openai_gpt-4.1_1640_4.py"", line 200, in <module>
+    _run(dryrun=""--dryrun"" in sys.argv)
+    ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/workspace/outputs/15-05/FOURTOPS/Q1/openai_gpt-4.1/script_openai_gpt-4.1_1640_4.py"", line 195, in _run
+    with open(f""{base}_pre.pkl"", ""wb"") as f: pickle.dump(pre, f)
+                                             ~~~~~~~~~~~^^^^^^^^
+AttributeError: Can't get local object 'make_preprocessor.<locals>.EventPreprocessor'
+",75.04830610000135,4
+./outputs/15-05/FOURTOPS/Q1/StaticFail\script_openai_gpt-4.1_1602_1.py,False,1,,"Traceback (most recent call last):
+  File ""/workspace/outputs/15-05/FOURTOPS/Q1/StaticFail/script_openai_gpt-4.1_1602_1.py"", line 261, in <module>
+    _run(dryrun=""--dryrun"" in sys.argv)
+    ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/workspace/outputs/15-05/FOURTOPS/Q1/StaticFail/script_openai_gpt-4.1_1602_1.py"", line 245, in _run
+    pre.fit(X_train, Y_train)
+    ~~~~~~~^^^^^^^^^^^^^^^^^^
+  File ""/workspace/outputs/15-05/FOURTOPS/Q1/StaticFail/script_openai_gpt-4.1_1602_1.py"", line 62, in fit
+    Xfeats = self.transform(X)
+  File ""/usr/local/lib/python3.13/site-packages/sklearn/utils/_set_output.py"", line 319, in wrapped
+    data_to_wrap = f(self, X, *args, **kwargs)
+  File ""/workspace/outputs/15-05/FOURTOPS/Q1/StaticFail/script_openai_gpt-4.1_1602_1.py"", line 151, in transform
+    Xfeats = self._extract_features(np.asarray(X))
+  File ""/workspace/outputs/15-05/FOURTOPS/Q1/StaticFail/script_openai_gpt-4.1_1602_1.py"", line 79, in _extract_features
+    eta    = X[:, self.eta_col]
+             ~^^^^^^^^^^^^^^^^^
+IndexError: index 105 is out of bounds for axis 1 with size 105
+",11.107475200002227,0
+./outputs/15-05/FOURTOPS/Q1/StaticFail\script_openai_gpt-4.1_1603_2.py,False,1,,"Traceback (most recent call last):
+  File ""/workspace/outputs/15-05/FOURTOPS/Q1/StaticFail/script_openai_gpt-4.1_1603_2.py"", line 188, in <module>
+    _run(dryrun=""--dryrun"" in sys.argv)
+    ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/workspace/outputs/15-05/FOURTOPS/Q1/StaticFail/script_openai_gpt-4.1_1603_2.py"", line 184, in _run
+    _plot(hist['loss'], hist['val_loss'], 'Loss',     f""{base}_loss.png"")
+          ~~~~^^^^^^^^
+TypeError: tuple indices must be integers or slices, not str
+",62.70022769999923,0
+./outputs/15-05/FOURTOPS/Q1/StaticFail\script_openai_gpt-4.1_1604_3.py,False,1,,"Traceback (most recent call last):
+  File ""/workspace/outputs/15-05/FOURTOPS/Q1/StaticFail/script_openai_gpt-4.1_1604_3.py"", line 231, in <module>
+    _run(dryrun=""--dryrun"" in sys.argv)
+    ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/workspace/outputs/15-05/FOURTOPS/Q1/StaticFail/script_openai_gpt-4.1_1604_3.py"", line 215, in _run
+    pre.fit(X_train, Y_train)
+    ~~~~~~~^^^^^^^^^^^^^^^^^^
+  File ""/workspace/outputs/15-05/FOURTOPS/Q1/StaticFail/script_openai_gpt-4.1_1604_3.py"", line 62, in fit
+    object_features = X[:, 2:].reshape(-1, self.n_objects, 5)
+ValueError: cannot reshape array of size 24890671 into shape (20,5)
+",11.811335799997323,0
+./outputs/15-05/FOURTOPS/Q1/StaticFail\script_openai_gpt-4.1_1619_1.py,False,1,,"Traceback (most recent call last):
+  File ""/workspace/outputs/15-05/FOURTOPS/Q1/StaticFail/script_openai_gpt-4.1_1619_1.py"", line 215, in <module>
+    _run(dryrun=""--dryrun"" in sys.argv)
+    ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/workspace/outputs/15-05/FOURTOPS/Q1/StaticFail/script_openai_gpt-4.1_1619_1.py"", line 205, in _run
+    hist     = train_model(model, train_loader, val_loader, epochs=n_epochs)
+  File ""/workspace/outputs/15-05/FOURTOPS/Q1/StaticFail/script_openai_gpt-4.1_1619_1.py"", line 126, in train_model
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.7, patience=3, verbose=False)
+TypeError: ReduceLROnPlateau.__init__() got an unexpected keyword argument 'verbose'
+",14.77386519999709,0
+./outputs/15-05/FOURTOPS/Q1/StaticFail\script_openai_gpt-4.1_1620_2.py,False,1,,"Traceback (most recent call last):
+  File ""/workspace/outputs/15-05/FOURTOPS/Q1/StaticFail/script_openai_gpt-4.1_1620_2.py"", line 268, in <module>
+    _run(dryrun=""--dryrun"" in sys.argv)
+    ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/workspace/outputs/15-05/FOURTOPS/Q1/StaticFail/script_openai_gpt-4.1_1620_2.py"", line 252, in _run
+    pre.fit(X_train, Y_train)
+    ~~~~~~~^^^^^^^^^^^^^^^^^^
+  File ""/workspace/outputs/15-05/FOURTOPS/Q1/StaticFail/script_openai_gpt-4.1_1620_2.py"", line 50, in fit
+    feats = self._physics_features(X)
+  File ""/workspace/outputs/15-05/FOURTOPS/Q1/StaticFail/script_openai_gpt-4.1_1620_2.py"", line 65, in _physics_features
+    objects = X[:, 2:].reshape(N, self.max_objs, self.object_dim)
+ValueError: cannot reshape array of size 24890671 into shape (241657,25,4)
+",15.109897800000908,0
+./outputs/15-05/FOURTOPS/Q1/StaticFail\script_openai_gpt-4.1_1621_3.py,False,1,,"Traceback (most recent call last):
+  File ""/workspace/outputs/15-05/FOURTOPS/Q1/StaticFail/script_openai_gpt-4.1_1621_3.py"", line 209, in <module>
+    _run(dryrun=""--dryrun"" in sys.argv)
+    ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/workspace/outputs/15-05/FOURTOPS/Q1/StaticFail/script_openai_gpt-4.1_1621_3.py"", line 204, in _run
+    with open(f""{base}_pre.pkl"", ""wb"") as f: pickle.dump(pre, f)
+                                             ~~~~~~~~~~~^^^^^^^^
+AttributeError: Can't get local object 'make_preprocessor.<locals>.PhysicsPreprocessor'
+",54.29250900000261,0

@@ -1,0 +1,26 @@
+The provided solution implements a robust approach to four-top signal classification in variable-length LHC-like data, designed specifically to maximize the ROC-AUC while respecting runtime and memory constraints.
+
+1. **Preprocessing with Physical Motivation:**
+- The preprocessor (`FourTopPreprocessor`) standardizes the missing transverse energy (`E_T_miss`, `phi_Et_miss`) and, for each of the up to 18 possible objects, standardizes the energy, transverse momentum, pseudorapidity, and azimuth (E, pT, eta, phi), omitting the object integer ID (as it's likely an arbitrary per-event encoding).
+- All absent object slots (where the object ID is 0) are filled with zeros.
+- The final per-event feature vector is thus 74-dimensional (2 global + 18*4 object features), making the feature space manageable for a fully-connected classifier.
+- StandardScaler is used on both missing-ET and per-object variables, fit only on real (present) objects for each slot.
+
+2. **Model Architecture:**
+- `FourTopNet` uses a moderate-depth feed-forward MLP with batch norm and dropout for regularization.
+- Four hidden layers (128, 64, 32, 16), with dropout to prevent overfitting, all using ReLU activation.
+- Output layer is a single logit for binary classification.
+- Design is compact, well under the 50 MB parameter budget, and provides the capacity needed for subtle signal-background discrimination.
+
+3. **Training:**
+- The training loop uses Adam optimizer and BCEWithLogitsLoss for stable numerics and binary output, with moderate weight decay.
+- Epoch count of 15 is selected for convergence on a reasonably sized dataset without risk of overfitting or excessive resource use.
+- Tracks both accuracy and loss across both training and validation sets per epoch.
+- The function is designed for torch DataLoader batches, automatically leveraging GPU if available.
+
+4. **Overall:**
+- All design choices are focused on maximizing AUC by:
+  - Fully exploiting kinematics of all objects.
+  - Broad input normalization for stable optimization.
+  - Robust regularization in the network.
+- The total structure is memory- and runtime-efficient and compatible with typical HPC/henet challenge wrappers.

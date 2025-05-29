@@ -1,0 +1,13 @@
+The code implements a neural network for classifying particle physics events, specifically targeting the detection of four top quark events at the LHC with a focus on maximizing the AUC metric.
+
+1. Data Preprocessing: Standard normalization is applied using mean and standard deviation calculated from the training set. A mask preserves zero-padded entries to maintain the sparse structure of the data. The preprocessing module is implemented as a torch.nn.Module to ensure compatibility with TorchScript for deployment.
+
+2. Model Architecture: The Classifier incorporates Lorentz equivariance to respect the symmetries of particle physics. It uses a custom LorentzEquivariantLayer that processes scalar and tensor components separately. The scalar network handles invariant features, while the tensor network processes four-vectors (energy, momentum components) to embed Lorentz symmetry via tensor products. Features from missing transverse energy and individual objects (up to a max of 20) are extracted, aggregated, and passed through a global network to produce a binary classification output via sigmoid activation.
+
+3. Training Loop: The training loop uses the Adam optimizer and Binary Cross-Entropy Loss, suitable for binary classification. It tracks loss and AUC per epoch on both training and validation sets to monitor performance and prevent overfitting. The model leverages GPU if available for faster computation. AUC is prioritized as the key metric per the challenge objective, computed using sklearn's roc_auc_score.
+
+4. Lorentz Symmetry Encoding: While full message passing is approximated due to computational constraints and code simplicity, the architecture respects Lorentz symmetry by processing four-vector components in a structured way within the LorentzEquivariantLayer. This ensures that transformations under Lorentz boosts do not arbitrarily affect the classification output, aligning with physical principles.
+
+5. Design Choices: The hidden dimension (128) balances model capacity and computational efficiency. Batch size (128) and learning rate (0.001) are chosen for stable training. The number of epochs (10 unless in dry run) allows sufficient learning while avoiding excessive computation time. The architecture avoids external libraries beyond torch and numpy to comply with constraints.
+
+This implementation aims to optimize AUC by leveraging domain-specific symmetries and robust training practices, tailored to the high-energy physics context of the dataset.

@@ -1,0 +1,22 @@
+The code defines a complete preprocessing and binary classification pipeline for the LHC rare process challenge, with design choices meant to maximize the ROC-AUC metric on strongly-imbalanced, sparse, and variable-length input event data.
+
+**Preprocessor:**
+- `HEPPreprocessor` builds upon physics knowledge:
+  - It standardizes (zero mean, unit variance) the per-object kinematic features (E, pt, eta, phi) across all objects, using only the real (nonzero) objects for fit.
+  - The missing transverse energy and its azimuthal angle are standardized as well.
+  - The preprocessor computes per-event physically-motivated summary features: number of objects, maximum pt, average energy, scalar sum pt, maximum and mean absolute eta, and explicit counts of e/mu/b-jets (common lepton and b-jet IDs in event analysis).
+  - The flattened standardized per-object kinematics are appended to these summary features, providing the network with both global (summary) and local (objectwise) event structure in a differentiable manner.
+
+**Model:**
+- `HEPMultiDenseNet` is a four-layer fully-connected neural network with batch normalization and dropout for regularization on each layer. The layer sizes and depth (192→128→64→32→1) are chosen for sufficient expressiveness but small enough to stay within memory/model constraints.
+- Final output is a single logit for binary classification (signal vs background).
+
+**Training:**
+- Adam optimizer is used, with weight decay to avoid overfitting, and a step LR scheduler to reduce the learning rate for fine convergence.
+- The loss is `BCEWithLogitsLoss`, appropriate for a single-output binary task.
+- Each epoch tracks training and validation loss, accuracy, and computes the ROC-AUC (using sklearn) on the validation set each epoch. Early stopping by validation AUC is implemented to avoid overfitting.
+
+**Other Considerations:**
+- The code avoids using any nonstandard packages; all memory use is efficient and per-pipeline step (no redundant copies of large matrices).
+- The preprocessing output is deterministic and picklable.
+- Dropout and batchnorm help stabilize training and generalization. The model can be further fine-tuned but is robust and physics-inspired for strong AUC results on collider data classification.

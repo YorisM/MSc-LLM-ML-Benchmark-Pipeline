@@ -1,0 +1,23 @@
+### Data Preprocessing:
+- The input data is normalized to facilitate training.
+- Padding values (zeros) are handled through a masking mechanism to prevent spurious learning from non-existing objects.
+
+### Model Architecture:
+- A fully-connected deep neural network is selected due to the high-dimensional nature of input features.
+- Batch normalization improves training stability and helps generalization.
+- Dropout layers prevent overfitting by randomly dropping neurons during training.
+- The final activation is a sigmoid function for binary classification.
+
+### Training:
+- Binary cross-entropy loss is used since this is a binary classification problem.
+- The Adam optimizer is chosen for its adaptability and robustness.
+- The model iterates over the training dataset in mini-batches to optimize computational efficiency.
+- A validation step computes the AUC after every epoch to track model progress.
+
+### Physics-Inspired Enhancements:
+- The model accounts for missing transverse energy (E_T_miss), which plays a crucial role in distinguishing signal from background.
+- Masking prevents fictitious correlations from artificially padded zeros, improving robustness.
+- Regularization (dropout & weight decay) mitigates overfitting, especially crucial for high-energy physics datasets that have intrinsic noise.
+
+### Expected Performance:
+- By properly engineering features and training techniques, this approach aims to maximize the AUC, ideally achieving strong discrimination between four-top events and background processes.

@@ -1,0 +1,48 @@
+{
+  "model": "meta-llama/llama-4-maverick",
+  "usage": {
+    "prompt_tokens": 2034,
+    "completion_tokens": 2102,
+    "total_tokens": 4136,
+    "prompt_tokens_details": null,
+    "completion_tokens_details": null
+  },
+  "prompt_chars": 8666,
+  "code": "# 0. ---------- IMPORTS ----------\nimport torch\nimport numpy as np\nfrom torch import nn\nfrom torch.utils.data import TensorDataset, DataLoader\nimport torch.nn.functional as F\nfrom sklearn.metrics import roc_auc_score\n\n# 1. ---------- PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.obj_start_idx = 2  # Starting index of object features\n        self.obj_feat_size = 5  # Size of features for each object\n        self.max_objects = 18  # Maximum number of objects\n\n    def fit(self, X, y=None):\n        return self\n\n    def transform(self, X):\n        # Separate E_T_miss and phi_{E_t}_miss\n        E_T_miss = X[:, 0].unsqueeze(1)  # Shape: (N, 1)\n        phi_E_T_miss = X[:, 1].unsqueeze(1)  # Shape: (N, 1)\n        obj_features = X[:, self.obj_start_idx:]  # Shape: (N, 90)\n        obj_features = obj_features.view(-1, self.max_objects, self.obj_feat_size)  # Shape: (N, 18, 5)\n        obj_ids = obj_features[:, :, 0].long()  # Shape: (N, 18)\n        obj_E = obj_features[:, :, 1].unsqueeze(-1)  # Shape: (N, 18, 1)\n        obj_pT = obj_features[:, :, 2].unsqueeze(-1)  # Shape: (N, 18, 1)\n        obj_eta = obj_features[:, :, 3].unsqueeze(-1)  # Shape: (N, 18, 1)\n        obj_phi = obj_features[:, :, 4].unsqueeze(-1)  # Shape: (N, 18, 1)\n        # Create augmented features\n        obj_px = obj_pT * torch.cos(obj_phi)  # Shape: (N, 18, 1)\n        obj_py = obj_pT * torch.sin(obj_phi)  # Shape: (N, 18, 1)\n        obj_pz = obj_pT * torch.sinh(obj_eta)  # Shape: (N, 18, 1)\n        obj_mass = torch.sqrt(obj_E**2 - obj_px**2 - obj_py**2 - obj_pz**2)  # Shape: (N, 18, 1)\n        # Concatenate the new features\n        new_obj_features = torch.cat([obj_E, obj_px, obj_py, obj_pz, obj_mass], dim=-1)  # Shape: (N, 18, 5)\n        # Concatenate E_T_miss and phi_{E_t}_miss with the new object features\n        E_T_miss_x = E_T_miss * torch.cos(phi_E_T_miss)  # Shape: (N, 1)\n        E_T_miss_y = E_T_miss * torch.sin(phi_E_T_miss)  # Shape: (N, 1)\n        global_features = torch.cat([E_T_miss_x, E_T_miss_y], dim=1)  # Shape: (N, 2)\n        return torch.cat([global_features, new_obj_features.flatten(1)], dim=1)  # Shape: (N, 2 + 18*5)\n\n    def fit_transform(self, X, y=None):\n        self.fit(X, y)\n        return self.transform(X)\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# 2. ---------- MODEL DEFINITION ----------\nclass SlotAttention(nn.Module):\n    def __init__(self, num_slots, input_dim, slot_dim=64, iters=3):\n        super().__init__\n        self.num_slots = num_slots\n        self.slot_dim = slot_dim\n        self.iters = iters\n        self.slots_mu = nn.Parameter(torch.randn(1, 1, self.slot_dim))\n        self.slots_log_sigma = nn.Parameter(torch.zeros(1, 1, self.slot_dim))\n        self.norm_inputs = nn.LayerNorm(input_dim)\n        self.norm_slots = nn.LayerNorm(self.slot_dim)\n        self.norm_mlp = nn.LayerNorm(self.slot_dim)\n        self.project_inputs = nn.Linear(input_dim, self.slot_dim, bias=False)\n        self.scale = self.slot_dim ** -0.5\n        self.mlp = nn.Sequential(nn.Linear(self.slot_dim, self.slot_dim), nn.ReLU(), nn.Linear(self.slot_dim, self.slot_dim))\n\n    def forward(self, inputs):\n        inputs = self.norm_inputs(inputs)\n        inputs = self.project_inputs(inputs)\n        batch_size, num_inputs, _ = inputs.shape\n        mu = self.slots_mu.expand(batch_size, self.num_slots, -1)\n        sigma = self.slots_log_sigma.exp().expand(batch_size, self.num_slots, -1)\n        slots = mu + sigma * torch.randn_like(mu)\n        for _ in range(self.iters):\n            slots_prev = slots\n            slots = self.norm_slots(slots)\n            attn_logits = torch.einsum('bid,bjd->bij', inputs, slots) * self.scale\n            attn = attn_logits.softmax(dim=1)\n            updates = torch.einsum('bid,bij->bjd', inputs, attn)\n            slots = slots_prev + self.mlp(self.norm_mlp(updates))\n        return slots.flatten(1)\n\ndef make_model(input_dim: int):\n    return nn.Sequential(nn.Linear(input_dim, 128), nn.ReLU(), nn.LayerNorm(128),\n                         SlotAttention(num_slots=4, input_dim=128, slot_dim=64, iters=3),\n                         nn.Linear(256, 128), nn.ReLU(), nn.LayerNorm(128),\n                         nn.Linear(128, 2))\n\n# 3. ---------- MODEL TRAINING ----------\nEPOCHS = 10\n\ndef train_model(model, train_loader, val_loader, epochs):\n    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')\n    model.to(device)\n    criterion = nn.CrossEntropyLoss()\n    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)\n    train_loss, val_loss, train_acc, val_acc = [], [], [], []\n    for epoch in range(epochs):\n        model.train()\n        total_loss, total_correct = 0, 0\n        for batch in train_loader:\n            inputs, labels = batch\n            inputs, labels = inputs.to(device), labels.to(device)\n            optimizer.zero_grad()\n            outputs = model(inputs)\n            loss = criterion(outputs, labels)\n            loss.backward()\n            optimizer.step()\n            total_loss += loss.item()\n            total_correct += (outputs.argmax(-1) == labels).sum().item()\n        train_loss.append(total_loss / len(train_loader))\n        train_acc.append(total_correct / len(train_loader.dataset))\n        model.eval()\n        total_loss, total_correct = 0, 0\n        with torch.no_grad():\n            for batch in val_loader:\n                inputs, labels = batch\n                inputs, labels = inputs.to(device), labels.to(device)\n                outputs = model(inputs)\n                loss = criterion(outputs, labels)\n                total_loss += loss.item()\n                total_correct += (outputs.argmax(-1) == labels).sum().item()\n        val_loss.append(total_loss / len(val_loader))\n        val_acc.append(total_correct / len(val_loader.dataset))\n    return model, train_loss, val_loss, train_acc, val_acc",
+  "explanation": "The provided Python code implements a Transformer-based binary classifier utilizing a 'Slot-Attention' mechanism. The task is to classify particle physics events into signal or background processes. The code is structured into three main sections: data pre-processing, model definition, and model training.\n\n1. Data Pre-processing:\nThe `MyPreprocessor` class is designed to transform the input data. It separates the missing transverse energy (`E_T_miss`) and its azimuthal angle (`phi_{E_t}_miss`) from the object features. The object features are reshaped and new features such as `px`, `py`, `pz`, and `mass` are calculated for each object. These new features are concatenated with the global features (`E_T_miss_x` and `E_T_miss_y`) to form the final input to the model.\n\n2. Model Definition:\nThe `SlotAttention` module is implemented based on the paper 'Slot Attention' for grouping particles corresponding to top quark decays. The `make_model` function defines a binary classifier that uses the `SlotAttention` mechanism. The input is first projected to a higher dimension, and then the `SlotAttention` is applied. The output from `SlotAttention` is further processed by fully connected layers to produce the final classification output.\n\n3. Model Training:\nThe `train_model` function trains the defined model on the training dataset and evaluates its performance on the validation dataset. It uses the Adam optimizer and cross-entropy loss. The model is trained for a specified number of epochs (`EPOCHS = 10`). The training and validation loss and accuracy are tracked at each epoch.\n\nThe code is designed to be efficient and to maximize the AUC (Area Under the Curve) score for the classification task. It adheres to the given constraints, including the limit on the model size (< 50 MB) and runtime constraints (4 CPU / 8 GB RAM / 2h wall-clock).",
+  "reasoning": null,
+  "PyLint": [],
+  "Bandit": {
+    "errors": [],
+    "generated_at": "2025-05-27T09:48:04Z",
+    "metrics": {
+      ".\\./outputs/27-05/FOURTOPS/Q3/script_meta-llama_llama-4-maverick_1147_3.py": {
+        "CONFIDENCE.HIGH": 0,
+        "CONFIDENCE.LOW": 0,
+        "CONFIDENCE.MEDIUM": 0,
+        "CONFIDENCE.UNDEFINED": 0,
+        "SEVERITY.HIGH": 0,
+        "SEVERITY.LOW": 0,
+        "SEVERITY.MEDIUM": 0,
+        "SEVERITY.UNDEFINED": 0,
+        "loc": 182,
+        "nosec": 0,
+        "skipped_tests": 0
+      },
+      "_totals": {
+        "CONFIDENCE.HIGH": 0,
+        "CONFIDENCE.LOW": 0,
+        "CONFIDENCE.MEDIUM": 0,
+        "CONFIDENCE.UNDEFINED": 0,
+        "SEVERITY.HIGH": 0,
+        "SEVERITY.LOW": 0,
+        "SEVERITY.MEDIUM": 0,
+        "SEVERITY.UNDEFINED": 0,
+        "loc": 182,
+        "nosec": 0,
+        "skipped_tests": 0
+      }
+    },
+    "results": []
+  }
+}

@@ -1,0 +1,38 @@
+This code implements a neural network for classifying particle physics events, specifically focusing on the rare signal process of four top quarks from proton-proton collisions.
+
+Here's a detailed explanation of the key components:
+
+1. Data Preprocessing:
+   - The preprocessing function extracts event-level information (weights, missing energy) and object-specific features.
+   - Physics-inspired features are created, including sums and averages of kinematic properties, object type counts, and other high-level features.
+   - Data is masked to handle variable-length events with zero-padding.
+
+2. Model Architecture (PhysicsAwareNet):
+   - A dual-stream architecture processes both high-level event features and individual object features.
+   - High-level features go through batch normalization and fully connected layers.
+   - Object features are processed individually with a shared network.
+   - An attention mechanism weighs the contribution of each object, focusing on the most relevant ones.
+   - The model combines both streams for the final prediction.
+
+3. Training Procedure:
+   - Binary cross-entropy loss with Adam optimizer.
+   - Learning rate scheduling with ReduceLROnPlateau to adapt the learning rate based on validation loss.
+   - The best model based on validation AUC is saved.
+   - Sample weights are applied to account for the cross-section weighting of different processes.
+
+4. Evaluation:
+   - The Area Under the ROC Curve (AUC) is used as the primary evaluation metric.
+   - Training and validation metrics are tracked and plotted over epochs.
+
+5. Main Function:
+   - Handles command-line arguments for dry run mode.
+   - Preprocesses data, creates data loaders, initializes and trains the model.
+   - Evaluates the model on validation data and saves the trained model.
+   - In dry run mode, it uses synthetic data to test functionality.
+
+Physics-specific considerations:
+- The attention mechanism helps the model focus on the most relevant particles for the classification task.
+- The preprocessing extracts meaningful physics features from the raw data, enhancing model performance.
+- Object type counts help the model recognize patterns in particle compositions that differentiate signal from background.
+
+This approach combines domain knowledge of particle physics with modern deep learning techniques to maximize the AUC score for this challenging classification task.

@@ -1,0 +1,21 @@
+1. **EventPhysicsPreprocessor**: This preprocessing class converts padded, variable-length event tensors into a compact, high-level feature array for the network. For each event, we extract:
+   - The always-present missing ET and phi.
+   - Per-object variables: for each object indexed in the 'obj_id' columns (which allows objects to be type-identified), we extract aggregated statistics (counts, means, stds, mins, maxs) over properties (E, pT, eta, phi). 
+   - Object-multiplicities for top 6 observed IDs (assuming these correspond to main physics objects: electrons, muons, etc).
+   - Per-event kinematic statistics such as sum of pT, E, ET/pT ratio.
+   - DeltaR statistics (mean, min, max) between pairwise valid objects, capturing overall event topology (e.g., are the jets tightly clustered or spread apart?).
+   - All values are then concatenated into a single fixed-length vector per event and scaled (StandardScaler) for robust learning.
+
+2. **DeepSetsClassifier**: The model is an MLP that takes the preprocessed features. It uses three fully-connected layers with batch normalization and dropout (for regularization and faster convergence). The final node provides a single real-valued output (logit) for binary classification.
+
+3. **Training loop**: Uses AdamW (robust for modern deep nets), and BCEWithLogitsLoss for numerical stability. Each epoch tracks average loss and accuracy on both train and validation sets. Early stopping is not implemented here to maximize AUC-per-epoch as per the instructions, but may be useful in practice.
+
+4. **Rationale for design choices**:
+   - High-level physics features (means, counts, kinematics, event topology) allow the network to easily access the physical structure of each event, removing information loss from naive flattening or losing permutation invariance.
+   - Avoids needing object order or padding artifacts to leak into the model.
+   - Model is compact but deep enough for complex, non-linear boundaries demanded by rare signal-vs-background discrimination where features may interact.
+   - Preprocessing is fully deterministic and picklable, in line with requirements.
+
+5. **Epochs** set at 26: This allows sufficient time for convergence without excessive overfitting, considering the use of batchnorm and dropout. (Ideally, should tune via validation AUC or early stopping, but here we must state the number.)
+
+The above approach is designed to optimize the AUC on a realistic high-energy-physics background, leveraging domain knowledge (topological features, number of objects, summarized high-level features) and modern deep learning best practices for tabular, variable-length data.

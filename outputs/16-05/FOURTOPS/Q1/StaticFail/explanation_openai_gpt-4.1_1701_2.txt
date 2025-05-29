@@ -1,0 +1,24 @@
+The code aims to maximize AUC for rare event classification in LHC simulated data. The solution contains three main parts: preprocessing, model definition, and training.
+
+1. **Preprocessing (ParticlePreprocessor):**
+   - **Physics-aware handling:** The event is parsed into missing-ET and up to 18 objects.
+   - **Padding mask:** Detect padded objects by obj_id = 0.
+   - **Per-object features:** Scales only real physical objects' E (energy), pT (transverse momentum), and eta (pseudorapidity) using sklearn's StandardScaler.
+   - **Angles:** phi is replaced by its sine and cosine so the neural net can learn angular differences robustly.
+   - **Permutation invariance:** Objects are sorted within each event by descending pT, which makes order less arbitrary.
+   - **Aggregate event-level features:** Number of objects, total pT, mean pT, total energy, number of leptons (obj_id in [11,13,15]), number of b-jets (obj_id==5), and reconstructed missing ET as x/y.
+   - **Final feature vector:** Concatenate all per-object features (flattened) and event-level aggregates for each event. Preprocessing output shape is fixed.
+
+2. **Model (ParticleNet):**
+   - Medium-sized feedforward neural net, using dense layers with BatchNorm, GELU activations, and Dropout. Suited for tabular data and highly sparse physics feature vectors.
+   - Output layer is single sigmoid node, matches binary classification.
+   - Total parameters <50MB by construction, with moderate regularization.
+
+3. **Training:**
+   - BCELoss and AdamW optimizer, standard for binary labels.
+   - ReduceLROnPlateau scheduler (monitors val accuracy: fast, robust against overfitting).
+   - Reasonable batch-wise training loop for PyTorch, returns losses and accuracy history per epoch.
+   - BCELoss/prediction outputs are used for both classification and learning.
+   - Training run is short (13 epochs) to avoid overfitting.
+
+**Summary**: The solution handles the particle physics structure explicitly, engineering features that maximize discrimination between rare signal and confusing backgrounds (especially those involving leptons and heavy-flavor jets). The network is regularized for sparseness, and the data pipeline can be pickled for submission/workflow needs. All design choices (physics feature aggregation, sorting for invariance, sin/cos encoding) strive to optimize AUC in a robust, physically-motivated way.

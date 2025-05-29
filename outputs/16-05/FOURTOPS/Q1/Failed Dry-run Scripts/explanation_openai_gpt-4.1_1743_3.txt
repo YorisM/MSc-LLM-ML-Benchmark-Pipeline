@@ -1,0 +1,33 @@
+This solution targets high AUC for a high-energy physics event classifier, tuned to the provided dataset's structure and typical physics feature engineering.
+
+**Preprocessing**
+- Using a PhysicsPreprocessor (scikit-learn style for easy drop-in into pipelines) which parses the flat 92-feature event encoding into interpretable, strong features.
+- Per-event features engineered include:
+    - MET (missing transverse energy) and its phi.
+    - Total number of objects in the event.
+    - Per-event summary statistics (mean, std, sum, max) for energies, pt, eta, phi of all objects.
+    - Kinematic properties (E, pt, eta, phi) for leading and subleading (second-highest pt) objects.
+    - Dijet (leading+subleading) features: invariant mass, delta-phi, deltaR.
+    - Delta-phi(MET, leading object).
+- Features are robustly handled by masking padded/empty objects.
+- StandardScaler is used for normalization, improving neural network convergence.
+
+**Model**
+- A compact, deep-enough fully connected MLP (SimpleMLP).
+- Batch normalization after the first two linear layers regularizes activations.
+- Dropout before the final layer for further regularization.
+- Final output is a single logit (suitable for BCEWithLogitsLoss).
+- Model is small and fast enough to fit under 50 MB and train efficiently within time/memory constraints.
+
+**Training**
+- Uses Adam optimizer with a moderate weight decay and tuned learning rate for stability and generalization.
+- BCEWithLogitsLoss for robust sigmoid-logit binary loss.
+- Training/validation accuracy and loss tracked per epoch for monitoring convergence.
+- The number of epochs (18) is chosen to strike a balance between speed and fitting with the constraint of < 2h wallclock and no overfitting.
+
+**Usage**
+- make_preprocessor() returns a ready-to-fit preprocessor.
+- make_model(input_dim) creates the MLP for the engineered features.
+- train_model() contains a clearly defined loop for training and validating through epochs.
+
+All code is deterministic and respects picklability and RAM constraints (outputs numpy float32 from preprocessor, etc). Efficient masking and per-event feature construction are geared toward typical physics observables, maximizing the ability for the model to learn subtle differences relevant for AUC.

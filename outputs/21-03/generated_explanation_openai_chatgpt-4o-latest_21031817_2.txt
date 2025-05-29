@@ -1,0 +1,20 @@
+This solution implements a binary classifier that maximizes the AUC metric for the four-top quark classification task in simulated LHC data. The approach includes thorough data preprocessing, feature engineering, and a neural network architecture optimized for the problem. 
+
+1. **Data Preprocessing and Feature Engineering**:
+   - The function `preprocess_data` extracts non-zero object properties from the event data, handling sparsity due to zero padding.
+   - It then computes physically motivated features: the total energy, total transverse momentum, and mean pseudorapidity of the event.
+   - These features are stacked along with the existing missing transverse energy features.
+
+2. **Dataloader Creation**:
+   - The `create_dataloader` function converts the dataset into PyTorch DataLoader objects for efficient batch processing.
+
+3. **Neural Network Classifier**:
+   - The `ParticleClassifier` model is a fully connected neural network with 64 and 32 hidden units, ReLU activation, and batch normalization.
+   - The final layer uses a Sigmoid activation for binary classification.
+
+4. **Training Loop**:
+   - The `train_model` function iterates through multiple epochs.
+   - Optimization is performed using Adam with binary cross-entropy loss.
+   - Model evaluation is performed using AUC on the validation set after each epoch.
+
+The approach ensures effective event classification by leveraging physics-inspired feature engineering alongside deep learning to maximize AUC performance.

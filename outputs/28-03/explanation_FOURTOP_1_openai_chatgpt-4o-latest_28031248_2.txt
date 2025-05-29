@@ -1,0 +1,13 @@
+This code implements a neural network-based binary classifier to maximize the AUC in a particle physics dataset. The approach is designed to handle high-dimensional sparse data, common in collider physics problems.
+
+1. The model `EventClassifier` uses three fully connected layers with Batch Normalization and Dropout layers to improve generalization and speed up convergence.
+
+2. The data preprocessing converts any NaN values to zero (a common strategy for missing data in physics) and ensures that data types are consistent (float32).
+
+3. The training loop uses an AdamW optimizer (better handling of weight decay for sparse features) over 20 epochs and keeps track of the model state with the best AUC seen on the validation dataset.
+
+4. The forward function uses `sigmoid` on the output layer to produce probabilities, which are used for AUC calculation.
+
+5. Evaluation uses scikit-learn's `roc_auc_score`, which is precise for this kind of performance metric.
+
+This setup is robust to sparse data and attempts to improve both the learning signal and generalization, crucial for minimizing False Positives while maximizing True Positives — directly impacting the AUC metric.

@@ -1,0 +1,29 @@
+This solution is a Transformer-based binary classifier tailored for rare event tagging in high energy physics using slot attention. It harnesses both machine learning advancements and domain physics. 
+
+Key points of the model and code:
+
+1. **Physics-aware Feature Engineering & Preprocessing:**
+   - Each particle object is described by kinematic and type information. Polished physics-inspired features are calculated: E_div_pt (E/pT), and Δphi to missing ET. These amplify the physics signals correlated to top decays.
+   - Numerical and categorical attributes are normalized using stats from non-padding objects in the training set.
+   - Particle class (object type) is presented as a one-hot encoding (proven helpful in LHC analyses), so the model can semantically distinguish leptons, b jets, etc.
+
+2. **Slot Attention Mechanism:**
+   - The model includes a dedicated slot attention module, designed to cluster sets of particles into up to four 'slots'. Each slot (inspired by the four top final state) represents a candidate for a 'top decay group' (t→bW, W→lν or W→qq), with joint attention over object groups. The iterative attention updates slots, focusing on forming meaningful groups from the unordered event constituents.
+   - The model can thus learn to assign jets/leptons into explicit per-top groups, bringing inductive physics biases.
+
+3. **Transformer Encoder for Set-structured Data:**
+   - Each particle's features are embedded; the full set of objects is jointly processed by a lightweight Particle Transformer Encoder (
+with MultiheadAttention, LayerNorm, and MLP blocks). Masking ensures padding objects have no effect.
+   - Transformer provides the model with robust permutation invariance, required for sets of unordered particles.
+
+4. **Global Classification:**
+   - Outputs of slot attention are flattened, concatenated with normalized missing energy features, and processed by an MLP for binary classification.
+   - The forward pass is torchscript-compatible allowing portability and optimization.
+   - The model can efficiently learn end-to-end groupings while being offered particle type semantics and physics-motivated augmented features.
+
+5. **Training & Metrics:**
+   - Uses AdamW optimizer and BCEWithLogitsLoss. Tracks accuracy and reports per-epoch validation AUC as a probe.
+   - Uses DataLoader for efficient batching.
+
+
+In summary, this solution implements a set & permutation-invariant physics-aware classifier with explicit object grouping (Slot Attention) aimed to maximize AUC, using only torch and Python libraries, on unprocessed LHC event tensors.

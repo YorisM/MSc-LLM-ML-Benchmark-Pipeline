@@ -1,0 +1,18 @@
+{
+  "model": "openai/gpt-4o-mini",
+  "usage": {
+    "prompt_tokens": 1927,
+    "completion_tokens": 803,
+    "total_tokens": 2730,
+    "prompt_tokens_details": {
+      "cached_tokens": 0
+    },
+    "completion_tokens_details": {
+      "reasoning_tokens": 0
+    }
+  },
+  "prompt_chars": 7766,
+  "code": "import os, sys, json, pickle, torch\nimport pandas as pd\nimport numpy as np\nimport matplotlib.pyplot as plt\nfrom torch import nn\nfrom torch.utils.data import TensorDataset, DataLoader\nfrom sklearn.preprocessing import StandardScaler\n\nclass MyPreprocessor:\n    def __init__(self):\n        self.scaler = StandardScaler()\n\n    def fit(self, X, y=None):\n        self.scaler.fit(X.numpy())\n        return self\n\n    def transform(self, X):\n        return torch.tensor(self.scaler.transform(X.numpy()), dtype=torch.float32)\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\nclass SimpleNN(nn.Module):\n    def __init__(self, input_dim):\n        super(SimpleNN, self).__init__()\n        self.fc1 = nn.Linear(input_dim, 64)\n        self.fc2 = nn.Linear(64, 32)\n        self.fc3 = nn.Linear(32, 1)\n        self.sigmoid = nn.Sigmoid()\n\n    def forward(self, x):\n        x = torch.relu(self.fc1(x))\n        x = torch.relu(self.fc2(x))\n        x = self.sigmoid(self.fc3(x))\n        return x\n\ndef make_model(input_dim: int):\n    return SimpleNN(input_dim)\n\nEPOCHS = 20\n\ndef train_model(model, train_loader, val_loader, epochs):\n    criterion = nn.BCELoss()\n    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)\n    train_loss, val_loss, train_acc, val_acc = [], [], [], []\n    for epoch in range(epochs):\n        model.train()\n        running_loss = 0.0\n        correct = 0\n        total = 0\n        for inputs, labels in train_loader:\n            optimizer.zero_grad()\n            outputs = model(inputs).squeeze()\n            loss = criterion(outputs, labels.float())\n            loss.backward()\n            optimizer.step()\n            running_loss += loss.item()\n            predicted = (outputs > 0.5).int()\n            total += labels.size(0)\n            correct += (predicted == labels).sum().item()\n        train_loss.append(running_loss / len(train_loader))\n        train_acc.append(correct / total)\n\n        model.eval()\n        val_running_loss = 0.0\n        val_correct = 0\n        val_total = 0\n        with torch.no_grad():\n            for inputs, labels in val_loader:\n                outputs = model(inputs).squeeze()\n                loss = criterion(outputs, labels.float())\n                val_running_loss += loss.item()\n                val_predicted = (outputs > 0.5).int()\n                val_total += labels.size(0)\n                val_correct += (val_predicted == labels).sum().item()\n        val_loss.append(val_running_loss / len(val_loader))\n        val_acc.append(val_correct / val_total)\n\n    return model, train_loss, val_loss, train_acc, val_acc",
+  "explanation": "The provided code implements a binary classification model to maximize the AUC for a particle physics dataset. It includes preprocessing, model creation, and training routines. The data is preprocessed using 'StandardScaler' to standardize the features before training. The model is a simple feedforward neural network (SimpleNN) with three linear layers and ReLU activation between them, designed to output probabilities for the classification task. The training loop runs for a specified number of epochs, recording training and validation loss and accuracy after each epoch.",
+  "reasoning": null
+}

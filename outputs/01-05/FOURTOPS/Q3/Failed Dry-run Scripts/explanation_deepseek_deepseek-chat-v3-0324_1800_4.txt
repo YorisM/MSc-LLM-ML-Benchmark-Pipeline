@@ -1,0 +1,13 @@
+This code implements a Transformer-based binary classifier with Slot Attention for the four-top quark classification task. The key components are:
+
+1. **Data Preprocessing**: Normalizes the input features using mean and standard deviation.
+
+2. **Slot Attention**: Groups particles into slots (4 slots for the 4 top quarks) using iterative attention. This helps the model focus on relevant particle groups.
+
+3. **Feature Augmentation**: Projects raw particle features (E, pT, eta, phi) into a higher-dimensional space to capture more complex relationships.
+
+4. **Transformer Encoder**: Processes the slot representations to capture interactions between different top quark candidates.
+
+5. **Classifier Head**: Makes the final binary prediction based on the processed slot representations.
+
+The model is trained with binary cross-entropy loss and evaluated using accuracy and AUC metrics. The slot attention mechanism helps the model learn meaningful groupings of particles corresponding to top quark decays, while the transformer captures their interactions. This architecture is particularly suited for the task as it can handle variable-length input (different numbers of particles per event) and explicitly models the physics of multiple top quark decays.

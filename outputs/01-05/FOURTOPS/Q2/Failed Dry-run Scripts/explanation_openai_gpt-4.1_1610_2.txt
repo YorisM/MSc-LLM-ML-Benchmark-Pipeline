@@ -1,0 +1,19 @@
+This code defines a full pipeline for classifying four-top events using a neural architecture designed to respect Lorentz symmetry using tensor products and message passing over detected objects in each event. Key innovations are:
+
+1. **Physics-Aware Architecture:** Objects are reconstructed using event features: each one is described by [type, E, pT, eta, phi]. The batch is split into these representations. Their four-vectors are explicitly rebuilt in the forward pass so that subsequent geometric operations are performed in Lorentz vector space.
+
+2. **Lorentz Tensor Product Layer:** The `LorentzTensorLayer` is an equivariant message-passing block. It computes all pairwise (object-object) Lorentz products within each event using the (+,-,-,-) metric directly on the reconstructed four-vectors, which are derived nonlinearly from (pT, eta, phi, E) using canonical formulae. This forms a topology among objects, from which each object aggregates contextual information from neighbors. The message passing is strictly permutation equivariant and leverages both the Lorentz-invariant quantities (in this case, squared mass and scalar products) and the object type.
+
+3. **Deep Symmetry Stack:** Several LorentzTensorLayers are stacked to allow cross-object nonlocal reasoning and make the classifier maximally expressive with respect to Lorentz symmetry and particle topology. This allows the network to learn features that are robust to boosts and rotations, which are crucial for LHC event analysis.
+
+4. **Ragged Event Handling:** Events contain padding for non-existent objects, and all layers mask these out everywhere to avoid meaningless propagation or invalid statistics.
+
+5. **Auxiliary Features:** Missing energy and azimuth are processed in parallel and provided to the output head.
+
+6. **Aggregate and Classify:** The pooled (mean, valid-object-masked) features are combined with auxiliary inputs and passed through a classifier head for the binary decision.
+
+7. **Physics-Aware Preprocessing:** Preprocessing uses only non-padded features to fit means and stds, and applies this centering and scaling as a torch module for later torchscript deployment.
+
+8. **Training Practices:** Standard BCEWithLogitsLoss, AdamW and learning rate scheduling are used. Metrics include loss, accuracy, and AUC. All masking, unrecoverable batch event quirks, etc, are rigorously handled.
+
+The resulting classifier is designed to be simultaneously symmetry-constrained, interpretable, and expressive. The sensitive event topology and Lorentz-product information directly allow the net to reason about event substructures, mass peaks, and relativistic invariant quantities, which are known to be powerful discriminants between signal and background in top physics.

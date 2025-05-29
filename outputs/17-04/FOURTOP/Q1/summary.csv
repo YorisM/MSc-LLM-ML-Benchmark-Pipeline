@@ -1,0 +1,70 @@
+script,return_code,stdout,stderr,duration_s,max_rss_kb
+./outputs/17-04/FOURTOP/Q1/openai_gpt-4o-mini\script_openai_gpt-4o-mini_1126_1.py,0,"Epoch 1/10 - Training Loss: 50.2789274106533 - Validation Loss: 50.3194623839738
+Epoch 2/10 - Training Loss: 50.31925414966575 - Validation Loss: 50.3194623839738
+Epoch 3/10 - Training Loss: 50.31925414953947 - Validation Loss: 50.3194623839738
+Epoch 4/10 - Training Loss: 50.31925414953947 - Validation Loss: 50.3194623839738
+Epoch 5/10 - Training Loss: 50.31925414901854 - Validation Loss: 50.3194623839738
+Epoch 6/10 - Training Loss: 50.31925415042346 - Validation Loss: 50.3194623839738
+Epoch 7/10 - Training Loss: 50.31925414876597 - Validation Loss: 50.3194623839738
+Epoch 8/10 - Training Loss: 50.3192541492869 - Validation Loss: 50.3194623839738
+Epoch 9/10 - Training Loss: 50.31925414991832 - Validation Loss: 50.3194623839738
+Epoch 10/10 - Training Loss: 50.3192541492869 - Validation Loss: 50.3194623839738
+AUC Score: 0.5
+Full run complete. Outputs and model saved successfully.
+",,354.9964342999883,65536
+./outputs/17-04/FOURTOP/Q1/google_gemini-2.0-flash-001\script_google_gemini-2.0-flash-001_1143_1.py,0,"Epoch {epoch+1}, Training Loss: {training_loss[-1]:.4f}, Validation Loss: {validation_loss[-1]:.4f}
+Training Accuracy: {training_acc[-1]:.4f}, Validation Accuracy: {validation_acc[-1]:.4f}
+Epoch {epoch+1}, Training Loss: {training_loss[-1]:.4f}, Validation Loss: {validation_loss[-1]:.4f}
+Training Accuracy: {training_acc[-1]:.4f}, Validation Accuracy: {validation_acc[-1]:.4f}
+Epoch {epoch+1}, Training Loss: {training_loss[-1]:.4f}, Validation Loss: {validation_loss[-1]:.4f}
+Training Accuracy: {training_acc[-1]:.4f}, Validation Accuracy: {validation_acc[-1]:.4f}
+Epoch {epoch+1}, Training Loss: {training_loss[-1]:.4f}, Validation Loss: {validation_loss[-1]:.4f}
+Training Accuracy: {training_acc[-1]:.4f}, Validation Accuracy: {validation_acc[-1]:.4f}
+Epoch {epoch+1}, Training Loss: {training_loss[-1]:.4f}, Validation Loss: {validation_loss[-1]:.4f}
+Training Accuracy: {training_acc[-1]:.4f}, Validation Accuracy: {validation_acc[-1]:.4f}
+Epoch {epoch+1}, Training Loss: {training_loss[-1]:.4f}, Validation Loss: {validation_loss[-1]:.4f}
+Training Accuracy: {training_acc[-1]:.4f}, Validation Accuracy: {validation_acc[-1]:.4f}
+Epoch {epoch+1}, Training Loss: {training_loss[-1]:.4f}, Validation Loss: {validation_loss[-1]:.4f}
+Training Accuracy: {training_acc[-1]:.4f}, Validation Accuracy: {validation_acc[-1]:.4f}
+Epoch {epoch+1}, Training Loss: {training_loss[-1]:.4f}, Validation Loss: {validation_loss[-1]:.4f}
+Training Accuracy: {training_acc[-1]:.4f}, Validation Accuracy: {validation_acc[-1]:.4f}
+Epoch {epoch+1}, Training Loss: {training_loss[-1]:.4f}, Validation Loss: {validation_loss[-1]:.4f}
+Training Accuracy: {training_acc[-1]:.4f}, Validation Accuracy: {validation_acc[-1]:.4f}
+Epoch {epoch+1}, Training Loss: {training_loss[-1]:.4f}, Validation Loss: {validation_loss[-1]:.4f}
+Training Accuracy: {training_acc[-1]:.4f}, Validation Accuracy: {validation_acc[-1]:.4f}
+Full run complete. Outputs and model saved successfully.
+",,205.16925920000358,28672
+./outputs/17-04/FOURTOP/Q1/meta-llama_llama-3.3-70b-instruct\script_meta-llama_llama-3.3-70b-instruct_1146_1.py,0,"Full run complete. Outputs and model saved successfully.
+",,283.18777570000384,-16384
+./outputs/17-04/FOURTOP/Q1/deepseek_deepseek-r1\script_deepseek_deepseek-r1_1155_2.py,0,"Epoch 1: Train Loss: 0.0029, Val Loss: 0.0015, Train AUC: 0.7831, Val AUC: 0.7468
+Epoch 2: Train Loss: 0.0022, Val Loss: 0.0016, Train AUC: 0.8719, Val AUC: 0.7459
+Epoch 3: Train Loss: 0.0022, Val Loss: 0.0016, Train AUC: 0.8812, Val AUC: 0.7427
+Epoch 4: Train Loss: 0.0021, Val Loss: 0.0017, Train AUC: 0.8855, Val AUC: 0.7512
+Epoch 5: Train Loss: 0.0021, Val Loss: 0.0016, Train AUC: 0.8848, Val AUC: 0.7497
+Epoch 6: Train Loss: 0.0021, Val Loss: 0.0016, Train AUC: 0.8880, Val AUC: 0.7499
+Epoch 7: Train Loss: 0.0021, Val Loss: 0.0017, Train AUC: 0.8901, Val AUC: 0.7487
+Epoch 8: Train Loss: 0.0021, Val Loss: 0.0016, Train AUC: 0.8902, Val AUC: 0.7500
+Epoch 9: Train Loss: 0.0020, Val Loss: 0.0016, Train AUC: 0.8919, Val AUC: 0.7503
+Epoch 10: Train Loss: 0.0020, Val Loss: 0.0017, Train AUC: 0.8951, Val AUC: 0.7511
+Epoch 11: Train Loss: 0.0020, Val Loss: 0.0016, Train AUC: 0.8938, Val AUC: 0.7510
+Epoch 12: Train Loss: 0.0020, Val Loss: 0.0016, Train AUC: 0.8951, Val AUC: 0.7522
+Epoch 13: Train Loss: 0.0020, Val Loss: 0.0016, Train AUC: 0.8951, Val AUC: 0.7527
+Epoch 14: Train Loss: 0.0020, Val Loss: 0.0016, Train AUC: 0.8969, Val AUC: 0.7523
+Epoch 15: Train Loss: 0.0020, Val Loss: 0.0017, Train AUC: 0.8944, Val AUC: 0.7519
+Epoch 16: Train Loss: 0.0020, Val Loss: 0.0016, Train AUC: 0.8982, Val AUC: 0.7538
+Epoch 17: Train Loss: 0.0019, Val Loss: 0.0016, Train AUC: 0.8999, Val AUC: 0.7539
+Epoch 18: Train Loss: 0.0019, Val Loss: 0.0016, Train AUC: 0.9003, Val AUC: 0.7545
+Epoch 19: Train Loss: 0.0019, Val Loss: 0.0017, Train AUC: 0.9015, Val AUC: 0.7544
+Epoch 20: Train Loss: 0.0019, Val Loss: 0.0016, Train AUC: 0.9015, Val AUC: 0.7543
+Epoch 21: Train Loss: 0.0019, Val Loss: 0.0016, Train AUC: 0.9041, Val AUC: 0.7533
+Epoch 22: Train Loss: 0.0019, Val Loss: 0.0017, Train AUC: 0.9043, Val AUC: 0.7524
+Epoch 23: Train Loss: 0.0019, Val Loss: 0.0015, Train AUC: 0.9048, Val AUC: 0.7548
+Epoch 24: Train Loss: 0.0018, Val Loss: 0.0016, Train AUC: 0.9055, Val AUC: 0.7549
+Epoch 25: Train Loss: 0.0018, Val Loss: 0.0016, Train AUC: 0.9076, Val AUC: 0.7521
+Epoch 26: Train Loss: 0.0018, Val Loss: 0.0016, Train AUC: 0.9075, Val AUC: 0.7517
+Epoch 27: Train Loss: 0.0018, Val Loss: 0.0017, Train AUC: 0.9089, Val AUC: 0.7544
+Epoch 28: Train Loss: 0.0018, Val Loss: 0.0016, Train AUC: 0.9097, Val AUC: 0.7531
+Epoch 29: Train Loss: 0.0018, Val Loss: 0.0017, Train AUC: 0.9093, Val AUC: 0.7531
+Epoch 30: Train Loss: 0.0018, Val Loss: 0.0016, Train AUC: 0.9116, Val AUC: 0.7508
+Full run complete. Outputs and model saved successfully.
+",,396.53455389999726,0

@@ -1,0 +1,27 @@
+This code implements a Transformer-based classifier employing the Slot Attention mechanism to explicitly group the set of variable-length event particles into slots, with the intention that each slot learns to represent a cluster (ideally top quark decay candidates). The model is physicist-informed via feature engineering and pre-processing.
+
+Key Design Choices and Physics Awareness:
+
+1. **Variable-Length Event Representation**: Each event is represented as up to 20 objects (particles/jets), each described by type (as integer s.t. lepton/jets etc.), kinematic variables, and sparse zero padding.
+
+2. **Physics-Informed Feature Augmentation**: For each object, the preprocessor computes and appends object-wise features based on known physical relevance:
+   - One-hot encoding for object type (so model can distinguish jet/lepton/b-jet etc.)
+   - Kinematic features (energy, pT, eta, phi)
+   - Estimated invariant mass (E^2 - pT^2 cosh^2(eta)), to help the model capture top/W/Z resonance structure implicitly
+   - pt/E and (E-pT), additional ratios capturing the longitudinal momentum component and energy distribution
+
+3. **Event Global Features**: Missing transverse energy (E_T^miss), its azimuth (phi), and event weight are passed as direct (normalized) features.
+
+4. **Transformer Encoding**: The objects are embedded and passed through a per-event transformer encoder, able to capture complex correlations between all particles. This ensures model is sensitive to multi-particle (combinatorial) signatures such as those indicative of top quark decay chains.
+
+5. **Slot Attention**: After object-level encoding, a Slot Attention module explicitly groups the object representations into four latent slots (motivated by the four tops in signal events). The slot attention mechanism softly assigns objects to each slot and aggregates them, so that each slot is supervised to learn to represent a candidate top decay signature. This gives explicit structural inductive bias matching the underlying process.
+
+6. **Classification Head**: Output slots are concatenated with the event global features, followed by an MLP to produce the scalar output (binary signal/background).
+
+7. **Preprocessing**: Mean-std normalization is performed only for real objects to avoid input-data leakage from padded zeros.
+
+8. **Training**: Standard BCE-with-logits loss, Adam optimizer, standard validation and metric reporting.
+
+This architectural combination couples strong learning capacity (transformers), explicit physics structural bias (slot attention tailored for tops), feature augmentation guided by domain knowledge, and careful handling of variable-length events.
+
+By using such a model, we maximize the AUC by enabling the classifier to perform explicit combinatorial reasoning, while the data-driven Transformer and physicist-informed engineering together capture both non-linear and linear event signatures crucial for rare process discrimination.

@@ -1,0 +1,5 @@
+question,model,accuracy,auc,path,missing_files
+Q1,deepseek_deepseek-r1,0.7482,0.8263,outputs\22-05\FOURTOPS\Q1\deepseek_deepseek-r1\deepseek_deepseek-r1_1102_1_model.pkl,"*_model.pth,*_scripted.pt,*_preproc.pt,*_ROC.png"
+Q1,google_gemini-2.5-pro-preview,0.7451,0.8220,outputs\22-05\FOURTOPS\Q1\google_gemini-2.5-pro-preview\google_gemini-2.5-pro-preview_1054_2_model.pkl,"*_model.pth,*_scripted.pt,*_preproc.pt,*_ROC.png"
+Q1,meta-llama_llama-4-maverick,0.5032,0.5000,outputs\22-05\FOURTOPS\Q1\meta-llama_llama-4-maverick\meta-llama_llama-4-maverick_1057_3_model.pkl,"*_model.pth,*_scripted.pt,*_preproc.pt,*_ROC.png"
+Q1,openai_gpt-4o-mini,0.4968,0.4999,outputs\22-05\FOURTOPS\Q1\openai_gpt-4o-mini\openai_gpt-4o-mini_1042_3_model.pkl,"*_model.pth,*_scripted.pt,*_preproc.pt,*_ROC.png"

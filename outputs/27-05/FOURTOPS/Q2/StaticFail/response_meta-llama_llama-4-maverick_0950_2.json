@@ -1,0 +1,86 @@
+{
+  "model": "meta-llama/llama-4-maverick",
+  "usage": {
+    "prompt_tokens": 2017,
+    "completion_tokens": 1534,
+    "total_tokens": 3551
+  },
+  "prompt_chars": 8559,
+  "code": "# 0. ---------- IMPORTS ----------\nimport torch\nimport numpy as np\nfrom torch import nn\nfrom torch.utils.data import TensorDataset, DataLoader\nimport torch.nn.functional as F\nfrom torch_scatter import scatter_max, scatter_mean\n\n# 1. ---------- PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        pass\n\n    def fit(self, X, y=None):\n        return self\n\n    def transform(self, X):\n        # Separate objects and global features\n        global_features = X[:, :2]  # E_T_miss, phi_{E_t}_miss\n        object_features = X[:, 2:].view(-1, 18, 5)  # 18 objects, 5 features each\n        obj_mask = (object_features[:, :, 0] != 0).float()  # Mask for non-zero-padded objects\n        return global_features, object_features, obj_mask\n\n    def fit_transform(self, X, y=None):\n        self.fit(X, y)\n        return self.transform(X)\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# 2. ---------- MODEL DEFINITION ----------\nclass LorentzEquivariantLayer(nn.Module):\n    def __init__(self, input_dim, hidden_dim):\n        super(LorentzEquivariantLayer, self).__init__()\n        self.linear = nn.Linear(input_dim, hidden_dim)\n\n    def forward(self, x):\n        return F.relu(self.linear(x))\n\nclass ParticleTransformer(nn.Module):\n    def __init__(self, input_dim, hidden_dim):\n        super(ParticleTransformer, self).__init__()\n        self.query_linear = nn.Linear(input_dim, hidden_dim)\n        self.key_linear = nn.Linear(input_dim, hidden_dim)\n        self.value_linear = nn.Linear(input_dim, hidden_dim)\n\n    def forward(self, x, obj_mask):\n        queries = self.query_linear(x)\n        keys = self.key_linear(x)\n        values = self.value_linear(x)\n        attention_weights = torch.matmul(queries, keys.transpose(-1, -2)) / np.sqrt(x.size(-1))\n        attention_weights = attention_weights.masked_fill(obj_mask.unsqueeze(-1) == 0, -1e9)\n        attention_weights = F.softmax(attention_weights, dim=-1)\n        output = torch.matmul(attention_weights, values)\n        return output\n\ndef make_model(input_dim: int):\n    model = nn.Sequential(\n        LorentzEquivariantLayer(input_dim, 128),\n        ParticleTransformer(128, 128),\n        LorentzEquivariantLayer(128, 64),\n        nn.Flatten(),\n        nn.Linear(64 * 18 + 128, 1)\n    )\n    return model\n\n# 3. ---------- MODEL TRAINING ----------\nEPOCHS = 10\ndef train_model(model, train_loader, val_loader, epochs):\n    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')\n    model.to(device)\n    criterion = nn.BCEWithLogitsLoss()\n    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)\n    train_loss, val_loss, train_acc, val_acc = [], [], [], []\n    for epoch in range(epochs):\n        model.train()\n        total_loss, total_correct = 0, 0\n        for global_features, object_features, obj_mask, labels in train_loader:\n            global_features, object_features, obj_mask, labels = global_features.to(device), object_features.to(device), obj_mask.to(device), labels.to(device)\n            optimizer.zero_grad()\n            x = model[0](object_features)\n            x = model[1](x, obj_mask)\n            x = model[2](x)\n            x = torch.cat([x.mean(dim=1), global_features], dim=1)\n            x = model[4](x)\n            loss = criterion(x.squeeze(), labels.float())\n            loss.backward()\n            optimizer.step()\n            total_loss += loss.item()\n            total_correct += ((x.squeeze() > 0) == labels).sum().item()\n        train_loss.append(total_loss / len(train_loader))\n        train_acc.append(total_correct / len(train_loader.dataset))\n        model.eval()\n        total_loss, total_correct = 0, 0\n        with torch.no_grad():\n            for global_features, object_features, obj_mask, labels in val_loader:\n                global_features, object_features, obj_mask, labels = global_features.to(device), object_features.to(device), obj_mask.to(device), labels.to(device)\n                x = model[0](object_features)\n                x = model[1](x, obj_mask)\n                x = model[2](x)\n                x = torch.cat([x.mean(dim=1), global_features], dim=1)\n                x = model[4](x)\n                loss = criterion(x.squeeze(), labels.float())\n                total_loss += loss.item()\n                total_correct += ((x.squeeze() > 0) == labels).sum().item()\n        val_loss.append(total_loss / len(val_loader))\n        val_acc.append(total_correct / len(val_loader.dataset))\n    return model, train_loss, val_loss, train_acc, val_acc",
+  "explanation": "The provided code is a PyTorch implementation of a binary classification model that incorporates Lorentz symmetry via tensor products and equivariant message passing. The model is designed to classify particle physics events as either signal or background. The code is divided into three main sections: data pre-processing, model definition, and model training.\n\nIn the pre-processing step, the data is transformed to separate global features (E_T_miss and phi_{E_t}_miss) from object features (particle properties). The object features are reshaped to have a fixed number of objects (18) with 5 features each. A mask is created to identify non-zero-padded objects.\n\nThe model definition consists of two main components: LorentzEquivariantLayer and ParticleTransformer. The LorentzEquivariantLayer is a simple neural network layer that applies a linear transformation followed by a ReLU activation function. The ParticleTransformer is a self-attention mechanism that operates on the object features, using the object mask to ignore zero-padded objects.\n\nThe model is a sequential composition of these layers, followed by a flattening operation and a final linear layer to produce a binary classification output. The model is trained using the Adam optimizer and binary cross-entropy loss.\n\nThe training loop iterates over the training dataset, computing the loss and accuracy on both the training and validation datasets at each epoch. The model's performance is evaluated on the validation dataset, and the training and validation losses and accuracies are tracked.\n\nThe code is designed to be efficient and scalable, using PyTorch's built-in support for GPU acceleration and batch processing. The model's architecture is designed to respect Lorentz symmetry, which is a fundamental principle in particle physics.",
+  "reasoning": null,
+  "PyLint": [
+    {
+      "type": "error",
+      "module": "script_meta-llama_llama-4-maverick_0950_2",
+      "obj": "",
+      "line": 52,
+      "column": 0,
+      "endLine": 52,
+      "endColumn": 51,
+      "path": "outputs\\27-05\\FOURTOPS\\Q2\\script_meta-llama_llama-4-maverick_0950_2.py",
+      "symbol": "import-error",
+      "message": "Unable to import 'torch_scatter'",
+      "message-id": "E0401"
+    },
+    {
+      "type": "error",
+      "module": "script_meta-llama_llama-4-maverick_0950_2",
+      "obj": "_run",
+      "line": 174,
+      "column": 33,
+      "endLine": 174,
+      "endColumn": 46,
+      "path": "outputs\\27-05\\FOURTOPS\\Q2\\script_meta-llama_llama-4-maverick_0950_2.py",
+      "symbol": "no-member",
+      "message": "Instance of 'tuple' has no 'shape' member",
+      "message-id": "E1101"
+    },
+    {
+      "type": "error",
+      "module": "script_meta-llama_llama-4-maverick_0950_2",
+      "obj": "_run",
+      "line": 185,
+      "column": 29,
+      "endLine": 185,
+      "endColumn": 42,
+      "path": "outputs\\27-05\\FOURTOPS\\Q2\\script_meta-llama_llama-4-maverick_0950_2.py",
+      "symbol": "no-member",
+      "message": "Instance of 'tuple' has no 'shape' member",
+      "message-id": "E1101"
+    }
+  ],
+  "Bandit": {
+    "errors": [],
+    "generated_at": "2025-05-27T07:50:33Z",
+    "metrics": {
+      ".\\./outputs/27-05/FOURTOPS/Q2/script_meta-llama_llama-4-maverick_0950_2.py": {
+        "CONFIDENCE.HIGH": 0,
+        "CONFIDENCE.LOW": 0,
+        "CONFIDENCE.MEDIUM": 0,
+        "CONFIDENCE.UNDEFINED": 0,
+        "SEVERITY.HIGH": 0,
+        "SEVERITY.LOW": 0,
+        "SEVERITY.MEDIUM": 0,
+        "SEVERITY.UNDEFINED": 0,
+        "loc": 168,
+        "nosec": 0,
+        "skipped_tests": 0
+      },
+      "_totals": {
+        "CONFIDENCE.HIGH": 0,
+        "CONFIDENCE.LOW": 0,
+        "CONFIDENCE.MEDIUM": 0,
+        "CONFIDENCE.UNDEFINED": 0,
+        "SEVERITY.HIGH": 0,
+        "SEVERITY.LOW": 0,
+        "SEVERITY.MEDIUM": 0,
+        "SEVERITY.UNDEFINED": 0,
+        "loc": 168,
+        "nosec": 0,
+        "skipped_tests": 0
+      }
+    },
+    "results": []
+  }
+}

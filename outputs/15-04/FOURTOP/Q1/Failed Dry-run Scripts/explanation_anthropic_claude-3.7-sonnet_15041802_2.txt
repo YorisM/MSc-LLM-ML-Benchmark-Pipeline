@@ -1,0 +1,30 @@
+This code provides a comprehensive solution for the binary classification task in high-energy physics, focusing on detecting four-top quark events while maximizing the AUC (Area Under the ROC Curve) metric. Here's a detailed explanation of my implementation:
+
+1. **Data Preprocessing**:
+   - I designed a sophisticated feature extraction function that understands the physics data structure, parsing weights, missing energy, and the physics objects with their kinematic properties.
+   - Key derived features include:
+     - Object counts and type distributions
+     - Total energy and transverse momentum sums
+     - Pairwise angular differences (Δη, Δφ) between objects
+     - Approximate invariant masses between object pairs, which are crucial for identifying particle decays
+   - Features are normalized using training set statistics to ensure model stability, with special handling for the weight column which is kept unnormalized for use in weighted loss calculations.
+
+2. **Neural Network Architecture**:
+   - The model employs residual connections to facilitate training of deeper networks which can capture complex patterns in the physics data.
+   - The architecture consists of multiple fully-connected layers with batch normalization to stabilize training.
+   - LeakyReLU activations are used to avoid the dying ReLU problem and provide better gradient flow.
+   - Dropout (30%) is applied for regularization to prevent overfitting.
+   - The model separates the sample weights from input features in the forward pass to use them for loss weighting.
+
+3. **Training Process**:
+   - Uses weighted binary cross-entropy loss, where each sample contributes to the loss according to its physics weight, ensuring physically meaningful optimization.
+   - Adam optimizer with weight decay for better generalization.
+   - Learning rate scheduler (ReduceLROnPlateau) that monitors validation AUC and reduces learning rate when progress plateaus.
+   - Comprehensive tracking of multiple metrics: loss, accuracy, and most importantly, AUC on both training and validation sets.
+
+4. **Physics-Aware Design**:
+   - The preprocessing explicitly accounts for the structure of particle physics data, where objects have different types and variable counts per event.
+   - The feature engineering captures physics-inspired quantities like invariant mass and angular separations that are known to be discriminative in particle identification tasks.
+   - Sample weighting respects the cross-section weighting provided in the dataset, ensuring the model optimizes for physics significance rather than just classification accuracy.
+
+This approach combines domain knowledge from particle physics with modern deep learning techniques to maximize performance on the AUC metric, which is crucial for rare signal detection in high-energy physics analyses.

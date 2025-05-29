@@ -1,0 +1,14 @@
+The code implements a Transformer-based neural network for classifying particle collision events. Key components:
+1. **Data Handling**: Processes variable-length particle objects using zero-padding and masking.
+2. **Model Architecture**:
+   - Object embeddings with self-attention via Transformer encoder
+   - Global feature processing with a feed-forward network
+   - Combined representation passed through a classifier
+3. **Training**: Uses BCE loss and Adam optimizer with weight decay. Saves best model based on validation AUC.
+4. **Efficiency**: Implements dry-run mode for quick testing.
+5. **Physics Considerations**:
+   - Handles missing energy (E_T_miss) and event weights
+   - Permutation-invariant processing of particle objects
+   - Attention mechanism learns inter-particle relationships
+
+The model leverages both global event characteristics and detailed particle-level information through a hybrid architecture, making it particularly suitable for sparse, high-energy physics data.

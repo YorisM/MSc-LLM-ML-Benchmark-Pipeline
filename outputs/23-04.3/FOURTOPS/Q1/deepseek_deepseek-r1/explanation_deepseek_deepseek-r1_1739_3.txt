@@ -1,0 +1,23 @@
+The provided code addresses the problem of maximizing AUC for the four-top-quark classification task using a neural network. Here's the breakdown:
+
+1. **Data Preprocessing**:
+   - The `PreprocessModule` standardizes each feature using mean and standard deviation calculated from the training data.
+   - For the first three features (weight, missing ET magnitude, and phi), global normalization is applied.
+   - For object-related features, normalization constants are computed using only non-zero entries to avoid padding influence.
+
+2. **Classifier Architecture**:
+   - A deep neural network with 4 hidden layers (512, 256, 128 neurons), batch normalization, dropout for regularization.
+   - Uses ReLU activations except the output layer (logits for BCEWithLogitsLoss).
+   - Designed to handle high-dimensional inputs and prevent overfitting.
+
+3. **Training Loop**:
+   - Uses BCELossWithLogits for stability during training.
+   - Tracks both training/validation loss and AUC metrics per epoch.
+   - Implements learning with Adam optimizer (learning rate 1e-3) with weight decay.
+
+4. **Special Considerations**:
+   - AUC is used as the primary metric instead of accuracy to align avec the problem requirements.
+   - Dynamic batch sizing and device detection (CPU/GPU) for portability.
+   - Model save formats include both PyTorch state dict and TorchScript for deployment.
+
+The structured approach ensures feature normalization respecte padding, and the model architecture aims to capture relevant physics features while avoiding overfitting through dropout and batch normalization.

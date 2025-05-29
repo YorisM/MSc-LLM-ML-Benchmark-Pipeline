@@ -1,0 +1,7 @@
+This solution first defines a physics-inspired preprocessor that performs per-feature standardization of all input variables (standard score: (x-mean)/std), paying special care to only include valid (not zero-padded) physics objects per event in the statistics. For events where individual objects are missing (zero-filled), the preprocessor leaves these padded object features unchanged (they remain zero after normalization) and appends a binary mask feature for each object position, indicating its presence. This enables the model to learn the effect of missing/irrelevant zero-padded objects.
+
+The classifier is a feed-forward neural network with 3 hidden layers, batch normalization, and dropout to guard against overfitting while keeping the model small enough to fit memory/runtime constraints. The final output is a sigmoid giving a probability for the signal label.
+
+In the training function, the model uses Adam with weight decay and binary cross-entropy loss. At each epoch, the function logs average losses and accuracy for both training and validation sets. All computations are performed on GPU if available. Accuracy (though not the main objective) is returned along with the loss for diagnostic purposes.
+
+The design leverages the event structure (masked/zero-padded variable object counts) and extracts maximum discriminating power, while the architecture is simple enough for stable and generalizable AUC optimization. The preprocessor is compatible with the stated interface and output formats.

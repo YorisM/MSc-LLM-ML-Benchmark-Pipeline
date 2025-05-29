@@ -1,0 +1,175 @@
+```markdown
+** Instructions **
+You are an expert at programming in python, machine learning,
+particle and high energy physics. You will help me answer a question
+in a machine learning challenge format where you strive to maximize
+a scalar metric in order to learn more about your scientific creativity
+and scientific understanding. You will follow all of the instructions 
+to your best capabilities.
+
+** Problem Description **
+A major task in particle physics is the measurement of rare signal 
+processes ith very small cross-sections. With the unprecedented amount of 
+data provided by the upcoming runs of the Large Hadron Collider (LHC), 
+one can start to measure these processes. An example is the recent 
+observation of four top quarks originating from a single proton-proton 
+collision event. Accurate classification of these events is crucial, 
+as even a small reduction in background noise on the order of a few tens 
+of percent while maintaining the same signal detection efficiency can lead 
+to a profound increase in sensitivity.
+
+** Evaluation Metric **
+The evaluation metric for this classification task is the area under the curve (AUC)
+value, specified by the area under the receiver operating characteristic (ROC) curve. 
+The AUC summarizes a model's ability to distinguish between positive and 
+negative classes. A value of 1 indicates a perfect classifier, while a 0.5 indicates
+performance no better than random guessing. Mathematically the AUC is defined as:
+$$ AUC = \int_{0}^{1} TPR(t) \, d(FPR(t)) $$
+Where the True Positive Rate (TPR) is defines as:
+$$   TPR = \frac{TP}{TP + FN} $$
+and the False Positive Rate (FPR) is defined as:
+$$ FPR = \frac{FP}{FP + TN} $$
+
+** Dataset Description **
+The dataset used for this problem consists of simulated proton-proton 
+collision at a center of mass energy of 13 TeV. The signal process is defined as 
+$$ pp \rightarrow t \bar{t} t \bar{t} $$. The relevant production processes of the
+backgrounds are $$ t \bar{t} + X $$ where $$ X = Z, W^+, W^+W^- $$.
+
+The dataset includes 302072 events, of which roughly 50% is signal and 50%
+are background processes. All background processes have an equal number of events. 
+There is not cut on the maximum number of objects and there is no order.    
+
+The contents of the data sets (X_train & X_val) are given below.
+The specific line format is as follows:
+
+E_T_miss, phi_{E_t}_miss, obj_1, E_1, p_T1, eta_1, phi_1, obj_2, E_2, p_t2, eta_2, phi_2, ....
+
+Such that each object is represented by a string that starts with an identifier "obj_n", which is an
+integer value representing a particular object in the event. The object identifier is
+followed by its kinematic properties in the form of a four-vector containing the full 
+energy "E" and the transverse momentum "p_T" in units of MeV, as well as the pseudo-rapidity 
+"eta" and the azimuthal angle "phi". The other three quantities are "weight" given by the cross-section
+of thne process divided by the total number of events generated. "E_T_miss" is the magnitude of the
+missing transverse energy in units of MeV and "phi_{E_t}_miss" is the azimuthal angle of the missing
+transverse energy.
+
+Since the length of the events is variable, the data is zero-padded to the largest number of objects
+found in the events within in the entire dataset. The dataset is fairly sparse and not pre-processed.
+
+The relevant datasets are pytorch tensors with the following properties:
+
+Name: X_train, shape: [241657, 92], dtype: torch.float32, 
+Name: Y_train, shape: [241657], dtype: torch.int64, 
+Name: X_val, shape: [30272, 92], dtype: torch.float32, 
+Name: Y_val, shape: [30272], dtype: torch.int64, 
+
+** Runtime Constraints **	
+• 4 CPU · 8 GB RAM · 2h wall-clock.
+• No internet; importing extra pip packages will fail.
+• Keep model < 50 MB and avoid loading all tensors twice.
+• Avoid large space searches and extensive hyperparameter tuning.
+
+** Code Template **
+
+# Imports: torch, numpy, pandas, matplotlib, sklearn are already available
+# via the wrapper.  Only import extra std-lib modules or torch.nn sub-modules
+# you actually use.
+# <LLM: Import required modules.>
+
+class MyPreprocessor:
+    #    Must implement:
+    #   - fit(X: np.ndarray | torch.Tensor, y: np.ndarray | None) -> self
+    #   - transform(X: np.ndarray | torch.Tensor) -> np.ndarray | torch.Tensor
+
+    # REQUIREMENTS
+    # ------------
+    # All state must be picklable with the std-lib pickle module.
+    # transform() must be deterministic (no random ops).
+    # May allocate NumPy arrays or Torch tensors internally, but
+    # transform() must output a NumPy array *or* a torch.Tensor of
+    # shape (N, features).
+
+    # DATA SHAPE
+    # -----------
+    # Total flat length per event: 92
+    # Index  0 :  missing-ET magnitude  (E_T_miss)
+    # Index  1 :  missing-ET azimuth    (phi_Et_miss)
+    # Indices  2–6  : object 1  →  [obj_1, E_1, p_T1, eta_1, phi_1]
+    # Indices  7–11 : object 2  → [obj_2, E_2 , p_T_2 , eta_2 , phi_2]
+    # ...
+    # Indices 88–92 : object 18 → [obj_18, E_18 , p_T_18 , eta_18 , phi_18]
+    # Per-object slice size = 5
+    # Max objects encoded   = 18
+
+    # <LLM: Write code to preprocess the data>    
+    def __init__(self):
+        # <LLM: Define and initialize any stateful components here>
+        pass
+
+    def fit(self, X, y=None):
+        # <LLM: Extract statistics or fit transformers>
+        return self
+
+    def transform(self, X):
+        # <LLM: Apply preprocessing logic, return tensor or ndarray>
+        return X  # placeholder
+
+def make_preprocessor():
+    return MyPreprocessor()
+
+def make_model(input_dim: int):
+    # PARAMETERS
+    # ----------
+    # inplut_dim : int : Number of features per event after preprocessing.
+
+    # RETURNS
+    # -------
+    # model : torch.nn.Module : Untrained binary-classifier network.
+
+    # <LLM: Write code to define a binary-classifier network>
+    return model
+
+EPOCHS = # <LLM: define the amount of training epochs>
+    
+def train_model(model: nn.Module,
+                train_loader: torch.utils.data.DataLoader,
+                val_loader: torch.utils.data.DataLoader,
+                epochs: int):
+    # RETURNS
+    # -------
+    # trained_model : nn.Module          (same instance, trained in-place)
+    # train_loss    : list[float]        (length == epochs)
+    # val_loss      : list[float]        (length == epochs)
+    # train_acc     : list[float]        (length == epochs)
+    # val_acc       : list[float]        (length == epochs)
+    
+    # REQUIREMENTS 
+    # Define training loop clearly including number of epochs
+    # Do NOT use verbose.
+
+    # <LLM: Write code to define training loop>
+    return trained_model, train_loss, val_loss, train_acc, val_acc
+
+ ** IMPORTANT: Your Challenge **
+Write Python code for a binary classification model focussing on maximizing the AUC using the code template above.
+You may freely choose any pre-processing methods and techniques as well as model architecture and traning conventions.
+                 
+
+** Response Format **
+Your reponse must be in a valid JSON dictionary format with the following structure:
+        {
+        'language': Python, 
+        'code': <Your complete Python code here>,
+        'explanation': <A detailed explanation of the code>
+        }
+Strictly adhere to this structure and follow these rules:
+
+1. Do not include any text or explanations outside the JSON object.
+2. Do not add any formatting, such as markdown, to the response. 
+3. Properly escape all special characters, especially new lines.
+4. After generating the JSON, internally validate its structure before outputting.
+5. Before returning, verify that the code template has been properly filled in an 
+that all requirements are met.
+
+```

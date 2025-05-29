@@ -1,0 +1,21 @@
+This Python code is a complete pipeline for training a binary classifier to distinguish between four-top-quark events and background events using simulated LHC data. The key aspects include:
+
+1. **Preprocessing**:
+   - Normalizes features using `StandardScaler` to zero mean and unit variance, which is essential for neural network convergence.
+
+2. **Model Architecture (Classifier)**:
+   - A multi-layer perceptron with two intermediate layers, batch normalization, ReLU activation and dropout for regularization.
+   - The final layer uses a sigmoid activation to output probabilities for binary classification.
+
+3. **Training and Evaluation**:
+   - Binary cross entropy loss is used.
+   - Adam optimizer is chosen for efficient training.
+   - Metrics computed per epoch: loss and AUC (area under the ROC curve) on training and validation.
+   - Using `roc_auc_score` from sklearn to directly optimize and evaluate the AUC.
+   - Batch size is large (1024) for efficient training and AUC estimation.
+
+4. **Output and Monitoring**:
+   - Saves the trained model.
+   - Plots loss and AUC per epoch and saves them as PNG files.
+
+This setup enables effective learning from sparse and high-dimensional simulated particle physics data, targeting very high AUC scores essential for picking out rare physical processes from overwhelming backgrounds.

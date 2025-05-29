@@ -1,0 +1,9 @@
+The code builds a physics-informed preprocessing pipeline and a feedforward neural network to maximize AUC for rare signal/background LHC event classification. 
+
+Preprocessing: The 'PhysPreprocessor' extracts not only scaled kinematic quantities (including zero-padded objects for uniform shape) but also summary event-wise physics features likely to be discriminant: object multiplicity, total and max pT/E, mean absolute eta, and pairwise deltaR between leading objects. StandardScaler is fitted per-feature, so later transforms match train/test. This boosts model performance by letting the network focus both on low-level and summary patterns, improving learning.
+
+Model: The classifier is a compact, regularized feedforward (fully-connected) network with batch normalization and dropout at each block, reducing overfitting—a risk for high-dimensional, sparse input. Designed shallow (<50MB), it processes the concatenated physics/statistics features efficiently. Output is a single logit per sample for binary signal/background classification.
+
+Training: Implements standard PyTorch training loop (Adam + LR schedule + weight decay), computes accuracy, and BCEWithLogitsLoss per epoch for stability.
+
+All code follows best practices for memory and determinism, keeping compatibility with the evaluation framework, and is explainable and tunable for future extension (including easy AUC ROC computation on outputs).

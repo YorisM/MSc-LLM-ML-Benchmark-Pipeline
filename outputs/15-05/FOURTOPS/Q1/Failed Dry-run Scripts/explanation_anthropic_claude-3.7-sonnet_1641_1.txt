@@ -1,0 +1,30 @@
+This solution addresses the binary classification task of distinguishing rare four top-quark events from background processes in particle physics. Here's an explanation of the key components:
+
+1. **EventPreprocessor Class**: The preprocessing approach focuses on extracting physics-informed features from the variable-length event data.
+   - Normalizes data using standard scaling
+   - Extracts missing energy features (E_T_miss and phi_{E_T}_miss)
+   - Computes event-level features like sum of transverse momentum
+   - Counts occurrences of different object types
+   - Calculates statistics (max, min, mean, sum) for each object type's properties (E, p_T, eta, phi)
+   - Computes pairwise angular separations (ΔR) between leading objects, which is critical for identifying event topology
+
+2. **PPCollisionClassifier Model**:
+   - Uses a deep neural network with three fully-connected hidden layers (256 → 128 → 64 neurons)
+   - Incorporates batch normalization for improved training stability
+   - Uses LeakyReLU activations to handle potential gradient saturation
+   - Employs dropout regularization (0.2-0.3) to prevent overfitting
+   - Outputs unnormalized logits for binary classification
+
+3. **Training Pipeline**:
+   - Uses BCE with logits loss, which is numerically stable for binary classification
+   - Employs Adam optimizer with weight decay for regularization
+   - Implements learning rate reduction when validation performance plateaus
+   - Tracks and reports multiple metrics: loss, accuracy, and most importantly AUC
+   - Saves the model state with the best validation AUC
+
+The solution leverages domain knowledge of particle physics by:
+- Focusing on physically meaningful derived features like angular separation (ΔR)
+- Creating aggregated statistics for each particle type
+- Capturing event topology through object counts and relationships
+
+The model architecture balances complexity with regularization to avoid overfitting, which is crucial when working with specialized physics data. The training process is designed to optimize for the AUC metric directly, with early stopping based on validation performance.

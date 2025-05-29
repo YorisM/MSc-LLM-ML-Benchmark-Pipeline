@@ -1,0 +1,63 @@
+{
+  "model": "openai/gpt-4o-mini",
+  "usage": {
+    "prompt_tokens": 2064,
+    "completion_tokens": 1506,
+    "total_tokens": 3570,
+    "prompt_tokens_details": {
+      "cached_tokens": 1920
+    },
+    "completion_tokens_details": {
+      "reasoning_tokens": 0
+    }
+  },
+  "prompt_chars": 8666,
+  "code": "import torch\nimport torch.nn as nn\nimport torch.nn.functional as F\nfrom torch.utils.data import TensorDataset, DataLoader\n\nclass MyPreprocessor:\n    def __init__(self):\n        pass\n\n    def fit(self, X, y=None):\n        return self\n\n    def transform(self, X):\n        # Augment particle features to include pairwise interaction energies\ndata_shape = X.size(1)\n        # Base features extraction: missing ET and azimuthal angle\n        ET_miss = X[:, 0]  # shape: (N,)\n        phi_ET_miss = X[:, 1]  # shape: (N,)\n\n        # Initialize a list for augmented features\n        augmented_features = [ET_miss.unsqueeze(1), phi_ET_miss.unsqueeze(1)]\n\n        # Feature engineering for each particle object\ndim_per_particle = 5\n        max_particles = 18\n        for i in range(max_particles):\n            obj_idx = 2 + i * dim_per_particle\n            if obj_idx + dim_per_particle <= data_shape:\n                # Extract features for the i-th particle\n                E = X[:, obj_idx + 1]  # E_i\n                p_T = X[:, obj_idx + 2]  # p_T_i\n                eta = X[:, obj_idx + 3]  # eta_i\n                phi = X[:, obj_idx + 4]  # phi_i\n\n                # Create additional features based on physics knowledge (example: transverse mass)\n                transverse_mass = torch.sqrt((E**2 - p_T**2) + (p_T**2 * (torch.cosh(eta)**2 - 1)))\n                augmented_features.append(transverse_mass.unsqueeze(1)) \n\n        # Concatenate all augmented features and return\n        return torch.cat(augmented_features, dim=1)\n\n    def fit_transform(self, X, y=None):\n        self.fit(X, y)\n        return self.transform(X)\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\nclass TransformerLayer(nn.Module):\n    def __init__(self, embed_dim, num_heads):\n        super(TransformerLayer, self).__init__()\n        self.attn = nn.MultiheadAttention(embed_dim, num_heads)\n        self.linear1 = nn.Linear(embed_dim, 128)\n        self.dropout = nn.Dropout(0.1)\n        self.linear2 = nn.Linear(128, embed_dim)\n\n    def forward(self, x):\n        attn_output, _ = self.attn(x, x, x)\n        x = attn_output + x  # Residual connection\n        x = F.relu(self.linear1(x))\n        x = self.dropout(x)\n        return self.linear2(x) + x  # Residual connection\n\ndef make_model(input_dim: int):\n    class SlotAttentionModel(nn.Module):\n        def __init__(self, input_dim):\n            super(SlotAttentionModel, self).__init__()\n            self.transformer_layer = TransformerLayer(input_dim, 4)\n            self.fc = nn.Linear(input_dim, 1)  # Final layer for binary classification\n\n        def forward(self, x):\n            x = self.transformer_layer(x.unsqueeze(0))  # Add batch dimension\n            return torch.sigmoid(self.fc(x.mean(dim=0)))  # Pooling & Sigmoid output\n\n    return SlotAttentionModel(input_dim)\n\nEPOCHS = 10\n\ndef train_model(model, train_loader, val_loader, epochs):\n    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)\n    criterion = nn.BCELoss()\n    train_loss, val_loss = [], []\n    train_acc, val_acc = [], []\n\n    for epoch in range(epochs):\n        model.train()\n        epoch_loss = 0\n        correct = 0\n        total = 0\n        for data, target in train_loader:\n            optimizer.zero_grad()\n            output = model(data)\n            loss = criterion(output.flatten(), target.float())\n            loss.backward()\n            optimizer.step()\n\n            epoch_loss += loss.item()\n            predicted = (output.flatten() > 0.5).long()\n            correct += (predicted == target).sum().item()\n            total += target.size(0)\n        train_loss.append(epoch_loss / len(train_loader))\n        train_acc.append(correct / total)\n\n        # Validation phase\n        model.eval()\n        with torch.no_grad():\n            epoch_loss = 0\n            correct = 0\n            total = 0\n            for data, target in val_loader:\n                output = model(data)\n                loss = criterion(output.flatten(), target.float())\n                epoch_loss += loss.item()\n                predicted = (output.flatten() > 0.5).long()\n                correct += (predicted == target).sum().item()\n                total += target.size(0)\n        val_loss.append(epoch_loss / len(val_loader))\n        val_acc.append(correct / total)\n\n    return model, train_loss, val_loss, train_acc, val_acc",
+  "explanation": "The provided code implements a transformer-based classification model tailored for the task of distinguishing rare processes in particle physics data. The goal is to maximize the AUC in the classification task. Here's a detailed breakdown of each section:\n\n1. **Preprocessor Class**: A custom `MyPreprocessor` class is defined to perform necessary feature transformations. It augments the original feature set by calculating additional physics-informed features, such as transverse mass. This can help enhance the model's ability to capture relevant patterns in the data. The `transform` function combines the original and new features into a single tensor suitable for model input.\n\n2. **Transformer and Model Classes**: A `TransformerLayer` class is implemented to handle the attention mechanism, critical for processing the variable-length particle event data. The `make_model` function constructs a neural network using this transformer layer, followed by a fully connected layer for binary classification. The model averages the transformed features before making a binary decision, which helps in effectively managing the variable nature of particle counts in each event.\n\n3. **Training Function**: The `train_model` function orchestrates the training loop over a defined number of epochs. It includes logic for both training and validation phases, using binary cross-entropy as the loss function. Accuracy metrics for both training and validation sets are collected after each epoch to monitor performance.\n\n4. **Hyperparameters and Input Dimensions**: The number of training epochs is set to 10. The input dimension for the model is dynamically handled based on preprocessing. This design respects runtime constraints regarding both model size and execution time. By leveraging physics knowledge in the feature engineering and a transformer architecture, this implementation aims to achieve high classification performance, thus maximizing the area under the ROC curve.",
+  "reasoning": null,
+  "PyLint": [
+    {
+      "type": "error",
+      "module": "script_openai_gpt-4o-mini_1057_3",
+      "obj": "",
+      "line": 60,
+      "column": 0,
+      "endLine": null,
+      "endColumn": null,
+      "path": "outputs\\27-05\\FOURTOPS\\Q3\\script_openai_gpt-4o-mini_1057_3.py",
+      "symbol": "syntax-error",
+      "message": "Parsing failed: 'expected an indented block after function definition on line 58 (script_openai_gpt-4o-mini_1057_3, line 60)'",
+      "message-id": "E0001"
+    }
+  ],
+  "Bandit": {
+    "errors": [
+      {
+        "filename": ".\\./outputs/27-05/FOURTOPS/Q3/script_openai_gpt-4o-mini_1057_3.py",
+        "reason": "syntax error while parsing AST from file"
+      }
+    ],
+    "generated_at": "2025-05-27T08:57:46Z",
+    "metrics": {
+      ".\\./outputs/27-05/FOURTOPS/Q3/script_openai_gpt-4o-mini_1057_3.py": {
+        "loc": 168,
+        "nosec": 0,
+        "skipped_tests": 0
+      },
+      "_totals": {
+        "CONFIDENCE.HIGH": 0,
+        "CONFIDENCE.LOW": 0,
+        "CONFIDENCE.MEDIUM": 0,
+        "CONFIDENCE.UNDEFINED": 0,
+        "SEVERITY.HIGH": 0,
+        "SEVERITY.LOW": 0,
+        "SEVERITY.MEDIUM": 0,
+        "SEVERITY.UNDEFINED": 0,
+        "loc": 168,
+        "nosec": 0,
+        "skipped_tests": 0
+      }
+    },
+    "results": []
+  }
+}

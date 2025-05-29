@@ -1,0 +1,9 @@
+The solution implements a neural network that handles variable-length particle physics events using embeddings and masked aggregation. Key components:
+1. **Embedding Layer**: Processes particle type identifiers (obj_ids) to capture categorical information
+2. **Batch Normalization**: Normalizes global features (E_T_miss, phi) and object kinematics
+3. **Object Network**: Processes each particle's features (type + kinematics) through shared MLP
+4. **Masked Aggregation**: Sums processed object features while ignoring zero-padded entries
+5. **Weighted Loss**: Uses event weights from dataset to handle cross-section scaling
+6. **AUC Evaluation**: Measures classification performance using ROC AUC
+
+The model architecture handles variable-length inputs through padding masking and learns both particle-level and event-level features. Training incorporates physics-based event weights for proper statistical handling.

@@ -1,0 +1,6 @@
+The solution focuses on feature engineering and a compact neural network:
+1. **Preprocessing**: Extracts physics-motivated features including missing energy, object counts, pT sums/maxima, and detector region statistics. Median pT threshold from training data helps identify high-energy objects.
+2. **Model Architecture**: Uses a 3-layer MLP with batch normalization and dropout for regularization. The architecture balances complexity with runtime constraints (64-32-1 nodes).
+3. **Training**: Adam optimizer with BCELoss for 20 epochs. Features are designed to capture essential differences between 4-top quark events (typically more high-pT objects, complex energy patterns) and background processes.
+4. **Efficiency**: Feature reduction to 9 dimensions enables fast training while preserving critical kinematic information. Dropout and batch norm prevent overfitting on the balanced dataset.
+The approach optimizes for AUC by creating discriminative features while respecting computational constraints through careful dimensionality management.

@@ -1,0 +1,18 @@
+This solution is tailored to the domain of rare event classification in particle physics, focusing on maximizing AUC. 
+
+**Preprocessing**
+- The `PhysicsPreprocessor` addresses the variable-length, per-object nature of the data. Each of the 18 object slots is processed to extract normalized features (E, pT, eta, phi). Padding is detected by checking object IDs. Padded objects are ignored for stat calculation and normalization. The preprocessor also generates per-event summary features (such as object count, sum/max/mean of E and pT) to allow the model to exploit global event structure.
+- Missing (zero-padded) objects are zeroed after normalization for safety, which lets the model learn the absence of objects as potentially informative.
+
+**Model**
+- The `WideDeepNet` is a robust, wide and moderately deep feedforward NN designed to efficiently use both per-object and aggregate features. 
+- BatchNorm and Dropout protect against overfitting and help handle the sparsity/heterogeneity inherent in collider data.
+- The model is compact, with <150k params, and is well within memory/runtime constraints.
+
+**Training**
+- BCEWithLogitsLoss is used for stability.
+- Adam optimizer with ReduceLROnPlateau scheduler helps the network converge reliably in a moderate number of epochs (EPOCHS=12, fitting the tight 2h wall time constraint for the dataset and model size).
+- Both train and validation loss as well as accuracy are tracked and returned for later analysis.
+- All device/cuda handling uses the efficient DataLoader fetch.
+
+The code is modular, follows the template, and is picklable where needed. Output meets all requirements and is tailored to the collider/HEP binary AUC-maximization task.

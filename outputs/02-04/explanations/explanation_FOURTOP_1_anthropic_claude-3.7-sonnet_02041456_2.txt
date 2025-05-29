@@ -1,0 +1,34 @@
+This code implements a binary classifier for high energy physics collision data, designed to distinguish between signal events (four top quarks from a single proton-proton collision) versus background processes. Here's a breakdown of the approach:
+
+1. **Data Preprocessing**: The code includes a custom EventPreprocessor class that standardizes features while being careful with zero-padded values. This is important as the dataset contains variable-length events that are zero-padded to a fixed size.
+
+2. **Feature Engineering**: The extract_features function creates physics-motivated features from the raw data:
+   - Basic features: Weight, missing transverse energy, and its azimuthal angle
+   - Aggregate features: Number of particles, sum of energies, sum of transverse momenta, statistics of pseudorapidity
+   - Event shape variables: Thrust-like and sphericity-like quantities that characterize the overall energy flow pattern
+
+3. **Model Architecture**: The PhysicsNet model uses a deep neural network with:
+   - Multiple fully connected layers with batch normalization and dropout for regularization
+   - ReLU activation functions in hidden layers
+   - A sigmoid activation for the final binary classification output
+   - The architecture follows a feature extractor + classifier pattern
+
+4. **Training Strategy**:
+   - Uses Binary Cross-Entropy Loss, suitable for the binary classification task
+   - Adam optimizer with weight decay for regularization
+   - Learning rate scheduler to reduce the learning rate when the validation loss plateaus
+   - Model checkpointing to save the best-performing model based on validation AUC
+   - Early stopping based on AUC improvement
+
+5. **Physics Context**: The model respects the specific properties of high energy physics data:
+   - Handles circular features like azimuthal angles appropriately
+   - Computes physics-motivated variables like thrust and sphericity to capture event topology
+   - Properly handles the variable number of particles per event
+
+6. **Additional Features**:
+   - Command-line arguments for easy experimentation
+   - Dry-run option for quick testing
+   - Training visualizations to monitor learning progress
+   - Detailed validation metrics
+
+The overall approach combines domain knowledge of particle physics with modern deep learning techniques to maximize the AUC score for discriminating signal from background events.

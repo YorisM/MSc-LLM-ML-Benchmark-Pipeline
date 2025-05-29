@@ -1,0 +1,47 @@
+This implementation addresses the task of detecting four top quark events using Lorentz-invariant neural network architecture. Here's a detailed explanation of the key components:
+
+1. **Preprocessing Module**:
+   - The preprocessor extracts and normalizes the input features, organizing them by physics objects
+   - It converts standard kinematic variables (E, pT, eta, phi) into Lorentz 4-vectors (E, px, py, pz)
+   - Creates a mask to identify valid physics objects vs. padding
+   - Normalizes features using statistics computed from the training set
+
+2. **Lorentz-Equivariant Architecture**:
+   - **LorentzEquivariantLayer**: Implements a neural network layer that respects Lorentz symmetry
+     - Uses the Minkowski inner product (E₁E₂ - p₁·p₂) between particle 4-vectors as a Lorentz-invariant quantity
+     - Performs message passing between objects weighted by their Lorentz-invariant relationships
+     - Maintains the geometric structure of the particle interactions in spacetime
+
+3. **Message Passing Network**:
+   - **MessagePassingLayer**: Enables communication between particle objects
+     - Creates pairwise messages between all objects in an event
+     - Uses object validity masks to ignore messages involving padding
+     - Aggregates messages for each object to update its representation
+     - Preserves permutation invariance (order independence) of physics objects
+
+4. **Classifier Architecture**:
+   - Processes missing transverse energy separately
+   - Applies multiple Lorentz-equivariant and message passing layers to capture complex interactions
+   - Uses attention mechanism for adaptive pooling of object features
+   - Final MLP layers for classification
+   - Layer normalization and dropout for regularization
+
+5. **Training Implementation**:
+   - Uses BCE loss for binary classification
+   - Adam optimizer with weight decay to prevent overfitting
+   - Learning rate scheduling (ReduceLROnPlateau) based on validation AUC
+   - Gradient clipping to stabilize training
+   - Saves the best model based on validation AUC
+
+Physics aspects handled:
+
+1. **Lorentz Invariance**: The model respects the fundamental symmetry of special relativity by using Minkowski inner products
+2. **Permutation Invariance**: The architecture is insensitive to the order of particles in the input
+3. **Message Passing**: Captures interactions between particles that are crucial for identifying complex decay patterns
+4. **Attention Mechanism**: Learns to focus on the most relevant particles for classification
+
+This architecture is particularly well-suited for the four top quark detection task because:
+1. It builds in physics knowledge about Lorentz symmetry rather than forcing the network to learn it
+2. It handles variable numbers of particles naturally through masking
+3. It allows particles to interact through message passing, capturing the complex topology of the decay
+4. It optimizes directly for the AUC metric through its training procedure

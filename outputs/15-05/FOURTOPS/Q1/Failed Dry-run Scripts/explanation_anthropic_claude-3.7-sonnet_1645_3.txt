@@ -1,0 +1,41 @@
+This code implements a machine learning pipeline for identifying rare particle physics events (specifically four top quarks) from background processes. Let me explain the key components:
+
+1. **Event Preprocessor**:
+   - The `EventPreprocessor` class extracts physics-relevant features from the raw collision data.
+   - It processes the missing transverse energy (ET_miss) and its angle (phi), as well as all the physics objects in each event.
+   - For each type of object (jets, leptons, b-jets), it calculates important summary statistics:
+     - Count of each object type
+     - Summed properties (energy, pT, etc.)
+     - Mean properties of non-zero elements
+     - Properties of the leading (highest pT) objects
+     - Angular separation features (ΔEta, ΔPhi, ΔR) between leading objects
+   - It computes HT (scalar sum of jet pT) and missing ET significance, which are important for discriminating signal from background.
+   - All features are standardized using `StandardScaler`.
+
+2. **Neural Network Architecture**:
+   - The model uses a deep neural network with residual connections, which helps with gradient flow during training.
+   - `ResidualBlock` implements skip connections similar to ResNet, allowing the model to learn identity mappings and avoid degradation issues.
+   - The architecture includes:
+     - Initial expansion layer (input → 256 neurons)
+     - Two residual blocks
+     - Progressive reduction layers (256 → 128 → 64)
+     - Final output layer for binary classification
+   - BatchNorm layers help with training stability and convergence
+   - Dropout layers (p=0.2) for regularization
+
+3. **Training Strategy**:
+   - Uses BCEWithLogitsLoss for binary classification (combines sigmoid and binary cross entropy)
+   - Adam optimizer with weight decay (L2 regularization) to prevent overfitting
+   - Learning rate scheduler (ReduceLROnPlateau) that reduces learning rate when validation AUC stops improving
+   - Model checkpoint saving based on validation AUC
+   - Proper train/validation splitting and metric tracking
+
+4. **Physics Considerations**:
+   - The feature extraction is physics-aware, focusing on quantities that are known to be important in high energy physics:
+     - Missing transverse energy and its significance
+     - Angular separations between objects
+     - Leading object properties
+     - Scalar sums like HT
+   - By extracting these meaningful features, the model can better separate the rare tttt signal events from the background processes.
+
+The model is optimized specifically for AUC metric, using validation AUC for both learning rate scheduling and model checkpointing. This ensures we're directly optimizing for the evaluation metric specified in the problem.

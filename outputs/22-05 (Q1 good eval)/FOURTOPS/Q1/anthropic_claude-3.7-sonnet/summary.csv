@@ -1,0 +1,33 @@
+script,success,return_code,stdout,stderr,duration_s,max_rss_kb
+./outputs/22-05/FOURTOPS/Q1/anthropic_claude-3.7-sonnet\script_anthropic_claude-3.7-sonnet_1049_3.py,False,137,"argv0=/usr/local/bin/train.sh
+argv1=outputs/22-05/FOURTOPS/Q1/anthropic_claude-3.7-sonnet/script_anthropic_claude-3.7-sonnet_1049_3.py
+argv2=
+Runtime Resource Diagnostics:
+TIMEOUT       = 7200 seconds
+MEMORY_LIMIT  = 32 GB
+PIDS_LIMIT    = 1024
+---------- ulimit -a ----------
+real-time non-blocking time  (microseconds, -R) unlimited
+core file size              (blocks, -c) 0
+data seg size               (kbytes, -d) unlimited
+scheduling priority                 (-e) 0
+file size                   (blocks, -f) unlimited
+pending signals                     (-i) 63294
+max locked memory           (kbytes, -l) unlimited
+max memory size             (kbytes, -m) unlimited
+open files                          (-n) 1024
+pipe size                (512 bytes, -p) 8
+POSIX message queues         (bytes, -q) 819200
+real-time priority                  (-r) 0
+stack size                  (kbytes, -s) 8192
+cpu time                   (seconds, -t) 7200
+max user processes                  (-u) unlimited
+virtual memory              (kbytes, -v) 33554432
+file locks                          (-x) unlimited
+---------- free -h (if available) ----------
+Mem cgroup limit: 
+Mem in use     : 
+","cat: /sys/fs/cgroup/memory.max: No such file or directory
+cat: /sys/fs/cgroup/memory.current: No such file or directory
+/usr/local/bin/train.sh: line 43:     9 Killed                  timeout --signal=KILL ""${TIMEOUT}s"" python ""$PY"" $DRY
+",1806.8744330999998,164

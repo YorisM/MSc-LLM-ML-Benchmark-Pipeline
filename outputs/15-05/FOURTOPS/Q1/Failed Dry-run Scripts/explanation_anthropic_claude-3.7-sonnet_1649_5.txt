@@ -1,0 +1,33 @@
+This code implements a binary classifier for identifying four-top quark events in particle physics data. Here's a detailed breakdown of what each component does:
+
+1. **EventPreprocessor Class**:
+   - This preprocessor extracts physically meaningful features from the raw detector data.
+   - It scales features like missing transverse energy (ET_miss) and handles the variable-length object representation.
+   - For each object type, it computes aggregate statistics like counts, sums, means, and standard deviations of energy, transverse momentum, and pseudorapidity.
+   - The transform method converts raw data into a fixed-length feature vector suitable for the neural network.
+
+2. **FourTopClassifier Model**:
+   - Implements a deep neural network with residual connections, which helps with training deeper networks.
+   - Uses batch normalization to stabilize training and dropout for regularization.
+   - The architecture consists of 5 main layers with decreasing dimensions (from input_dim to 1).
+   - Residual connections help information flow through the network and prevent vanishing gradients.
+   - The final layer outputs a probability through a sigmoid activation function.
+
+3. **FourTopDataset Class**:
+   - A PyTorch Dataset implementation for handling the training and validation data efficiently.
+
+4. **Training Function**:
+   - Uses binary cross-entropy loss appropriate for binary classification.
+   - Employs the Adam optimizer with weight decay to prevent overfitting.
+   - Implements learning rate scheduling (ReduceLROnPlateau) that reduces the learning rate when validation loss plateaus.
+   - Tracks and reports multiple metrics including loss, accuracy, and most importantly AUC.
+   - Saves the model with the best validation AUC score.
+
+Physics-informed feature engineering is key to this solution. Instead of working with raw detector outputs, the preprocessor extracts:  
+- Count, energy sums, and momentum distributions for each particle type
+- Statistical measures of energy and angular distributions
+- Properly scaled missing transverse energy and its direction
+
+The training is configured to run for 30 epochs with early stopping based on validation AUC to prevent overfitting. The learning rate scheduling helps navigate the complex loss landscape, starting with larger updates and gradually refining as training progresses.
+
+The use of residual connections is particularly important for this problem, as they allow the model to learn complex patterns in the particle interactions while maintaining gradient flow through the network.

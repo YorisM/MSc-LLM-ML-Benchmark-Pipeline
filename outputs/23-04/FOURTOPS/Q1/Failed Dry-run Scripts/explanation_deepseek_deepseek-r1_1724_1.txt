@@ -1,0 +1,26 @@
+The provided code implements a neural network classifier optimized for AUC maximization in particle physics data analysis. Key aspects include:
+
+1. **Data Preprocessing**:
+   - Valid feature selection using zero-pad detection.
+   - Log transformation of energy/momentum features to handle large values.
+   - Angular features transformed with sine functions for cyclic continuity.
+   - Standard normalization applied post-masking.
+
+2. **Neural Network Architecture**:
+   - Deep network with skip connections and batch normalization to handle sparse inputs.
+   - Utilizes dropout layers (40-20%) for regularization.
+   - LeakyReLU activation for better gradient flow compared to regular ReLU.
+
+3. **Training Strategy**:
+   - BCEWithLogitsLoss for optimized binary classification training.
+   - AdamW optimizer with weight decay (L2 regularization).
+   - Learning rate scheduling with plateau detection.
+   - Gradient clipping to prevent exploding gradients.
+   - Model checkpointing based on validation AUC.
+
+4. **AUC Optimization**:
+   - Direct measurement via ROC AUC score during validation.
+   - Early stopping implied through checkpoint selection.
+   - Zero-padded mask avoidance focuses learning on actual input features.
+
+This combination addresses the sparse, variable-length event structure while employing modern deep learning techniques to maximize classification performance under the ROC AUC metric.

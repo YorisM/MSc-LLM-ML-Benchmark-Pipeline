@@ -1,0 +1,51 @@
+This solution focuses on maximizing AUC for the binary classification of rare particle physics events, specifically four top quark production events. Here's a detailed explanation of the approach:
+
+1. **Preprocessing (FeaturePreprocessor):**
+   - The preprocessor first identifies and removes padding columns with near-zero variance
+   - It applies standard scaling to normalize numerical features
+   - It extracts physics-inspired features from the raw data:
+     - Missing transverse energy (ET_miss) and its angle
+     - Total energy and transverse momentum sums across objects
+     - Individual object features (E, pT, eta, phi) where the object appears frequently enough
+     - Count of high-pT objects (pT > 50 GeV), which are characteristic of top quark decay products
+     - Physics-motivated ratios like ET_miss/total_pT
+
+2. **Model Architecture (BinaryClassifier):**
+   - A deep neural network with several key components:
+     - Initial linear layer that expands input dimensionality
+     - Multiple residual blocks to allow gradient flow through deep networks
+     - Each residual block contains batch normalization and LeakyReLU activation
+     - An attention mechanism to help the model focus on the most important features
+     - Gradually decreasing layer sizes with batch normalization and dropout for regularization
+   - The architecture balances complexity with generalization capability
+
+3. **ResidualBlock:**
+   - Implements skip connections that help with training deeper networks
+   - Each block transforms the input, then adds it back to create a residual learning framework
+   - This helps prevent vanishing gradients and facilitates optimization
+
+4. **AttentionModule:**
+   - Implements self-attention to help the model focus on relevant features
+   - Attention weights are calculated using query, key, and value projections
+   - This is particularly useful for capturing dependencies between different particles
+
+5. **Training Process:**
+   - Uses BCEWithLogitsLoss for numerical stability
+   - AdamW optimizer with weight decay to prevent overfitting
+   - Learning rate scheduling with ReduceLROnPlateau based on validation AUC
+   - Gradient clipping to prevent exploding gradients
+   - Model selection based on best validation AUC
+   - 30 epochs chosen as a reasonable training duration
+
+6. **Performance Monitoring:**
+   - Tracks loss, accuracy, and AUC for both training and validation sets
+   - AUC is the primary metric for model selection
+   - Implements early stopping by saving the best model based on validation AUC
+
+The solution particularly addresses the physics aspects of the problem by:
+- Creating physics-motivated feature transformations
+- Accounting for the variable number of objects in events
+- Using attention mechanisms to capture relationships between particles
+- Focusing on the AUC metric which is most relevant for rare event classification
+
+The residual network architecture was chosen because it's particularly good at learning complex patterns while maintaining training stability, which is essential for this high-dimensional physics data.

@@ -1,0 +1,28 @@
+This code is specifically designed to maximize the AUC for a particle physics signal-vs-background task with sparse, padded, tabular event tensors. 
+
+1. **Preprocessing (PhysicsPreprocessor):**
+   - Handles the decomposition of each event into a fixed number of possible Physics objects, extracting simple summary features while remaining robust to sparsity.
+   - For each event, the following features are computed:
+     - The primary MET (missing transverse energy) values.
+     - For up to 8 objects: their E (energy), pT, eta (padded with zeros if fewer).
+     - Global features: sum(HT = total pT), number of objects, number of jets, number of leptons. This helps distinguish complex final states (e.g., more jets/leptons in 4-top events).
+   - Features are then scaled with sklearn's StandardScaler for stability and to assist with training dynamics.
+
+2. **Model (ParticleNet):**
+   - Simple feed-forward architecture with batch normalization after StandardScaler to prevent internal covariate shift.
+   - Uses moderate dropout for regularization to avoid overfitting (important given the class balance).
+   - Output layer is a single value (sigmoid after BCEWithLogitsLoss), ideal for binary classification and direct compatibility with ROC/AUC metrics.
+
+3. **Training Loop:**
+   - Uses AdamW optimizer (better generalization than vanilla Adam) and BCEWithLogitsLoss (which combines a sigmoid internally for stability).
+   - Training loop records the average train/validation loss and accuracy per epoch for post-run analysis.
+   - All tensors are moved to GPU if available.
+   - For each epoch, the model iterates through both train and validation loaders, computing losses and accuracy metrics.
+
+4. **Epochs:** Set to 30 as a reasonable default; increase for larger capacity or further hyperparameter tuning as needed.
+
+5. **Variable Length Events:** The preprocessor compresses variable-length object features to a fixed-length descriptor by taking up to 8 objects' features and global sums, allowing the network to exploit both detailed and summary information (essential for distinguishing rare, complex 4-top events).
+
+6. **Class Picklability:** All state in the preprocessor is picklable, preprocessing and transform are deterministic.
+
+This systemic and physics-targeted approach should yield high AUC and is structured to be both ML-principled and physics-aware.

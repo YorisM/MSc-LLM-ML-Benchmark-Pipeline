@@ -1,0 +1,46 @@
+{
+  "model": "deepseek/deepseek-r1",
+  "usage": {
+    "prompt_tokens": 2108,
+    "completion_tokens": 14916,
+    "total_tokens": 17024
+  },
+  "prompt_chars": 8666,
+  "code": "import torch\nimport numpy as np\nfrom torch import nn\nfrom torch.utils.data import TensorDataset, DataLoader\nimport torch.nn.functional as F\n\nclass MyPreprocessor:\n    def __init__(self):\n        pass\n\n    def fit(self, X, y=None):\n        return self\n\n    def transform(self, X):\n        batch_size = X.shape[0]\n        et_miss = X[:, 0]\n        phi_et_miss = X[:, 1]\n        px_miss = et_miss * torch.cos(phi_et_miss)\n        py_miss = et_miss * torch.sin(phi_et_miss)\n\n        object_features = []\n        for i in range(18):\n            start_idx = 2 + 5 * i\n            obj_n = X[:, start_idx]\n            E = X[:, start_idx + 1]\n            pT = X[:, start_idx + 2]\n            eta = X[:, start_idx + 3]\n            phi = X[:, start_idx + 4]\n            px = pT * torch.cos(phi)\n            py = pT * torch.sin(phi)\n            pz = pT * torch.sinh(eta)\n            obj_feat = torch.stack([obj_n, E, pT, eta, phi, px, py, pz, px_miss, py_miss], dim=1)\n            object_features.append(obj_feat)\n        all_features = torch.cat(object_features, dim=1)\n        return all_features\n\n    def fit_transform(self, X, y=None):\n        self.fit(X, y)\n        return self.transform(X)\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\nclass SlotAttention(nn.Module):\n    def __init__(self, num_slots, dim, iters=3, eps=1e-8):\n        super().__init__()\n        self.num_slots = num_slots\n        self.iters = iters\n        self.eps = eps\n        self.scale = dim ** -0.5\n        self.slots = nn.Parameter(torch.randn(1, num_slots, dim))\n        self.to_q = nn.Linear(dim, dim)\n        self.to_k = nn.Linear(dim, dim)\n        self.to_v = nn.Linear(dim, dim)\n        self.norm = nn.LayerNorm(dim)\n\n    def forward(self, inputs, mask=None):\n        b, n, d = inputs.shape\n        slots = self.slots.expand(b, -1, -1)\n        for _ in range(self.iters):\n            q = self.to_q(slots)\n            k = self.to_k(inputs)\n            v = self.to_v(inputs)\n            attn_logits = torch.einsum('bid,bjd->bij', q, k) * self.scale\n            if mask is not None:\n                attn_logits = attn_logits.masked_fill(mask.unsqueeze(1), -1e9)\n            attn = F.softmax(attn_logits, dim=-1)\n            updates = torch.einsum('bij,bjd->bid', attn, v)\n            slots = self.norm(slots + updates)\n        return slots\n\nclass MyModel(nn.Module):\n    def __init__(self, input_dim, embedding_dim=32, num_slots=4):\n        super().__init__()\n        self.embedding = nn.Embedding(100, embedding_dim)\n        self.transformer_encoder = nn.TransformerEncoder(\n            nn.TransformerEncoderLayer(\n                d_model=embedding_dim + 9,\n                nhead=4,\n                dim_feedforward=128,\n                dropout=0.1,\n                batch_first=True\n            ),\n            num_layers=2\n        )\n        self.slot_attention = SlotAttention(num_slots=num_slots, dim=embedding_dim+9)\n        self.classifier = nn.Sequential(\n            nn.Linear(num_slots*(embedding_dim+9), 64),\n            nn.ReLU(),\n            nn.Linear(64, 1)\n        )\n\n    def forward(self, x):\n        x = x.view(x.size(0), 18, 10)\n        obj_n = x[:, :, 0].long()\n        continuous = x[:, :, 1:]\n        embedded = self.embedding(obj_n)\n        combined = torch.cat([embedded, continuous], dim=2)\n        mask = (obj_n == 0)\n        encoded = self.transformer_encoder(combined, src_key_padding_mask=mask)\n        slots = self.slot_attention(encoded, mask=mask)\n        slots_flat = slots.flatten(1)\n        return self.classifier(slots_flat).squeeze(-1)\n\ndef make_model(input_dim: int):\n    return MyModel(input_dim)\n\nEPOCHS = 10\n\ndef train_model(model, train_loader, val_loader, epochs):\n    criterion = nn.BCEWithLogitsLoss()\n    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)\n    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.1)\n    \n    train_loss, val_loss, train_acc, val_acc = [], [], [], []\n    \n    for epoch in range(epochs):\n        model.train()\n        total_loss = correct = total = 0\n        for X, y in train_loader:\n            optimizer.zero_grad()\n            pred = model(X)\n            loss = criterion(pred, y.float())\n            loss.backward()\n            optimizer.step()\n            total_loss += loss.item() * X.size(0)\n            correct += ((torch.sigmoid(pred) > 0.5).long() == y).sum().item()\n            total += y.size(0)\n        scheduler.step()\n        train_loss.append(total_loss / total)\n        train_acc.append(correct / total)\n        \n        model.eval()\n        val_total_loss = val_correct = val_total = 0\n        with torch.no_grad():\n            for X, y in val_loader:\n                pred = model(X)\n                loss = criterion(pred, y.float())\n                val_total_loss += loss.item() * X.size(0)\n                val_correct += ((torch.sigmoid(pred) > 0.5).long() == y).sum().item()\n                val_total += y.size(0)\n        val_loss.append(val_total_loss / val_total)\n        val_acc.append(val_correct / val_total)\n        \n    return model, train_loss, val_loss, train_acc, val_acc",
+  "explanation": "The solution uses physics-informed feature engineering and a transformer-based architecture with slot attention to group particles from top decays. Key steps:\n1. Preprocessing converts raw kinematic variables to Cartesian momentum components and includes missing ET features per object.\n2. The model embeds particle types and processes sequences with transformer layers to capture interactions.\n3. Slot attention explicitly groups particles into hypothesized top quark candidates.\n4. Classifier aggregates slot representations for final prediction.\nPhysics-motivated choices include:\n- Cartesian momentum features for better Lorentz covariance\n- Missing ET inclusion per object for global event context\n- 4 slots in attention to match four-top signature\nTraining uses BCE loss with step learning rate scheduling for efficient convergence under runtime constraints.",
+  "reasoning": null,
+  "PyLint": [],
+  "Bandit": {
+    "errors": [],
+    "generated_at": "2025-05-27T09:57:30Z",
+    "metrics": {
+      ".\\./outputs/27-05/FOURTOPS/Q3/script_deepseek_deepseek-r1_1157_4.py": {
+        "CONFIDENCE.HIGH": 0,
+        "CONFIDENCE.LOW": 0,
+        "CONFIDENCE.MEDIUM": 0,
+        "CONFIDENCE.UNDEFINED": 0,
+        "SEVERITY.HIGH": 0,
+        "SEVERITY.LOW": 0,
+        "SEVERITY.MEDIUM": 0,
+        "SEVERITY.UNDEFINED": 0,
+        "loc": 204,
+        "nosec": 0,
+        "skipped_tests": 0
+      },
+      "_totals": {
+        "CONFIDENCE.HIGH": 0,
+        "CONFIDENCE.LOW": 0,
+        "CONFIDENCE.MEDIUM": 0,
+        "CONFIDENCE.UNDEFINED": 0,
+        "SEVERITY.HIGH": 0,
+        "SEVERITY.LOW": 0,
+        "SEVERITY.MEDIUM": 0,
+        "SEVERITY.UNDEFINED": 0,
+        "loc": 204,
+        "nosec": 0,
+        "skipped_tests": 0
+      }
+    },
+    "results": []
+  }
+}

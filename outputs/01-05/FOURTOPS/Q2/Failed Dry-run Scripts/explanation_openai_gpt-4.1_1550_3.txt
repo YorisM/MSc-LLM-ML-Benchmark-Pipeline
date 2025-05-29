@@ -1,0 +1,18 @@
+This model leverages both Lorentz-invariant and Lorentz-equivariant structures to maximize AUC for LHC multi-top event discrimination:
+
+**Preprocessing**: The code computes normalization statistics for each physical object slot (excluding zero-padded ones) over E, pT, eta, phi, using only PyTorch ops for TorchScript compatibility. Padding is handled by masking objects with id=0.
+
+**Model Architecture**:
+- The input is first split: global MET, then a 2D tensor (B,N_obj,5) for per-object physics features.
+- Objects are embedded through a feedforward network.
+- Two LorentzEquivariantLayers form the message passing core: for each pair of objects, message functions depend explicitly on pairwise Lorentz-invariant quantities (pairwise masses) and are exchanged, then per-node feature updates are computed.
+- Final per-object features are mean-pooled to global event summary, concatenated with Lorentz-invariant event-level features (such as summed invariant mass of all visible objects, pairwise mass statistics, sum and std of pT, and number of objects) and the MET.
+- The concatenated summary vector is passed through a small MLP to produce the scalar class logit.
+
+**Lorentz Symmetry Encoding**:
+- The message functions in the equivariant layers are explicitly a function of the objects plus their Lorentz-invariant mass (from the sum of their 4-vectors), enforcing symmetry.
+- Strong Lorentz-invariant features as direct input help the classifier catch global signatures.
+
+**Training and Metric Tracking**: Standard BCEWithLogits loss, Adam optimizer (with weight decay), accuracy monitoring, and on-demand AUC output. Batch size is large as memory allows for faster convergence.
+
+Overall, the model is tailored to particle physics by explicitly using 4-vector combinations and symmetry-aware message passing, maximizing discrimination power and scientific interpretability.

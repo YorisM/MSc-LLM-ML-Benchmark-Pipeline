@@ -1,0 +1,23 @@
+This solution implements a Transformer-based binary classifier with Slot Attention mechanism for grouping particles from top quark decays. Key components:
+
+1. **Physics Feature Augmentation**:
+   - Computes physics-inspired features like ΔR between particles, missing transverse energy, and object embeddings
+   - Combines raw kinematic information with derived physics features
+
+2. **Slot Attention**:
+   - Implements iterative attention mechanism to group related particles
+   - Learns to form clusters corresponding to decay products
+
+3. **Transformer Architecture**:
+   - Processes the grouped particles through a Transformer encoder
+   - Captures long-range dependencies between particle groups
+
+4. **Training**:
+   - Uses BCELoss with AdamW optimizer and learning rate scheduling
+   - Tracks AUC, accuracy, and loss metrics during training
+
+5. **Physics Knowledge Injection**:
+   - Explicitly computes angular distances and combined momentum features
+   - Uses physics-based object embeddings as initial representations
+
+The model effectively combines learned representations with domain-informed feature engineering to maximize classification performance for the rare four-top-quarks signal.

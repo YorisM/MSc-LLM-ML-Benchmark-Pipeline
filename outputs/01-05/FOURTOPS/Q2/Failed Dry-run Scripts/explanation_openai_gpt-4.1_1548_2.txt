@@ -1,0 +1,30 @@
+This code implements a Lorentz symmetry-aware binary classifier for proton-proton four-top-quark event classification. The approach maximizes AUC by embedding explicit Lorentz-invariant and equivariant features at both the preprocessing and neural architecture levels, leveraging the structure of four-vectors and physical object kinematics.
+
+1. **Data Preprocessing:**
+    - Zero-padded input masking ensures no unphysical information leaks into the model. Standardization is performed per-feature over non-padded values, ensuring numerically stable inputs.
+    - `PreprocessModule` supports TorchScript export and is deterministic.
+    - Objects are extracted from the padded vector format, and object IDs are mapped for potential embeddings.
+
+2. **Feature Construction:**
+    - Transforms each object's raw data [E, pt, eta, phi] into [E, px, py, pz], enabling both Lorentz-invariant and equivariant operations.
+    - Global event-level Lorentz-invariant features are constructed using quadratic invariants (masses, pairwise mass spectrum, total 4-momentum, etc.), capturing summarize global event physics.
+
+3. **Lorentz Equivariant Message Passing Network (MPN):**
+    - Objects form nodes in a fully-connected graph, where node features are 8-dimensional (augmented four-vectors + pt/eta/phi + embedded type).
+    - Two message-passing layers operate over the full graph, where each node pools features from all others (excluding self) through learned update networks (`GRUCell` style updates), so as to support permutation invariance and facilitate relational reasoning (as required for physics events).
+    - Message passing architecture makes the model more sensitive to collective kinematics, jet substructure, and combinatorial object correlations.
+
+4. **Output Head:**
+    - Performs max-pooling over node features (classic graph pooling), then concatenates with global Lorentz invariants and MET, then passes through a standard MLP stack to a scalar logit for binary classification.
+
+5. **Training Loop:**
+    - Uses `BCEWithLogitsLoss` for numerically stable calculation. Tracks accuracy and AUC at validation each epoch, the latter is critical for scientific benchmarking as required.
+
+6. **Export and Plotting:**
+    - Models and preprocessors are TorchScript-exportable. Training and validation loss/accuracy are plotted.
+
+7. **Physics Rationale:**
+    - Lorentz symmetry is respected by handcrafting invariant features and message-passing over four-vector representations. The pairwise sum trick ensures sensitivity to possible resonance decays, multi-object mass reconstruction, and higher-order event topology.
+    - Message-passing over object features is suited for permutation-invariant physics sets (objects list order is irrelevant).
+
+Overall, this code provides a strong foundation for physically-informed high-energy event classifiers, explicitly encoding symmetries and relational inductive biases that maximize discrimination power for rare processes such as four-top searches.

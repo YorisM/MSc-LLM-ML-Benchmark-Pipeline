@@ -1,0 +1,44 @@
+This code implements a transformer-based binary classifier for high-energy physics event classification, specifically optimized for distinguishing four top quark signal events from background processes.
+
+Key components of the solution:
+
+1. **Physics-Informed Feature Engineering**:
+   - The `PhysicsFeatureExtractor` module extracts and calculates physically meaningful features from the raw event data:
+   - Basic kinematic variables: energy (E), transverse momentum (pT), pseudorapidity (eta), azimuthal angle (phi)
+   - Derived features: transverse mass (mT) for each particle
+   - Pairwise features that respect Lorentz invariance:
+     - Delta R (ΔR): Angular separation between particles (√(Δη² + Δφ²))
+     - Invariant mass: Lorentz-invariant quantity calculated from energy and momentum
+   - Global event features: Missing transverse energy (ET_miss) and its azimuthal angle
+
+2. **Transformer Architecture**:
+   - `ParticleTransformer` uses self-attention mechanisms that are particularly well-suited for capturing complex relationships between particles in an event
+   - Multi-head attention allows the model to attend to different subspaces of features
+   - Positional encoding preserves information about particle ordering in the transformer
+   - The transformer encoder processes the variable-length sequences of particle features
+
+3. **Variable Length Event Handling**:
+   - Uses masking to properly handle the variable number of particles per event
+   - The attention mechanism ignores padded values during computation
+   - Global attention pooling aggregates particle-level information with learned attention weights
+
+4. **Physics-Aware Design Choices**:
+   - The model respects symmetries inherent to particle physics:
+     - Lorentz invariance through the use of invariant mass and other Lorentz-invariant quantities
+     - Rotational invariance in the azimuthal plane through the use of angular differences (Δφ) rather than absolute angles
+   - Pairwise interactions capture the important inter-particle correlations
+
+5. **Loss Function and Training**:
+   - Uses weighted BCE loss to account for the event weights provided in the dataset
+   - Optimization with Adam and learning rate scheduling
+   - Model selection based on validation AUC (area under ROC curve), which is the specified evaluation metric
+
+The implementation involves several physics-based features critical for particle physics analysis:
+
+1. **Invariant Mass**: A fundamental quantity in particle physics that remains unchanged under Lorentz transformations, essential for identifying particle decays and resonances.
+
+2. **Delta R**: A measure of angular separation used extensively in collider physics to identify separated or overlapping particle showers.
+
+3. **Transverse Mass**: Important for events with missing energy (neutrinos), helps in reconstructing the masses of parent particles in semi-leptonic decays.
+
+The transformer's self-attention mechanism is particularly suitable for this dataset as it can learn complex correlations between all particles, which is essential for identifying four-top events from their decay products and distinguishing them from background processes with similar signatures but different underlying physics.

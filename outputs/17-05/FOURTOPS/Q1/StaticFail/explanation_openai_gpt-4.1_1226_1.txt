@@ -1,0 +1,20 @@
+The code is designed to maximally exploit the physics structure for a high-AUC binary classifier for rare 4-top signal at the LHC. Here's a breakdown of choices and optimizations:
+
+1. **Preprocessing (FourTopPreprocessor)**:
+   - The preprocessor extracts relevant features from sparse, variable-length events. It standardizes key kinematic quantities (E_Tmiss, object energies, pTs, etas, phis) and encodes per-object presence as a mask. For angular variables (phi), sine and cosine are provided separately to deal with periodicity.
+   - All per-object features are padded where needed and standardization is fit only on valid (unpadded) entries.
+   - The transform returns a feature array of shape (N, n_features) suitable for input to the model. Both raw and derived features are used, including log-transforms for energy and pT (very typical in HEP) and the absolute value of pseudo-rapidity.
+
+2. **Model Architecture (ParticleNet)**:
+   - The model has an explicit parton-level structure. For each event, all objects (up to max 18) are processed individually but identically by a small two-layer MLP (object embedding), then summed (with masking for absent objects) to produce a fixed-size 'event' vector.
+   - The global features (E_Tmiss, phi_Etmiss) are processed by a separate small MLP.
+   - Both global and summed per-object embeddings are concatenated and passed through another MLP to produce a single logit.
+   - The model is deliberately lightweight (well under 1MB) but highly expressive for combinatorial physics problems and generalizes to different object multiplicities using masking.
+
+3. **Training**:
+   - Uses Adam optimizer and a ReduceLROnPlateau scheduler for adaptive learning rates.
+   - BCEWithLogitsLoss is used due to its numerical stability and direct suitability for binary classification.
+   - Training and validation accuracy as well as loss are tracked. In each epoch, the code computes not only accuracy but also prints the AUC on the validation set (using roc_auc_score), which is the challenge's metric.
+   - 18 epochs is chosen as a good trade-off between convergence and computational budget (with early scheduler callbacks).
+
+The code is ready for efficient AUC-focused training within the provided constraints, using only the allowed scientific python stack and minimal memory overhead.

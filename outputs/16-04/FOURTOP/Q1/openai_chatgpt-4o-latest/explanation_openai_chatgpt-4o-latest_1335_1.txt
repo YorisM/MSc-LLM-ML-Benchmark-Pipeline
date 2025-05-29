@@ -1,0 +1,14 @@
+This solution builds a binary classifier that maximizes the AUC metric for classifying signal (four-top) versus background physics events. The main enhancements include:
+
+1. **Data Preprocessing**: Uses `StandardScaler` to standardize input features, which improves training stability and generalization.
+2. **Model Architecture**: A deep feedforward neural network consisting of:
+    - Dense layers interleaved with Batch Normalization and Dropout for regularization.
+    - ReLU activations for non-linearity.
+    - Final Sigmoid activation for binary probability output.
+3. **Loss Function**: Binary Cross-Entropy Loss (BCELoss) is appropriate for binary classification.
+4. **Optimization**: Uses Adam optimizer with weight decay.
+5. **Metrics**: Computes AUC using `roc_auc_score` from `sklearn` per epoch to monitor performance and prevent overfitting.
+6. **GPU Support**: Automatically uses CUDA if available.
+7. **Plotting**: Saves plots for both loss and AUC to visualize convergence and performance over epochs.
+
+These components together create a robust pipeline to optimize a physics classification task driven by maximizing the AUC.

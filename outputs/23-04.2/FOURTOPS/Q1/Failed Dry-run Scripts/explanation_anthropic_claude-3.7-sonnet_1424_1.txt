@@ -1,0 +1,38 @@
+This solution addresses the four-top quark classification task by implementing a neural network classifier that maximizes AUC. Here's a breakdown of the approach:
+
+1. **Data Preprocessing (`PreprocessModule`)**: 
+   - The module transforms the raw high-energy physics data into structured features suitable for machine learning.
+   - It extracts and processes event-level features (weight, missing energy) as well as per-object features (energy, momentum, etc.).
+   - For each physics object, it creates a set of descriptive features including the raw values and log-transformed versions.
+   - It calculates global features such as object counts, sums, means, and standard deviations of various properties.
+   - Normalized features using the computed means and standard deviations from the training set.
+
+2. **Model Architecture (`Classifier`)**:
+   - Implemented a deep neural network with residual connections to combat the vanishing gradient problem.
+   - Added Squeeze-and-Excitation (SE) layers to adaptively recalibrate feature responses and focus on important features.
+   - Used SELU activation functions which self-normalize and help with training stability.
+   - Employed batch normalization to stabilize training and dropout for regularization.
+   - Designed a gradually narrowing architecture (256→128→64→32→1) to learn hierarchical representations.
+   - Included weight initialization schemes to ensure good training dynamics.
+
+3. **Advanced Training Strategies**:
+   - Combined Binary Cross-Entropy loss with Focal Loss to better handle class imbalance and focus on hard examples.
+   - Used AdamW optimizer with weight decay to prevent overfitting.
+   - Implemented learning rate scheduling with ReduceLROnPlateau to adaptively adjust the learning rate based on validation AUC.
+   - Applied gradient clipping to prevent exploding gradients.
+   - Saved the best model based on validation AUC (the metric we aim to maximize).
+
+4. **Feature Engineering**:
+   - Created physics-motivated features like total energy and momentum sums.
+   - Added log-transforms of energy and momentum features to better handle their wide range.
+   - Calculated statistical moments (mean, standard deviation) of object properties.
+   - Generated count-based features to capture event complexity.
+
+The key innovations in this solution are:
+
+1. The comprehensive feature extraction that captures both individual object properties and global event characteristics.
+2. The residual network with SE attention that can learn complex patterns in high-energy physics data.
+3. The combined loss function that focuses on difficult-to-classify boundary cases.
+4. The careful training procedure with adaptive learning rates and best model selection.
+
+These techniques work together to maximize the AUC by creating a model that effectively separates signal (four-top quark events) from background processes.

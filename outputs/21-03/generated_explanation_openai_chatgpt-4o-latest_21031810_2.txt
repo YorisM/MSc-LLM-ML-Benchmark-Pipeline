@@ -1,0 +1,13 @@
+The provided Python code defines a binary classifier to maximize the area under the ROC curve (AUC). It implements a neural network using PyTorch to classify high-energy physics events.
+
+- **Model Definition**: The `ParticleClassifier` neural network consists of three fully connected layers with ReLU activations and batch normalization to improve convergence. A dropout layer with a probability of 0.3 is included to prevent overfitting.
+
+- **Dataset Preparation**: The training and validation data are converted into PyTorch `TensorDataset` objects and then loaded into a `DataLoader` with a batch size of 256.
+
+- **Evaluation Function**: The `evaluate_auc` function computes the AUC by gathering predictions and ground-truth labels, then using `roc_auc_score` from `sklearn.metrics`.
+
+- **Training Loop**: The model is trained for 30 epochs using Binary Cross Entropy Loss (`BCELoss`). The optimizer is Adam with a learning rate of 0.001. After each epoch, the model's AUC is evaluated on the validation dataset.
+
+- **Model Checkpointing**: The model is saved when an improved AUC is achieved. Finally, the best-performing model is loaded back and evaluated to obtain the final AUC result.
+
+This approach ensures stable training, improved generalization with dropout and batch normalization, and optimal performance using AUC as the evaluation metric.

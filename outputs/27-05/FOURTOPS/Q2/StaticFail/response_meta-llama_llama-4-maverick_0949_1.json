@@ -1,0 +1,60 @@
+{
+  "model": "meta-llama/llama-4-maverick",
+  "usage": {
+    "prompt_tokens": 2017,
+    "completion_tokens": 1323,
+    "total_tokens": 3340
+  },
+  "prompt_chars": 8559,
+  "code": "import torch\nimport numpy as np\nfrom torch import nn\nfrom torch.utils.data import TensorDataset, DataLoader\nfrom torch_scatter import scatter_mean\nfrom torch.nn import functional as F\n\nclass MyPreprocessor:\n    def __init__(self):\n        self.obj_features = 5  # Number of features per object\n        self.max_objects = 18  # Maximum number of objects per event\n\n    def fit(self, X, y=None):\n        return self\n\n    def transform(self, X):\n        # Separate E_T_miss and phi_Et_miss from object features\n        E_T_miss = X[:, 0].unsqueeze(1)  # Shape: [N, 1]\n        phi_Et_miss = X[:, 1].unsqueeze(1)  # Shape: [N, 1]\n        obj_features = X[:, 2:].view(-1, self.max_objects, self.obj_features)  # Shape: [N, 18, 5]\n        obj_mask = (obj_features[:, :, 0] != 0).float()  # Shape: [N, 18]\n        return torch.cat([E_T_miss, phi_Et_miss, obj_features.flatten(1), obj_mask.flatten(1)], dim=1)\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\nclass LorentzEquivariantLayer(nn.Module):\n    def __init__(self, input_dim, hidden_dim):\n        super(LorentzEquivariantLayer, self).__init__()\n        self.fc1 = nn.Linear(input_dim, hidden_dim)\n        self.fc2 = nn.Linear(hidden_dim, hidden_dim)\n\n    def forward(self, x):\n        return F.relu(self.fc2(F.relu(self.fc1(x))))\n\nclass ParticleTransformer(nn.Module):\n    def __init__(self, input_dim):\n        super(ParticleTransformer, self).__init__()\n        self.embedding = nn.Linear(input_dim, 128)\n        encoder_layer = nn.TransformerEncoderLayer(d_model=128, nhead=8, dim_feedforward=256, dropout=0.1)\n        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=3)\n        self.fc = nn.Linear(128, 2)\n\n    def forward(self, x):\n        x = F.relu(self.embedding(x))\n        x = x.permute(1, 0, 2)  # Transformer expects [seq_len, batch, features]\n        x = self.transformer_encoder(x)\n        x = x.mean(dim=0)  # Global average pooling\n        x = self.fc(x)\n        return x\n\ndef make_model(input_dim: int):\n    return ParticleTransformer(input_dim)\n\nEPOCHS = 10\n\ndef train_model(model, train_loader, val_loader, epochs):\n    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')\n    model.to(device)\n    criterion = nn.CrossEntropyLoss()\n    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)\n    train_loss, val_loss, train_acc, val_acc = [], [], [], []\n    for epoch in range(epochs):\n        model.train()\n        total_loss, total_correct = 0, 0\n        for batch in train_loader:\n            inputs, labels = batch\n            inputs, labels = inputs.to(device), labels.to(device)\n            optimizer.zero_grad()\n            outputs = model(inputs)\n            loss = criterion(outputs, labels)\n            loss.backward()\n            optimizer.step()\n            total_loss += loss.item()\n            total_correct += (outputs.argmax(dim=1) == labels).sum().item()\n        epoch_loss = total_loss / len(train_loader)\n        epoch_acc = total_correct / len(train_loader.dataset)\n        train_loss.append(epoch_loss)\n        train_acc.append(epoch_acc)\n        model.eval()\n        val_total_loss, val_total_correct = 0, 0\n        with torch.no_grad():\n            for batch in val_loader:\n                inputs, labels = batch\n                inputs, labels = inputs.to(device), labels.to(device)\n                outputs = model(inputs)\n                loss = criterion(outputs, labels)\n                val_total_loss += loss.item()\n                val_total_correct += (outputs.argmax(dim=1) == labels).sum().item()\n        val_epoch_loss = val_total_loss / len(val_loader)\n        val_epoch_acc = val_total_correct / len(val_loader.dataset)\n        val_loss.append(val_epoch_loss)\n        val_acc.append(val_epoch_acc)\n        print(f'Epoch {epoch+1}/{epochs}, Train Loss: {epoch_loss:.4f}, Train Acc: {epoch_acc:.4f}, Val Loss: {val_epoch_loss:.4f}, Val Acc: {val_epoch_acc:.4f}')\n    return model, train_loss, val_loss, train_acc, val_acc",
+  "explanation": "The provided code defines a binary classification model using PyTorch that incorporates Lorentz symmetry via tensor products and equivariant message passing for particle physics data. The model is designed to classify events as either signal or background in the context of proton-proton collisions. The data preprocessing step involves separating the missing transverse energy (E_T_miss) and its azimuthal angle (phi_Et_miss) from the object features. The object features are reshaped to highlight the structure of the data, which includes multiple objects per event, each described by several kinematic properties. A mask is created to distinguish between actual objects and zero-padding. The model architecture utilizes a Transformer encoder to process the input data, which is first embedded into a higher-dimensional space. The Transformer encoder applies self-attention mechanisms to capture complex relationships between different objects within an event. The output of the Transformer encoder is then globally average-pooled and passed through a fully connected layer to produce the final classification. The model is trained using the Adam optimizer and cross-entropy loss. The training loop includes evaluation on the validation set at each epoch, tracking loss and accuracy for both training and validation datasets.",
+  "reasoning": null,
+  "PyLint": [
+    {
+      "type": "error",
+      "module": "script_meta-llama_llama-4-maverick_0949_1",
+      "obj": "",
+      "line": 50,
+      "column": 0,
+      "endLine": 50,
+      "endColumn": 38,
+      "path": "outputs\\27-05\\FOURTOPS\\Q2\\script_meta-llama_llama-4-maverick_0949_1.py",
+      "symbol": "import-error",
+      "message": "Unable to import 'torch_scatter'",
+      "message-id": "E0401"
+    }
+  ],
+  "Bandit": {
+    "errors": [],
+    "generated_at": "2025-05-27T07:50:02Z",
+    "metrics": {
+      ".\\./outputs/27-05/FOURTOPS/Q2/script_meta-llama_llama-4-maverick_0949_1.py": {
+        "CONFIDENCE.HIGH": 0,
+        "CONFIDENCE.LOW": 0,
+        "CONFIDENCE.MEDIUM": 0,
+        "CONFIDENCE.UNDEFINED": 0,
+        "SEVERITY.HIGH": 0,
+        "SEVERITY.LOW": 0,
+        "SEVERITY.MEDIUM": 0,
+        "SEVERITY.UNDEFINED": 0,
+        "loc": 159,
+        "nosec": 0,
+        "skipped_tests": 0
+      },
+      "_totals": {
+        "CONFIDENCE.HIGH": 0,
+        "CONFIDENCE.LOW": 0,
+        "CONFIDENCE.MEDIUM": 0,
+        "CONFIDENCE.UNDEFINED": 0,
+        "SEVERITY.HIGH": 0,
+        "SEVERITY.LOW": 0,
+        "SEVERITY.MEDIUM": 0,
+        "SEVERITY.UNDEFINED": 0,
+        "loc": 159,
+        "nosec": 0,
+        "skipped_tests": 0
+      }
+    },
+    "results": []
+  }
+}

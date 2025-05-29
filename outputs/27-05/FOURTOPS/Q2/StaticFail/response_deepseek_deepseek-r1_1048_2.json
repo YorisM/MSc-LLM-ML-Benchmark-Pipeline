@@ -1,0 +1,57 @@
+{
+  "model": "deepseek/deepseek-r1",
+  "usage": {
+    "prompt_tokens": 2090,
+    "completion_tokens": 11479,
+    "total_tokens": 13569
+  },
+  "prompt_chars": 8559,
+  "code": "import torch\nimport numpy as np\nfrom torch import nn\nfrom torch.utils.data import TensorDataset, DataLoader\nfrom sklearn.metrics import roc_auc_score\n\nclass MyPreprocessor:\n    def __init__(self):\n        self.feature_size = 10\n\n    def fit(self, X, y=None):\n        return self\n\n    def transform(self, X):\n        N = X.size(0)\n        objects = X.view(N, 18, 5)\n        obj_type = objects[:, :, 0]\n        mask = obj_type != 0\n\n        E = objects[:, :, 1]\n        pT = objects[:, :, 2]\n        eta = objects[:, :, 3]\n        phi = objects[:, :, 4]\n\n        px = pT * torch.cos(phi)\n        py = pT * torch.sin(phi)\n        pz = pT * torch.sinh(eta)\n\n        four_vectors = torch.stack([E, px, py, pz], dim=2)\n\n        features = []\n        for i in range(N):\n            mask_i = mask[i]\n            indices = torch.nonzero(mask_i).squeeze()\n            fv = four_vectors[i, indices]\n            num_real = len(indices) if indices.dim() > 0 else 0\n\n            sum_dot = mean_dot = max_dot = min_dot = std_dot = 0.0\n            if num_real >= 2:\n                E_i = fv[:, 0]\n                px_i = fv[:, 1]\n                py_i = fv[:, 2]\n                pz_i = fv[:, 3]\n\n                E_ij = torch.outer(E_i, E_i)\n                p_ij = torch.outer(px_i, px_i) + torch.outer(py_i, py_i) + torch.outer(pz_i, pz_i)\n                dots = E_ij - p_ij\n                triu = torch.triu_indices(num_real, num_real, 1)\n                dots_flat = dots[triu[0], triu[1]]\n\n                sum_dot = dots_flat.sum().item()\n                mean_dot = dots_flat.mean().item()\n                max_dot = dots_flat.max().item()\n                min_dot = dots_flat.min().item()\n                std_dot = dots_flat.std().item()\n\n            count = num_real\n            sum_e = E[i][mask_i].sum().item()\n            sum_pt = pT[i][mask_i].sum().item()\n\n            features.append([\n                X[i,0].item(), X[i,1].item(),\n                sum_dot, mean_dot, max_dot, min_dot, std_dot,\n                count, sum_e, sum_pt\n            ])\n\n        return torch.tensor(features, dtype=torch.float32)\n\n    def fit_transform(self, X, y=None):\n        return self.transform(X)\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\nclass LorentzMLP(nn.Module):\n    def __init__(self, input_dim):\n        super().__init__()\n        self.net = nn.Sequential(\n            nn.BatchNorm1d(input_dim),\n            nn.Linear(input_dim, 64),\n            nn.ReLU(),\n            nn.BatchNorm1d(64),\n            nn.Linear(64, 32),\n            nn.ReLU(),\n            nn.BatchNorm1d(32),\n            nn.Linear(32, 1)\n        )\n\n    def forward(self, x):\n        return self.net(x)\n\ndef make_model(input_dim: int):\n    return LorentzMLP(input_dim)\n\nEPOCHS = 15\n\ndef train_model(model, train_loader, val_loader, epochs):\n    criterion = nn.BCEWithLogitsLoss()\n    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)\n    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', patience=2)\n\n    train_loss, val_loss = [], []\n    train_acc, val_acc = [], []\n\n    for epoch in range(epochs):\n        model.train()\n        epoch_loss = 0\n        y_true, y_score = [], []\n\n        foratch,atch, y_batch in train_loader:\n            optimizer.zero_grad()\n            output = model(X_batch).squeeze()\n            loss = criterion(output, y_batch.float())\n            loss.backward()\n            optimizer.step()\n\n            epoch_loss += loss.item()\n            y_true.extend(y_batch.tolist())\n            y_score.extend(torch.sigmoid(output).detach().tolist())\n\n        train_loss.append(epoch_loss/len(train_loader))\n        train_auc = roc_auc_score(y_true, y_score)\n        train_acc.append(train_auc)\n\n        model.eval()\n        val_loss_epoch = 0\n        y_true_val, y_score_val = [], []\n        with torch.no_grad():\n            for X_val_batch, y_val_batch in val_loader:\n                output = model(X_val_batch).squeeze()\n                val_loss_epoch += criterion(output, y_val_batch.float()).item()\n                y_true_val.extend(y_val_batch.tolist())\n                y_score_val.extend(torch.sigmoid(output).tolist())\n\n        val_loss.append(val_loss_epoch/len(val_loader))\n        val_auc = roc_auc_score(y_true_val, y_score_val)\n        val_acc.append(val_auc)\n        scheduler.step(val_auc)\n\n    return model, train_loss, val_loss, train_acc, val_acc",
+  "explanation": "The solution focuses on encoding Lorentz-invariant features through tensor products of four-vectors while maintaining computational efficiency:\n\n1. **Preprocessing**:\n   - Extracts object four-vectors (E, px, py, pz) from raw features\n   - Computes pairwise Minkowski dot products (Lorentz-invariant tensor products)\n   - Aggregates interaction terms (sum, mean, max, etc.) to capture global event properties\n   - Includes object count and energy/momentum sums for basic event characterization\n\n2. **Model Architecture**:\n   - Compact MLP with batch normalization and ReLU activations\n   - Processes 10 engineered features capturing Lorentz-invariant interactions\n   - Maintains model size under 50MB through careful layer sizing\n\n3. **Training**:\n   - Uses BCEWithLogitsLoss for stable training\n   - Implements learning rate scheduling based on validation AUC\n   - Tracks both loss and AUC metrics for proper validation\n\nThis approach explicitly encodes Lorentz symmetry through invariant tensor products while using aggregation as a form of message passing between particles. The engineered features maintain physics-informed relationships while keeping the model computationally efficient for the given constraints.",
+  "reasoning": null,
+  "PyLint": [
+    {
+      "type": "error",
+      "module": "script_deepseek_deepseek-r1_1048_2",
+      "obj": "",
+      "line": 155,
+      "column": 46,
+      "endLine": null,
+      "endColumn": null,
+      "path": "outputs\\27-05\\FOURTOPS\\Q2\\script_deepseek_deepseek-r1_1048_2.py",
+      "symbol": "syntax-error",
+      "message": "Parsing failed: 'invalid syntax (script_deepseek_deepseek-r1_1048_2, line 155)'",
+      "message-id": "E0001"
+    }
+  ],
+  "Bandit": {
+    "errors": [
+      {
+        "filename": ".\\./outputs/27-05/FOURTOPS/Q2/script_deepseek_deepseek-r1_1048_2.py",
+        "reason": "syntax error while parsing AST from file"
+      }
+    ],
+    "generated_at": "2025-05-27T08:48:56Z",
+    "metrics": {
+      ".\\./outputs/27-05/FOURTOPS/Q2/script_deepseek_deepseek-r1_1048_2.py": {
+        "loc": 188,
+        "nosec": 0,
+        "skipped_tests": 0
+      },
+      "_totals": {
+        "CONFIDENCE.HIGH": 0,
+        "CONFIDENCE.LOW": 0,
+        "CONFIDENCE.MEDIUM": 0,
+        "CONFIDENCE.UNDEFINED": 0,
+        "SEVERITY.HIGH": 0,
+        "SEVERITY.LOW": 0,
+        "SEVERITY.MEDIUM": 0,
+        "SEVERITY.UNDEFINED": 0,
+        "loc": 188,
+        "nosec": 0,
+        "skipped_tests": 0
+      }
+    },
+    "results": []
+  }
+}

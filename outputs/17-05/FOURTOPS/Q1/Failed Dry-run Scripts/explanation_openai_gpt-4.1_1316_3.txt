@@ -1,0 +1,21 @@
+This solution addresses the challenge of maximizing AUC for rare signal classification in high energy physics event data with variable-length, zero-padded structures. 
+
+**Preprocessing (ParticlePhysicsPreprocessor)**:
+- 
+The class splits features into global (E_T_miss and phi_Et_miss, indices 0-1) and up to 18 per-object features (each with 5 values: [id, E, p_T, eta, phi]). It normalizes global features across the full dataset using StandardScaler, and object features using only valid (nonzero id) objects. Invalid/padded objects retain neutral (zero) values after transformation. It outputs a fixed-size feature set for each event, maintaining input shape.
+
+**Model (FourTopClassifier)**:
+- 
+A tabular neural network utilizing linear layers, batch normalization, ReLU activation, and dropout for regularization. Layer sizes are chosen to balance richness (for powerful nonlinear discrimination) with memory and speed constraints. Output is a single logit for binary classification.
+
+**Training Function (train_model)**:
+- 
+Uses Adam optimization with a moderate learning rate and weight decay for generalization. The BCEWithLogitsLoss combines sigmoid and binary cross-entropy. Both train and validation loops compute standard loss and accuracy, tracking the best model (lowest val loss) and restoring it after all epochs. The function is robust to CUDA vs CPU. The number of epochs (EPOCHS=18) is chosen to learn good representations while avoiding overfitting and excessive runtime for the stated hardware limits.
+
+**Design Choices to Maximize AUC**:
+- Careful feature scaling (critical for neural net stability)
+- Batch norm and dropout to regularize and prevent overfitting on high-dimensional, sparse data;
+- Sufficient network depth/width for nonlinearity required by rare signal cases;
+- Early stopping to best validation loss to avoid overfitting.
+
+Hyperparameter choices are conservative to fit within constraints, focusing on reliable generalization, and the code avoids memory waste by not duplicating dataset loads or objects.

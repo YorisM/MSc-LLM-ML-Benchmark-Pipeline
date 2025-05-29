@@ -1,0 +1,20 @@
+This implementation designs a deep neural network which encodes Lorentz symmetry and performs Lorentz-invariant message passing over a learned particle graph. 
+
+Key Points:
+
+- Data parsing uses helper functions to extract particle four-vectors (E, px, py, pz) for each object in the event, including supports for variable numbers via masking and embeddings for object types.
+
+- Preprocessing performs per-feature normalization (z-score) on all physical, maskable quantities. During inference, this preprocessing is deterministic and torch-only.
+
+- The core of the network is a Lorentz-equivariant Message Passing Graph Neural Network (GNN). For each event:
+  - Each object is assigned node features consisting of four-vector properties, physics features, and object type embeddings.
+  - All pairwise pairs of particles produce Lorentz-invariant edge features, specifically (i) the invariant mass squared of their sum and (ii) the Minkowski dot product. These edge features form the basis of the equivariant message passing.
+  - The message passing layers perform masked aggregation of messages across the event graph; the design ensures the aggregation, edge features, and node update functions are strictly Lorentz-invariant.
+
+- Readout: After several message passing layers, per-node representations are summed across the event (using masks), and concatenated with global event-level features (missing ET and its azimuth), then mapped via a small MLP to a logit score.
+
+- Training: Standard AdamW optimizer with BCEWithLogitsLoss, tracks train+val loss and accuracy. The implementation can be swapped to use AUC per epoch as well if desired.
+
+- The code adheres to the restrictions (no non-torch third party modules), and strictly uses torch and vectorized operations. The Lorentz invariance is engineered both in feature construction and in message passing.
+
+This approach maximizes the AUC by physically encoding all possible symmetries and invariants relevant to particle event classification, using tensor-based deep learning infrastructure.

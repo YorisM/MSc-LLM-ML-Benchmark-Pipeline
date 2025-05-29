@@ -1,0 +1,8 @@
+The code implements a neural network for particle physics classification using PyTorch. Key components:
+1. **Data Handling**: Processes variable-length particle events by separating global features (first 3 values) from particle objects (grouped in 5-value segments).
+2. **Embedding Layer**: Handles categorical particle type identifiers (obj_n) with an embedding layer for better feature representation.
+3. **Object Processing**: Each particle's features (embedded type + kinematic properties) are processed through a neural network.
+4. **Masked Aggregation**: Sums particle features while ignoring zero-padded entries using a mask derived from particle type identifiers.
+5. **Combined Architecture**: Aggregated particle features are combined with global event features for final classification.
+6. **Training Pipeline**: Includes BCE loss, AdamW optimizer, layer normalization, dropout for regularization, and AUC validation tracking.
+7. **Efficiency**: Implements dry-run mode for quick testing and model checkpointing.

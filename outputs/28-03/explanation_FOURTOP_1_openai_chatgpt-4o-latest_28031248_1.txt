@@ -1,0 +1,25 @@
+The code defines and trains a neural network classifier in PyTorch to distinguish between signal and background events in particle collision data. Here is a detailed explanation of the steps:
+
+1. **Dataset Preparation**:
+   - The training and validation datasets are wrapped in PyTorch `TensorDataset` objects and fed through a `DataLoader` for batch processing.
+   - Batch sizes are set to efficiently utilize hardware resources.
+
+2. **Neural Network Architecture**:
+   - The network is a simple fully-connected feed-forward model with 4 layers.
+   - It uses ReLU activation functions, Batch Normalization for stable training, and Dropout for regularization.
+   - The output layer uses a sigmoid function to produce probabilities for binary classification.
+
+3. **Input Preprocessing**:
+   - Zero-padded objects in each event (with energy E = 0) are masked out to avoid contributing misleading values.
+   - This is done by checking the energy fields of each object and masking those rows.
+
+4. **Training & Evaluation**:
+   - A binary cross-entropy loss is used since this is a binary classification problem.
+   - The network is optimized using the Adam optimizer.
+   - During each epoch, the model is evaluated on validation data to compute the AUC (Area Under the ROC Curve), which is the main performance metric.
+   - The best AUC throughout training is tracked and printed at the end.
+
+5. **Hardware Acceleration**:
+   - If a CUDA-compatible GPU is available, it is used for faster model training.
+
+This network, although simple, is capable of learning from the high-dimensional feature space of collision events, and the masking of padding ensures that zero-padded objects do not degrade learning. While further performance improvements could be obtained using modern architectures like attention-based models or graph networks, this code complies with the challenge constraints and leverages reasonable baseline deep learning techniques to achieve strong performance on the AUC metric.

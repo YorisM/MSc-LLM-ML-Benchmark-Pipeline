@@ -1,0 +1,13 @@
+The provided code defines a neural network-based binary classifier using PyTorch to maximize the AUC of four-top-quark signal classification from background events. The model architecture uses batch normalization, dropout, and ReLU activations to promote learning robust and generalizable features. Key aspects of AUC optimization include:
+
+1. **Input Normalization**: The input features are standardized with mean and standard deviation to help the network converge faster.
+
+2. **Model Architecture**: A deep feedforward network with dropout and batch normalization layers helps regularization and stabilizes learning.
+
+3. **Loss Function**: The model is trained on binary cross entropy loss, which is commonly used for binary classification. Since AUC is a threshold-independent metric, the sigmoid output provides probabilistic predictions suitable for ROC AUC computation.
+
+4. **Validation Strategy**: After each epoch, the model's performance is evaluated by computing the AUC over the validation set using `sklearn.metrics.roc_auc_score`. The best model (i.e., the one achieving the highest AUC) is saved.
+
+5. **Training Dynamics**: The code uses the Adam optimizer with a learning rate of 0.001 and large batch sizes for more stable gradient estimates.
+
+The final line reports the best validation AUC achieved during training. This setup is designed to robustly train a highly-discriminative model for the rare signal event classification problem.

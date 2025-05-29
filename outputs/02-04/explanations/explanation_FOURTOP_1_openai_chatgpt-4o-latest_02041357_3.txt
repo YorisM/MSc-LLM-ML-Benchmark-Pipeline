@@ -1,0 +1,9 @@
+This Python script defines a binary classifier using a simple feed-forward neural network implemented with PyTorch. The architecture includes two hidden layers with batch normalization, ReLU activation, and dropout, to prevent overfitting and train deeper representations. A sigmoid function is used in the output to provide probabilities for binary classification.
+
+The script supports two modes:
+1. **Dryrun Mode**: activated with `--dryrun` flag, which prints the model architecture without training. Useful for debugging and verification.
+2. **Training Mode**: without the flag, the script will train the model on the provided training data and evaluate it on the validation set. 
+
+The data is assumed to be pre-loaded PyTorch tensors (as per problem instructions). The model is trained for 10 epochs with Adam optimizer and binary cross-entropy loss. After training, it evaluates the model’s performance by computing the AUC score on the validation set using `sklearn.metrics.roc_auc_score` and prints it.
+
+The final trained model is saved to a file named `particle_classifier_model.pth` as required.

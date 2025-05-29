@@ -1,0 +1,10 @@
+This solution implements a binary classifier using a feedforward neural network in PyTorch to maximize the Area Under the Curve (AUC) metric for distinguishing between signal and background events in particle physics data. 
+
+Key steps include:
+- **Model Definition**: The `ParticleClassifier` is a neural network with fully connected layers, using ReLU activation and batch normalization to enhance stability and performance.
+- **Data Handling**: The PyTorch `TensorDataset` and `DataLoader` are used to manage batches efficiently.
+- **Training Process**: The model is trained using the Adam optimizer with a binary cross-entropy loss function (`BCELoss`), appropriate for binary classification.
+- **Evaluation**: After each epoch, it computes the AUC score on the validation set using `roc_auc_score` from `sklearn`, which quantifies the classifier's performance.
+- **Batch Learning**: Training is performed in mini-batches to stabilize learning and generalization.
+
+This approach effectively captures non-trivial patterns in highly sparse physics data while optimizing classification performance in terms of AUC.

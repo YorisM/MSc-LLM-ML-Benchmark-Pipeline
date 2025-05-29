@@ -1,0 +1,22 @@
+The code implements a Transformer-based binary classifier using Slot Attention for particle physics event classification. Key components:
+
+1. Data Loading: Loads the training and validation data as PyTorch tensors.
+
+2. Preprocessing: Normalizes the data using mean and standard deviation.
+
+3. Feature Augmentation: Adds mass as a new feature computed from energy and transverse momentum.
+
+4. Slot Attention: Groups particles into 'slots' that likely correspond to top quark decays. Each slot attends to relevant particles.
+
+5. Classifier Architecture:
+   - Encoder: Projects features to higher dimension
+   - Slot Attention: Learns physically meaningful groupings
+   - Decoder: Processes slot representations for classification
+
+The model processes variable-length particle sequences by:
+1. Augmenting raw features with physics-informed derivations (mass)
+2. Using self-attention to model relationships between all particles
+3. Employing slot attention to explicitly group particles
+4. Making a final classification based on high-level slot representations
+
+Training uses standard binary cross-entropy loss with Adam optimization. The model outputs probabilities for each event belonging to the signal class (four top quarks). Evaluation focuses on AUC to handle the class imbalance typical in rare physics processes.

@@ -1,0 +1,8 @@
+The code implements a neural network classifier for collider physics events. Key features:
+1. Model architecture handles variable-length particle objects using permutation-invariant Deep Sets approach.
+2. Separates global event features (weight, missing energy) and particle object features (type + kinematic variables).
+3. Uses masking to ignore zero-padded particles in variable-length inputs.
+4. Includes event weighting from physics simulations in the loss calculation.
+5. Combines aggregated object information with global features for final classification.
+6. Uses AUROC evaluation with proper masked aggregation and validation set handling.
+7. Implements dry-run mode for quick validation with reduced training epochs.

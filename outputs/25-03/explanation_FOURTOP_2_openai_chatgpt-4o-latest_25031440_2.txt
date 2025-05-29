@@ -1,0 +1,22 @@
+This solution addresses the classification problem using a deep learning model in PyTorch, optimizing for the Area Under the Curve (AUC) metric. 
+
+1. **Data Preprocessing:** 
+   - Applies log-scaling to weight, missing transverse energy, and four-vector components to stabilize gradients.
+   - Normalizes angles to simplify learning.
+
+2. **Model Architecture:** 
+   - A three-layer feedforward neural network (128-64-1 structure).
+   - Batch normalization and dropout (30%) for regularization.
+   - ReLU activation and sigmoid for binary classification.
+
+3. **Training Process:** 
+   - Uses Binary Cross Entropy Loss for classification.
+   - Adam optimizer for adaptive learning rate.
+   - Save the best model based on AUC score.
+
+4. **Integration of Physics Knowledge:** 
+   - Log transformations and angle normalizations leverage intrinsic physics properties.
+   - The dataset does not impose ordering, so a fully connected model is used instead of an RNN or CNN.
+
+5. **Evaluation:**
+   - After training, the model is evaluated on the validation set using the AUC metric.

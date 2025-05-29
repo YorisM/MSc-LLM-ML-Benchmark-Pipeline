@@ -1,0 +1,27 @@
+This code is designed to maximize AUC for classifying rare signal events (four-top-quark production) versus backgrounds in LHC collision simulation data. It follows robust tabular data practices and is engineered for strong discrimination of rare signals with good generalization:
+
+1. **Preprocessing (`EventPreprocessor`)**:
+   - For each event, extracts global missing-ET (E_T^miss and its phi), then for all up-to-18 objects:
+     - Instead of using raw object IDs (which would be difficult for a model to interpret), computes symmetric statistics per event: for each kinematic variable (E, pT, eta, phi), calculate the per-event mean, standard deviation, max, min *across all valid (E > 0) objects*.
+   - Concatenates these as features (18 total: 2 globals + 4 variables × 4 statistics).
+   - All features are standardized (zero mean, unit variance) using only training data statistics.
+   - Output is a compact, dense feature vector ideal for a tabular classifier, and no information about object order is required (physics symmetry).
+
+2. **Model Architecture (`ParticleNet`)**:
+   - Standard fully-connected (dense) network, leveraging the compact event features.
+   - Three hidden layers (64->64->32 units) with batch normalization, leaky ReLU activations, and dropout for regularization (minimizes overfit, handles sparsity and distribution shifts).
+   - Final layer outputs a single, unactivated value (for BCEWithLogitsLoss, numerically stable for binary classification).
+   - This style of network is well-known to perform strongly on physics tabular data after per-event summarization.
+
+3. **Training (`train_model`)**:
+   - Uses Adam optimizer (good for tabular/sparse data) with modest weight decay for additional regularization.
+   - BCEWithLogitsLoss is used for stability and improved AUC-promoting gradients.
+   - Reports both accuracy and loss per epoch (but no printing, as per requirements).
+   - Includes validation after each epoch (supports monitoring overfit/generalization).
+   - Runs for 20 epochs; this is adjustable between ~10 and 40 depending on CPU constraints. Larger values risk overfit or slow runtime.
+
+4. **General notes**:
+   - Carefully avoids overfitting to the backgrounds by using only global, order-invariant (symmetric) statistics -- no object sorting is assumed, so the model is robust to padding/order.
+   - The model is small (≪50MB), fast to train, and has very few hyperparameters, so is robust in low-resource situations without extensive tuning.
+   - Feature engineering focuses on capturing potential discriminants (energy scales, multiplicities, spread in kinematics), which are crucial in Higgs/exotic-boson searches and form the classic basis of HEP ML discrimination.
+   - If additional challenge time/space is available, one could consider adding explicit object-type (flavor) encoding, but this is left out for simplicity and generalization against misspecified labels in fast simulation.

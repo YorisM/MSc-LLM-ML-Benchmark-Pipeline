@@ -1,0 +1,46 @@
+{
+  "model": "meta-llama/llama-4-maverick",
+  "usage": {
+    "prompt_tokens": 2034,
+    "completion_tokens": 1811,
+    "total_tokens": 3845
+  },
+  "prompt_chars": 8666,
+  "code": "import torch\nimport numpy as np\nfrom torch import nn\nfrom torch.utils.data import TensorDataset, DataLoader\nimport torch.nn.functional as F\n\nclass MyPreprocessor:\n    def __init__(self):\n        pass\n\n    def fit(self, X, y=None):\n        return self\n\n    def transform(self, X):\n        # Separate object features from other features\n        other_features = X[:, :2]  # E_T_miss, phi_{E_t}_miss\n        object_features = X[:, 2:].view(-1, 18, 5)  # obj_n, E, p_T, eta, phi\n        obj_ids = object_features[:, :, 0].long()\n        energies = object_features[:, :, 1]\n        pts = object_features[:, :, 2]\n        etas = object_features[:, :, 3]\n        phis = object_features[:, :, 4]\n        \n        # Create new features: p_T/E, eta, phi, and obj_id as category\n        new_features = torch.stack([pts / (energies + 1e-8), etas, phis], dim=-1)\n        new_features = torch.cat([new_features, obj_ids.unsqueeze(-1)], dim=-1)\n        \n        # Mask for valid objects (not zero-padded)\n        mask = (obj_ids != 0).float().unsqueeze(-1)\n        new_features = new_features * mask\n        \n        # Global features: E_T_miss, phi_{E_t}_miss, total visible energy, total visible p_T\n        total_visible_energy = energies.sum(dim=1, keepdim=True)\n        total_visible_pt = pts.sum(dim=1, keepdim=True)\n        global_features = torch.cat([other_features, total_visible_energy, total_visible_pt], dim=1)\n        \n        return torch.cat([global_features, new_features.view(X.size(0), -1)], dim=1)\n\n    def fit_transform(self, X, y=None):\n        self.fit(X, y)\n        return self.transform(X)\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\nclass SlotAttention(nn.Module):\n    def __init__(self, num_slots, dim, iters=3):\n        super().__init__()\n        self.num_slots = num_slots\n        self.iters = iters\n        self.dim = dim\n        self.scale = dim ** -0.5\n        \n        self.slots_mu = nn.Parameter(torch.randn(1, 1, dim))\n        self.slots_sigma = nn.Parameter(torch.abs(torch.randn(1, 1, dim)))\n        \n        self.to_q = nn.Linear(dim, dim)\n        self.to_k = nn.Linear(dim, dim)\n        self.to_v = nn.Linear(dim, dim)\n        \n        self.gru = nn.GRUCell(dim, dim)\n        self.norm = nn.LayerNorm(dim)\n        self.out_layer = nn.Linear(dim, dim)\n        \n    def forward(self, feat, mask=None):\n        b, n, d = feat.shape\n        mu = self.slots_mu.expand(b, self.num_slots, -1)\n        sigma = self.slots_sigma.expand(b, self.num_slots, -1)\n        slots = torch.normal(mu, sigma)\n        \n        for _ in range(self.iters):\n            slots_prev = slots\n            q = self.to_q(slots)\n            k = self.to_k(feat)\n            v = self.to_v(feat)\n            dots = torch.einsum('bid,bjd->bij', q, k) * self.scale\n            if mask is not None:\n                dots.masked_fill_(~mask[:, None, :], -float('inf'))\n            attn = dots.softmax(dim=1)\n            updates = torch.einsum('bij,bjd->bid', attn, v)\n            slots = self.gru(updates.reshape(-1, d), slots_prev.reshape(-1, d)).reshape(b, -1, d)\n            slots = self.norm(slots)\n        \n        return self.out_layer(slots)\n\ndef make_model(input_dim: int):\n    num_slots = 4  # Assuming 4 top quarks\n    slot_dim = 8\n    \n    class Model(nn.Module):\n        def __init__(self):\n            super().__init__()\n            self.embedding = nn.Linear(input_dim, slot_dim)\n            self.slot_attention = SlotAttention(num_slots, slot_dim)\n            self.fc = nn.Sequential(\n                nn.Linear(num_slots * slot_dim, 64),\n                nn.ReLU(),\n                nn.Linear(64, 2)\n            )\n        \n        def forward(self, x):\n            x = self.embedding(x)\n            x = x.view(-1, 18 + 4, x.size(-1))  # +4 for global features\n            global_features = x[:, :4, :]\n            object_features = x[:, 4:, :]\n            mask = (object_features[:, :, 0] != 0)\n            slots = self.slot_attention(object_features, mask)\n            x = torch.cat([global_features.mean(dim=1), slots.view(slots.size(0), -1)], dim=1)\n            return self.fc(x)\n    \n    return Model()\n\nEPOCHS = 10\n\ndef train_model(model, train_loader, val_loader, epochs):\n    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')\n    model.to(device)\n    criterion = nn.CrossEntropyLoss()\n    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)\n    \n    train_loss, val_loss, train_acc, val_acc = [], [], [], []\n    for epoch in range(epochs):\n        model.train()\n        epoch_loss, correct, total = 0, 0, 0\n        for batch in train_loader:\n            x, y = batch\n            x, y = x.to(device), y.to(device)\n            optimizer.zero_grad()\n            outputs = model(x)\n            loss = criterion(outputs, y)\n            loss.backward()\n            optimizer.step()\n            epoch_loss += loss.item()\n            _, predicted = torch.max(outputs, 1)\n            correct += (predicted == y).sum().item()\n            total += y.size(0)\n        train_loss.append(epoch_loss / len(train_loader))\n        train_acc.append(correct / total)\n        \n        model.eval()\n        epoch_loss, correct, total = 0, 0, 0\n        with torch.no_grad():\n            for batch in val_loader:\n                x, y = batch\n                x, y = x.to(device), y.to(device)\n                outputs = model(x)\n                loss = criterion(outputs, y)\n                epoch_loss += loss.item()\n                _, predicted = torch.max(outputs, 1)\n                correct += (predicted == y).sum().item()\n                total += y.size(0)\n        val_loss.append(epoch_loss / len(val_loader))\n        val_acc.append(correct / total)\n    return model, train_loss, val_loss, train_acc, val_acc",
+  "explanation": "The provided code defines a PyTorch-based binary classifier using a Transformer-inspired architecture with a Slot-Attention mechanism. The model is designed to classify particle physics events into signal or background processes. The Slot-Attention mechanism is used to group particles corresponding to top quark decays. The model is trained using the Adam optimizer and cross-entropy loss. The code includes data preprocessing, model definition, and training logic. The preprocessing step involves creating new features from the input data, such as p_T/E, eta, phi, and object id, and concatenating global features like E_T_miss and total visible energy. The model uses an embedding layer to transform the input features into a suitable representation for the Slot-Attention mechanism. The Slot-Attention module is implemented based on the original paper, with some modifications to accommodate the specific requirements of the problem. The model is trained for a specified number of epochs, and the training and validation losses and accuracies are tracked.",
+  "reasoning": null,
+  "PyLint": [],
+  "Bandit": {
+    "errors": [],
+    "generated_at": "2025-05-27T09:48:49Z",
+    "metrics": {
+      ".\\./outputs/27-05/FOURTOPS/Q3/script_meta-llama_llama-4-maverick_1148_4.py": {
+        "CONFIDENCE.HIGH": 0,
+        "CONFIDENCE.LOW": 0,
+        "CONFIDENCE.MEDIUM": 0,
+        "CONFIDENCE.UNDEFINED": 0,
+        "SEVERITY.HIGH": 0,
+        "SEVERITY.LOW": 0,
+        "SEVERITY.MEDIUM": 0,
+        "SEVERITY.UNDEFINED": 0,
+        "loc": 202,
+        "nosec": 0,
+        "skipped_tests": 0
+      },
+      "_totals": {
+        "CONFIDENCE.HIGH": 0,
+        "CONFIDENCE.LOW": 0,
+        "CONFIDENCE.MEDIUM": 0,
+        "CONFIDENCE.UNDEFINED": 0,
+        "SEVERITY.HIGH": 0,
+        "SEVERITY.LOW": 0,
+        "SEVERITY.MEDIUM": 0,
+        "SEVERITY.UNDEFINED": 0,
+        "loc": 202,
+        "nosec": 0,
+        "skipped_tests": 0
+      }
+    },
+    "results": []
+  }
+}

@@ -1,0 +1,53 @@
+I've created a neural network model that explicitly incorporates Lorentz symmetry and equivariant message passing for the four tops classification task. Let me explain the key components:
+
+1. **Data Preprocessing (PreprocessModule)**:
+   - Extracts MET (Missing Transverse Energy) features and normalizes them
+   - Restructures the flattened input into separate particle 4-vectors
+   - Converts from (E, pT, eta, phi) to Lorentz 4-vectors (E, px, py, pz)
+   - Applies normalization to improve convergence
+   - Uses masks to handle the variable number of particles per event
+   - Sorts particles by pT for consistent ordering
+
+2. **Lorentz-Invariant Network (LorentzInvariantNetwork)**:
+   - Processes 4-vectors in a way that respects Lorentz invariance
+   - Separately handles energy (E) and momentum (px, py, pz) components
+   - Combines them in a manner that respects relativistic constraints
+
+3. **Lorentz-Equivariant Layer**:
+   - Implements transformations that explicitly respect Lorentz symmetry
+   - Uses learnable weights initialized to be close to Minkowski metric
+   - Transforms 4-vectors in a covariant manner under Lorentz transformations
+   - Contracts the resulting tensors with Minkowski metric for invariant features
+
+4. **Particle Message Passing**:
+   - Implements Graph Neural Network-like message passing between particles
+   - Allows particles to exchange information with each other
+   - Uses edge networks to model pairwise interactions
+   - Aggregates messages from neighboring particles
+   - Maintains equivariance properties through multiple iterations
+
+5. **Complete Classifier Architecture**:
+   - Processes MET features separately with a dedicated network
+   - Extracts Lorentz-invariant features from particle 4-vectors
+   - Applies message passing to model particle interactions
+   - Uses Lorentz-equivariant transformations to capture symmetries
+   - Combines global features with MET features for final classification
+   - Uses a multi-layer perceptron for final prediction
+
+6. **Training Process**:
+   - Uses BCEWithLogitsLoss for binary classification
+   - Implements AdamW optimizer with weight decay for regularization
+   - Applies learning rate scheduling based on validation AUC
+   - Uses gradient clipping to prevent exploding gradients
+   - Tracks and saves the best model based on validation AUC
+   - Reports comprehensive metrics during training
+
+The model specifically addresses the physics of four tops detection by:
+
+1. Explicitly encoding Lorentz symmetry, which is fundamental to relativistic particle physics
+2. Using message passing to model interactions between particles, crucial for understanding multi-particle events like four tops
+3. Handling the variable number of particles in events with proper masking
+4. Using both invariant (magnitude-preserving) and equivariant (transformation-consistent) representations
+5. Processing MET separately, acknowledging its special role in event reconstruction
+
+The architecture balances physics-informed design with effective deep learning practices to maximize AUC on this challenging high energy physics classification task.

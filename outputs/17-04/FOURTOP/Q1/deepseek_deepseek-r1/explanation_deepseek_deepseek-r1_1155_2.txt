@@ -1,0 +1,27 @@
+The provided solution focuses on maximizing AUC through several key aspects:
+
+1. **Data Preprocessing**:
+   - Sample weights are extracted from the first column to handle cross-section weighting
+   - Feature standardization using training data statistics
+   - WeightedRandomSampler for balanced training despite class imbalance
+
+2. **Neural Network Architecture**:
+   - Batch Normalization for stable training with physical features
+   - SiLU activation for smooth gradient flow (better than ReLU)
+   - 4 hidden layers with dropout for regularization
+   - Sigmoid output for probabilistic predictions
+
+3. **Training Strategy**:
+   - Weighted BCE loss to account for event significance
+   - Gradient clipping for stable training
+   - AdamW optimizer with weight decay (L2 regularization)
+   - Validation-based early stopping (implicit via best model checkpointing)
+   - Larger batch size (4096) for stable gradient estimates
+
+4. **AUC Optimization**:
+   - Direct AUC tracking during training
+   - Model checkpointing based on validation AUC
+   - Deeper network with dropout allows complex feature learning
+   - Weighted sampling improves signal sensitivity
+
+The combination of deep architecture with proper normalization, weighted loss functions, and AUC-based model selection makes this solution particularly suitable for the HEP classification task focusing on rare signal detection.

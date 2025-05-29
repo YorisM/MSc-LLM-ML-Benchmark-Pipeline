@@ -1,0 +1,19 @@
+This solution implements a deep learning-based classifier using PyTorch to maximize the AUC metric for discriminating signal from background in high energy physics collision data.
+
+1. **Preprocessing**:
+   - Extracts relevant features from the dataset.
+   - Applies log scaling to energy-based features to normalize their highly varying values.
+   - Structures the processed data into PyTorch tensors with appropriate formatting.
+
+2. **Model Architecture**:
+   - A feed-forward neural network with three hidden layers, using ReLU activation functions.
+   - Includes batch normalization layers to stabilize training.
+   - Uses a sigmoid activation in the final layer to output probabilities.
+
+3. **Training & Evaluation**:
+   - Uses the binary cross-entropy loss function.
+   - Implements an Adam optimizer for efficient convergence.
+   - Employs mini-batch training with data loaders.
+   - Evaluates the model each epoch using the AUC metric.
+
+This approach ensures effective background suppression while maintaining high signal efficiency, crucial for rare event classification in particle physics.

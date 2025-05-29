@@ -1,0 +1,12 @@
+The code implements a neural network classifier tailored for particle physics data. Key features include:
+1. **Data Handling**: Uses PyTorch DataLoaders for efficient batch processing.
+2. **Model Architecture**: 
+   - Embeds particle type IDs to capture categorical information.
+   - Processes kinematic features (E, pT, η, φ) per particle with an MLP.
+   - Uses attention mechanism to weight important particles differently.
+   - Combines per-particle information with global event features (missing ET, weight).
+3. **Training**: Uses BCEWithLogitsLoss and learning rate scheduling.
+4. **Evaluation**: Computes ROC-AUC score on validation data.
+5. **Efficiency**: Implements attention to handle variable-length inputs through masking.
+6. **Regularization**: Uses dropout and weight decay to prevent overfitting.
+The architecture specifically aligns with particle physics needs by combining low-level detector measurements with high-level event characteristics in a space-efficient manner.

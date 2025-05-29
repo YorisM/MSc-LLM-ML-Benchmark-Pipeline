@@ -1,0 +1,23 @@
+The solution implements a physics-informed transformer-based model for particle classification. Key components:
+
+1. Data Preprocessing:
+- Automatic calculation of normalization parameters for global (MET) and object features
+- Handling of variable-length objects through zero-padding and masking
+
+2. Model Architecture:
+- Object embedding layer for particle type information
+- Separate processing of continuous kinematic features (E, pT, η, φ)
+- Transformer encoder for modeling particle interactions
+- Combined representation of global event features and aggregated object features
+
+3. Physics Integration:
+- Direct use of four-vector components for kinematic modeling
+- Attention mechanisms for learning particle correlations
+- Proper treatment of event weights in loss calculation
+
+4. Training:
+- Weighted BCE loss respecting event cross-section weights
+- Layer normalization and dropout for regularization
+- Validation with AUC metric tracking
+
+The architecture leverages transformer's ability to handle variable-length inputs and particle interactions while maintaining physics-informed feature processing through explicit normalization and kinematic parameter handling.

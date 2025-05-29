@@ -1,0 +1,22 @@
+This code defines a complete pipeline for training a neural network to classify signal vs background events in high-energy physics data from LHC simulations.
+
+Key features:
+
+Data Preprocessing:
+- It uses `StandardScaler` to normalize the input features, which helps convergence during training.
+
+Model Architecture:
+- A multi-layer feedforward neural network with batch normalization and dropout is implemented. It uses relu activations and final sigmoid for binary classification.
+
+Training Loop:
+- It trains using binary cross-entropy loss and the Adam optimizer.
+- During each epoch, it evaluates both loss and ROC AUC on training and validation sets using sklearn's `roc_auc_score`.
+- The AUC metric is tracked explicitly, as this is the performance target.
+
+Plotting:
+- Training/validation loss and AUC are plotted and saved for diagnostic plotting.
+
+Saving:
+- The final model is saved to disk for later inference or analysis.
+
+The code balances expressiveness, numerical stability, and optimization, ensuring a good starting point for high AUC classification in a physics-aware setup.

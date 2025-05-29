@@ -1,0 +1,17 @@
+This solution leverages Transformer and Slot Attention for robust physics event representation, explicitly guiding the model to discover groups of particles consistent with top quark decays. 
+
+1. **Data Preprocessing and Augmentation:**
+   - Each event is parsed into event-level features (missing ET, phi) and per-object features (obj_id, E, pt, eta, phi). These are augmented with physics-informed features: abs(eta), pt/E, deltaR to MET, and a presence mask. Thus, each particle slot has 9 features.
+   - Object types (`obj_id`) are mapped to a categorical embedding. Nonexistent slots (padding) are masked to avoid spurious confusion.
+   - Feature-wise normalization (mean/std) is computed for all features, and applied using a torch-based PreprocessModule to ensure TorchScript compatibility.
+
+2. **Model Architecture:**
+   - **Particle Transformer Encoder:** Each particle slot is embedded into a fixed-length vector combining categorical (object type embedding) and continuous (physics) features, and processed with a modest 2-layer Transformer encoder (4 heads), treating each slot as a "particle token". Padding slots are masked out in the encoding.
+   - **Slot Attention Module:** This mechanism is given 4 slots to represent the 4 top quarks hypothesized per signal event. Slot Attention iteratively refines slot embeddings to group sets of related particles.
+   - **Global Event Features:** Event-level features (projected through MLP) are concatenated to the slot representations.
+   - **Classification Head:** The 4 slot representations (flattened) and global event features are concatenated and passed through a feed-forward network, outputting the signal probability (via 1 logit).
+
+3. **Training:**
+   - Standard binary cross-entropy loss with AdamW optimizer and learning rate scheduling. The AUC is tracked per epoch both for the training and validation sets.
+
+This design explicitly encourages the network to learn object groupings consistent with top decays, while providing the classifier with informative, physics-driven feature representations to maximize sensitivity to rare signal while robustly rejecting backgrounds. The use of Slot-Attention and particle-wise Transformer attention is particularly powerful for variable-length, permutation-invariant particle physics data, and the model is explicitly informed of event structure via feature engineering and masking.

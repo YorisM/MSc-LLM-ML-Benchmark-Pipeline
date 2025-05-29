@@ -1,0 +1,27 @@
+This code is designed to maximize AUC for the four-top quark binary classification physics task. Here's a full breakdown:
+
+--- Preprocessor ---
+- We define a custom class `PhysicsPreprocessor` conforming to scikit-learn's transformer API, suitable for sklearn pipelines or standalone use. 
+- It extracts event-level features from the padded input: counts of objects, summed and average pT/eta/phi, minimum/maximum pT, H_T (sum of pTs), number of high-energy objects (E>100 GeV), along with the pre-existing missing E_T and phi.
+- All features are zero-imputed (for truly empty padded objects) and standardized for optimal neural network learning.
+- Output features are a condensed, physicist-relevant summary per event, significantly more information-dense than the input.
+
+--- Model ---
+- A moderately deep multi-layer perceptron (MLP) is defined, with batch normalization and dropout for regularization and to facilitate nonlinear learning. The design (layers 128/64/32/1) was chosen for expressive power but to avoid overfitting.
+- The final layer returns logits for binary classification.
+- BatchNorm smooths learning (empirically good for AUC), dropout mitigates overfit.
+
+--- Training ---
+- AdamW is used with modest learning rate and regularization. The loss is `BCEWithLogitsLoss` (stable for logits output).
+- Loop tracks loss and accuracies for both training and validation.
+- The loader expects batches of preprocessed features and labels.
+- Training and validation are both computed; training loss, validation loss, accuracy tracked for all epochs.
+
+--- Hyperparams ---
+- Training runs for 18 epochs by default, a number giving strong learning and validation separation without overfitting for most MLPs of this scale.
+
+--- Physics domain heuristics ---
+- Feature engineering is crucial: instead of using all object-wise padded features (which are highly sparse and permutation-variant), we reduce to meaningful event-wide statistics that best capture the high-level differences between four-top and background.
+- These engineered features enable the model to focus on variables like multiplicity, summed momenta, and overall energetic structure, which are strong discriminants in realistic LHC multi-top searches.
+
+All classes/objects are picklable, deterministic, and should work in a standard PyTorch/scikit-learn environment as required by the problem statement.

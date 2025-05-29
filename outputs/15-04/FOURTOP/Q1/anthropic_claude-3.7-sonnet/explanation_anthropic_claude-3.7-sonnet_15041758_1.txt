@@ -1,0 +1,39 @@
+This code implements a binary classifier for the four-top-quark classification problem. Here's a breakdown of the approach:
+
+**Preprocessing Strategy:**
+1. The data structure is complex, with each event containing a different number of particles, each with properties such as energy, momentum, pseudorapidity, and azimuthal angle.
+2. I extract physics-meaningful features such as:
+   - Total number of objects per event
+   - Sum of energy and transverse momentum
+   - Statistical distributions (mean, standard deviation) of pseudorapidity and phi angles
+   - Counts of different particle types
+   - Ratio of missing transverse energy to total transverse momentum
+3. I keep the original features but augment them with these engineered features, which capture global event properties that are relevant for discriminating signal from background.
+4. StandardScaler is applied to normalize the feature distribution, which is important for neural network training.
+
+**Model Architecture:**
+1. I implemented a deep neural network with multiple layers that grow in width before narrowing down.
+2. Each layer includes:
+   - Linear transformation
+   - Batch normalization (stabilizes training)
+   - ReLU activation (introduces non-linearity)
+   - Dropout (prevents overfitting)
+3. The final layer outputs a single value that, after applying sigmoid, represents the probability of the event being a signal.
+
+**Training Strategy:**
+1. BCEWithLogitsLoss is used as the loss function, which combines sigmoid activation with binary cross-entropy and is numerically stable.
+2. Adam optimizer with weight decay is used to control parameter updates and prevent overfitting.
+3. ReduceLROnPlateau scheduler reduces the learning rate when validation AUC plateaus, helping to fine-tune the model.
+4. The training includes monitoring of multiple metrics:
+   - Loss (training and validation)
+   - Accuracy (training and validation)
+   - AUC (training and validation) - our target metric
+
+**Why this approach maximizes AUC:**
+1. Feature engineering captures physics-based information that helps distinguish signal from background events.
+2. The deep architecture allows the model to learn complex patterns in the data.
+3. Regularization techniques (dropout, batch normalization, weight decay) prevent overfitting and improve generalization.
+4. Direct optimization of AUC through learning rate scheduling based on validation AUC.
+5. Batch processing allows efficient training on large datasets.
+
+This approach combines domain knowledge from particle physics with modern deep learning techniques to create a robust classifier optimized for AUC performance on this four-top-quark classification task.

@@ -1,0 +1,26 @@
+The code builds an LHC event classifier using physics-inspired preprocessing and an AUC-driven neural network. 
+
+**Preprocessor Details**:
+- The custom PhysicsObjectPreprocessor extracts both global features (transverse energy and angle) and object-based features from the zero-padded array, including:
+  - Standardized/global MET (missing transverse energy) features.
+  - For up to 18 objects: for each one, it extracts and normalizes energy, transverse momentum (pT), eta, phi, and type.
+  - Event-level summary statistics: number of objects, sum and max pT/E, mean/std eta, and 
+pairwise distances in (eta,phi) space among leading objects (mean and min deltaR).
+  - Leading object features for the top 6 objects: preserves event structure without exploding input dims.
+  - Handles zero-padded (empty) objects gracefully. Features are always deterministic and picklable.
+
+**Model Details**:
+- FourTopClassifier is a small but sufficiently deep and regularized fully-connected net (BatchNorm, Dropout), with input dim matching the preprocessor outputs, and an output logit.
+- Activations: ReLU, regularization: Dropout, weight decay.
+- Output is a single real-valued logit, suitable for BCEWithLogitsLoss and AUC computation; returns a 1D output.
+
+**Training**:
+- Trains for up to 20 epochs (or early stops if AUC drops for >4 epochs by >0.003), using Adam, a small learning rate and a small l2 regularization (weight_decay=1e-5).
+- Tracks loss and accuracy for both train and validation set each epoch.
+- Monitors AUC after each epoch, always keeps best-performing model.
+- The implementation supports both CPU and GPU, outputs the best-performing model (by AUC) and training history (lists for plotting and analysis).
+
+**Overall contribution to AUC**:
+- Feature engineering strongly leverages particle physics domain: aggregate object features, deltaR structure, leading object principle.
+- Model architecture is compact (<< 50MB), robust to data scale, and regularized against overfitting.
+- The design is oriented to maximize AUC in the presence of imbalance and high dimensionality, and successfully enforces all runtime and serialization constraints.

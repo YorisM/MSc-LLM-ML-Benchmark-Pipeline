@@ -1,0 +1,44 @@
+1.  **Data Loading (`load_data`)**: Loads the training and validation data from CSV files into PyTorch tensors. Includes a check for data directory existence and generates small dummy data if not found, useful for local development.
+
+2.  **Preprocessing (`PreprocessModule`, `preprocess_data`)**: 
+    *   `PreprocessModule`: A `torch.nn.Module` designed for TorchScript compatibility. It takes the raw input tensor (`[batch, 105]`) and performs:
+        *   **Reshaping**: Separates global features (MET, MET phi) from particle features. Assumes a maximum of 25 particles, each with 4 initial features (E, pT, eta, phi), based on the input dimension `(105 - 2) / 4`. Features beyond `2 + 25*4 = 102` are ignored.
+        *   **Masking**: Creates a boolean mask to identify valid particles (based on Energy > 1e-6) vs zero-padded particles.
+        *   **Feature Augmentation**: Calculates `px`, `py`, `pz` from `pT`, `eta`, `phi` for each particle, increasing particle feature dimension to 7.
+        *   **Standardization**: Applies z-score standardization (`(x - mean) / std`) using means and standard deviations calculated *only* from the training set (`preprocess_data`). Means (`global_means`, `particle_means`) and standard deviations (`global_stds`, `particle_stds`) are stored as registered buffers.
+        *   **Output**: Returns standardized global features (`[batch, 2]`), standardized augmented particle features (`[batch, 25, 7]`), and the particle mask (`[batch, 25]`).
+    *   `preprocess_data`: Calculates the necessary means and standard deviations from the training data (`X_train`). It handles masking carefully to compute statistics only on valid particle data. It instantiates `PreprocessModule` with these statistics and creates `DataLoader` instances for training and validation. Note: The data loaders yield the *original* data; the preprocessing module is applied within the model's forward pass.
+
+3.  **Slot Attention (`SlotAttention`)**: Implements the Slot Attention mechanism as a `torch.nn.Module`. 
+    *   Initializes a specified number of slots (`num_slots`).
+    *   Iteratively refines slot representations by attending to the input particle embeddings.
+    *   Uses competitive attention (softmax over slots) and GRU cells for updates.
+    *   Outputs the refined slot representations (`[batch, num_slots, d_model]`).
+
+4.  **Classifier (`Classifier`)**: Defines the main model architecture.
+    *   Takes the `PreprocessModule` instance as input during initialization.
+    *   **Preprocessing**: Applies the `preprocessor` to the input batch in its `forward` method.
+    *   **Embedding**: Uses separate MLPs (`particle_embed`, `global_embed`) to project the standardized particle and global features into a common dimension (`d_model`).
+    *   **Slot Attention**: Applies the `SlotAttention` module to the particle embeddings, using the mask to ignore padded particles. This groups particle information into `num_slots` slot vectors.
+    *   **Transformer Encoder**: Processes the slot vectors using a standard Transformer Encoder to capture relationships between the slots (potentially representing the hypothesized top quarks).
+    *   **Aggregation**: Pools the output slot vectors (using mean pooling) to get a single representation of the event structure.
+    *   **Combination**: Concatenates the pooled slot representation with the embedded global features.
+    *   **Classification Head**: Passes the combined representation through an MLP (`cls_head`) to produce a single logit for binary classification.
+
+5.  **Training Loop (`train_model`)**: 
+    *   Sets up the device (GPU if available, else CPU).
+    *   Uses `BCEWithLogitsLoss` for binary classification and `AdamW` optimizer.
+    *   Iterates through epochs, performing training and validation steps.
+    *   **Training**: Calculates loss, performs backpropagation, updates weights. Tracks training loss and accuracy.
+    *   **Validation**: Evaluates the model on the validation set (`model.eval()`, `torch.no_grad()`). Tracks validation loss and accuracy. Crucially, it collects all predictions and true labels from the validation set within each epoch to calculate the **AUC score** using `sklearn.metrics.roc_auc_score`.
+    *   Prints metrics (including AUC) after each epoch.
+    *   Returns the trained model and lists of metrics tracked per epoch.
+
+6.  **Plotting and Saving (`plot_and_save`, `main`)**: 
+    *   `plot_and_save`: A utility function to plot training/validation metrics over epochs and save the plots.
+    *   `main`: Orchestrates the process:
+        *   Sets hyperparameters (batch size, epochs, learning rate, model dimensions, etc.).
+        *   Calls `load_data`, `preprocess_data`, initializes the `Classifier` model, and calls `train_model`.
+        *   Handles saving the trained model state dictionary (`.pth`), the TorchScripted model (`.pt`), the TorchScripted preprocessor (`.pt`), and the metric plots (`.png`) in an `outputs` subdirectory, skipping this if `dryrun` is True.
+
+7.  **Entry Point**: The `if __name__ == '__main__':` block parses the `--dryrun` argument and calls the `main` function.

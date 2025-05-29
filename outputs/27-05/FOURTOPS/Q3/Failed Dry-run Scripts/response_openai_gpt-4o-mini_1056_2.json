@@ -1,0 +1,52 @@
+{
+  "model": "openai/gpt-4o-mini",
+  "usage": {
+    "prompt_tokens": 2064,
+    "completion_tokens": 1475,
+    "total_tokens": 3539,
+    "prompt_tokens_details": {
+      "cached_tokens": 1920
+    },
+    "completion_tokens_details": {
+      "reasoning_tokens": 0
+    }
+  },
+  "prompt_chars": 8666,
+  "code": "import torch\nimport numpy as np\nfrom torch import nn\nfrom torch.utils.data import TensorDataset, DataLoader\nfrom torch.nn import functional as F\n\nclass MyPreprocessor:\n    def __init__(self):\n        # No stateful components needed in this simple preprocessing\n        pass\n\n    def fit(self, X, y=None):\n        return self\n\n    def transform(self, X):\n        # Normalize E_T_miss (index 0) and phi_Et_miss (index 1)\n        X_transformed = X.clone()\n        X_transformed[:, 0] = (X_transformed[:, 0] - torch.mean(X_transformed[:, 0])) / torch.std(X_transformed[:, 0])  # Standardize E_T_miss\n        X_transformed[:, 1] = (X_transformed[:, 1] - torch.mean(X_transformed[:, 1])) / torch.std(X_transformed[:, 1])  # Standardize phi_Et_miss\n        return X_transformed\n\n    def fit_transform(self, X, y=None):\n        self.fit(X, y)\n        return self.transform(X)\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\nclass SlotAttention(nn.Module):\n    def __init__(self, num_slots, dim, num_iters):\n        super(SlotAttention, self).__init__()\n        self.num_slots = num_slots\n        self.dim = dim\n        self.num_iters = num_iters\n        self.slots = nn.Parameter(torch.randn(num_slots, dim))\n        self.mlp = nn.Sequential(\n            nn.Linear(dim, dim),\n            nn.ReLU(),\n            nn.Linear(dim, dim)\n        )\n\n    def forward(self, x):\n        b, n, d = x.shape\n        slots = self.slots.unsqueeze(0).repeat(b, 1, 1)\n        for _ in range(self.num_iters):\n            slots_prev = slots.clone()\n            attention = (x @ slots.transpose(1, 2)) / (d ** 0.5)  # Scaled dot-product attention\n            attention = F.softmax(attention, dim=-1)\n            slots = attention @ x  # Compute new slots\n            slots = self.mlp(slots) + slots_prev  # Update slots with MLP\n        return slots\n\ndef make_model(input_dim: int):\n    class Model(nn.Module):\n        def __init__(self):\n            super(Model, self).__init__()\n            self.slot_attention = SlotAttention(num_slots=10, dim=input_dim, num_iters=3)\n            self.fc = nn.Linear(input_dim, 1)\n\n        def forward(self, x):\n            x = self.slot_attention(x.view(-1, 18, input_dim))  # Reshape to (batch_size, num_objects, features)\n            x = x.mean(dim=1)  # Aggregate across the slots\n            return torch.sigmoid(self.fc(x))  # Binary classification\n\n    return Model()\n\nEPOCHS = 10\n\ndef train_model(model, train_loader, val_loader, epochs):\n    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)\n    criterion = nn.BCELoss()\n    train_loss, val_loss = [], []\n    train_acc, val_acc = [], []\n\n    for epoch in range(epochs):\n        model.train()\n        epoch_loss = 0\n        correct = 0\n        total = 0\n        for X_batch, y_batch in train_loader:\n            optimizer.zero_grad()\n            outputs = model(X_batch.float()).squeeze()\n            loss = criterion(outputs, y_batch.float())\n            loss.backward()\n            optimizer.step()\n\n            epoch_loss += loss.item()\n            predictions = (outputs > 0.5).float()\n            correct += (predictions == y_batch.float()).sum().item()\n            total += y_batch.size(0)\n\n        train_loss.append(epoch_loss / len(train_loader))\n        train_acc.append(correct / total)\n\n        # Validation step\n        model.eval()\n        val_epoch_loss = 0\n        val_correct = 0\n        val_total = 0\n        with torch.no_grad():\n            for X_batch, y_batch in val_loader:\n                outputs = model(X_batch.float()).squeeze()\n                val_loss_item = criterion(outputs, y_batch.float())\n                val_epoch_loss += val_loss_item.item()\n                val_predictions = (outputs > 0.5).float()\n                val_correct += (val_predictions == y_batch.float()).sum().item()\n                val_total += y_batch.size(0)\n\n        val_loss.append(val_epoch_loss / len(val_loader))\n        val_acc.append(val_correct / val_total)\n\n    return model, train_loss, val_loss, train_acc, val_acc",
+  "explanation": "The provided code implements a machine learning model for classifying events in a particle physics dataset, specifically for identifying rare signal processes from the outputs of simulations of proton-proton collisions.\n\n1. **Imports and Dependencies:** The necessary libraries are imported, including `torch` for deep learning and `numpy` for numerical operations, alongside functional modules from PyTorch.\n\n2. **Data Preprocessing:** The `MyPreprocessor` class is created for data normalization. This class standardizes the features `E_T_miss` and `phi_Et_miss` (the first two indices of the input data) to ensure that the training data is well-conditioned.\n\n3. **Slot Attention Mechanism:** A custom `SlotAttention` class is implemented. This mechanism groups particles effectively based on their features through the use of learnable slots, enhancing the model’s ability to process varied input object counts and their characteristics.\n\n4. **Model Definition:** The `make_model` function returns a model that integrates the Slot Attention mechanism and a linear layer for binary classification. The input dimension is derived from the data's shape after preprocessing, and the model employs `sigmoid` to output probabilities of class membership.\n\n5. **Training Logic:** The `train_model` function defines the training routine. It uses the Adam optimizer and binary cross-entropy loss for optimization. Each epoch processes the training data through the model, computes the loss, applies backpropagation, and records train and validation statistics like loss and accuracy.\n\n6. **Training Epochs:** The number of epochs is set to 10, balancing computational efficiency and sufficient training duration to learn the underlying data patterns well.\n\nBy implementing this structured neural network model with a focus on the Slot Attention mechanism, the approach aims to maximize the area under the ROC curve (AUC), which is crucial for this classification task in particle physics.",
+  "reasoning": null,
+  "PyLint": [],
+  "Bandit": {
+    "errors": [],
+    "generated_at": "2025-05-27T08:57:00Z",
+    "metrics": {
+      ".\\./outputs/27-05/FOURTOPS/Q3/script_openai_gpt-4o-mini_1056_2.py": {
+        "CONFIDENCE.HIGH": 0,
+        "CONFIDENCE.LOW": 0,
+        "CONFIDENCE.MEDIUM": 0,
+        "CONFIDENCE.UNDEFINED": 0,
+        "SEVERITY.HIGH": 0,
+        "SEVERITY.LOW": 0,
+        "SEVERITY.MEDIUM": 0,
+        "SEVERITY.UNDEFINED": 0,
+        "loc": 167,
+        "nosec": 0,
+        "skipped_tests": 0
+      },
+      "_totals": {
+        "CONFIDENCE.HIGH": 0,
+        "CONFIDENCE.LOW": 0,
+        "CONFIDENCE.MEDIUM": 0,
+        "CONFIDENCE.UNDEFINED": 0,
+        "SEVERITY.HIGH": 0,
+        "SEVERITY.LOW": 0,
+        "SEVERITY.MEDIUM": 0,
+        "SEVERITY.UNDEFINED": 0,
+        "loc": 167,
+        "nosec": 0,
+        "skipped_tests": 0
+      }
+    },
+    "results": []
+  }
+}

@@ -1,0 +1,29 @@
+The code defines a transformer-based binary classifier for particle physics data, aiming to maximize the AUC score. It incorporates pairwise kinematic features inspired by physical symmetries.
+
+1.  **PairwiseInteraction Module:**
+	*   Computes pairwise features between objects in an event.
+	*   Calculates  `delta_eta`, `delta_phi`, `delta_r`, and invariant mass (`inv_mass`) for each object pair, capturing kinematic relationships.
+	*   Returns a tensor of these pairwise features.
+
+2.  **TransformerModel Class:**
+	*   The transformer encoder architecture is adopted to perform event classification.
+	*   An embedding layer projects the input features into a higher-dimensional space.
+	*   A multi-layer transformer encoder processes the embedded features.
+	*   The output of the transformer is averaged over the sequence length.
+	*   The pairwise interaction module is applied to capture kinematic correlations.
+	*   A fully connected layer with a sigmoid activation performs the final classification.
+
+3.  **Training Function:**
+	*   The `train_model` function trains the transformer model using the provided training data and evaluates its performance on the validation data after each epoch.
+	*   The Adam optimizer and binary cross-entropy loss are used for training.
+	*   The AUC score is calculated on the validation set to track the model's performance.
+
+**Key improvements and explanations:**
+
+*   **Pairwise Kinematic Features:**  The `PairwiseInteraction` module implements the calculation of delta eta, delta phi, delta R, and most importantly, the **invariant mass** of object pairs. This invariant mass is a Lorentz invariant quantity that reflects the energy scale of the interaction between particles, which is vital information in particle physics.  These features are derived from the four-momenta of the objects and provide valuable information about their kinematic relationships.
+*   **Transformer Architecture:** The code uses a standard transformer encoder. The attention mechanism is important for learning the weights for how important each particle present in each event is. 
+*   **Clear Data Handling:** The code explicitly defines the expected input tensor dimensions and performs necessary permutations to conform to the transformer's expected input format.
+*   The code now averages the output of the transformer encoder across the sequence length before feeding it to the fully connected layer. This reduces the dimensionality of the output and improves the training performance, which stabilizes the training.
+*   The dropout layer is implemented for regularization, reducing the possibility of overfitting.
+*   The code provides a complete, runnable example, including training and validation loops.
+*   The code incorporates the use of a sigmoid layer to output the classification prediction.

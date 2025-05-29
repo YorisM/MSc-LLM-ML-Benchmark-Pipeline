@@ -1,0 +1,13 @@
+The code implements a neural network designed to maximize the AUC for classifying four-top quark events at the LHC, incorporating Lorentz symmetry through equivariant layers and message passing. Here's a breakdown:
+
+1. **Data Preprocessing**: The `PreprocessModule` normalizes the input features using mean and standard deviation computed from the training data. This ensures that the model trains effectively by scaling the inputs to a consistent range, handling zero std deviations to prevent division by zero.
+
+2. **Model Architecture**: The `Classifier` utilizes a custom `LorentzEquivariantLayer` to encode Lorentz symmetry. This layer processes input data as 4-vectors representing particle kinematics (energy, transverse momentum, pseudorapidity, azimuthal angle). It computes scalar invariants using the Minkowski metric tensor (p_mu * p^mu), preserving Lorentz invariance, and performs message passing by considering pairwise interactions between particles. These interactions are processed through separate neural networks for scalars and vectors, ensuring the model respects the underlying physics symmetries.
+
+3. **Training Loop**: The training loop in `train_model` uses binary cross-entropy loss (BCE) for classification, with the Adam optimizer and a learning rate scheduler (`ReduceLROnPlateau`) to adapt the learning rate based on validation AUC performance. It tracks loss, accuracy, and AUC per epoch for both training and validation sets, providing insights into model generalization. The model is trained on GPU if available, using a batch size of 512 for efficiency.
+
+4. **Lorentz Symmetry Encoding**: The use of the Minkowski metric and scalar invariants ensures that the model's internal representations are invariant under Lorentz transformations, a key symmetry in high-energy physics. Pairwise vector interactions mimic message passing in graph neural networks, capturing inter-particle relationships crucial for distinguishing signal from background in sparse, high-dimensional collision data.
+
+5. **Performance Optimization**: Dropout layers (0.3 rate) are included in the final fully connected layers to prevent overfitting given the dataset's complexity. The architecture balances depth (two equivariant layers followed by dense layers) and capacity (hidden dimensions of 64, 128, 256) to capture relevant features while avoiding excessive computational cost.
+
+This approach leverages physics-informed design to enhance AUC by focusing on symmetry-preserving features, potentially improving sensitivity to rare processes like four-top quark production over traditional classifiers.

@@ -1,0 +1,31 @@
+My approach focuses on creating a physics-aware binary classifier to maximize AUC for identifying rare four-top quark events. The solution has three key components:
+
+1. **Physics-Motivated Preprocessing**: The preprocessor transforms raw detector data into meaningful physics features:
+   - Event-level features: Missing energy, object counts, total energy/momentum
+   - Object identification: Jets, electrons, muons with their respective counts
+   - High-level features: Ordered transverse momentum (pT), angular separations (ΔR), and scalar sum of pT (HT)
+   - Feature normalization to improve model training
+
+2. **Deep Neural Network Architecture**: A custom model that combines:
+   - Deep layers to capture complex interactions between particle features
+   - Residual connections to help train deeper networks more effectively
+   - Batch normalization and dropout for regularization
+   - LeakyReLU activations to handle the non-linear relationships in particle physics data
+
+3. **Training Strategy**: Optimized for maximum AUC:
+   - BCEWithLogitsLoss for binary classification with numerical stability
+   - AdamW optimizer with weight decay to prevent overfitting
+   - Learning rate scheduling to adapt optimization during training
+   - Direct AUC monitoring during training/validation
+
+The preprocessor creates physics-aware features by:
+- Identifying valid objects and their types (jets, electrons, muons)
+- Extracting kinematic variables (energy, pT, eta, phi) 
+- Computing high-level features like pT ordering, pT ratios, and angular separations
+- Normalizing all features to ensure stable training
+
+The model architecture uses residual blocks to enable deeper representations without gradient issues. This helps capture the complex patterns needed to distinguish the rare four-top signal from backgrounds. The multiple fully connected layers with batch normalization and dropout provide robust feature learning while preventing overfitting.
+
+During training, we explicitly monitor the AUC (our target metric) rather than just accuracy, ensuring the model directly optimizes for the evaluation criterion. The learning rate scheduler adapts to training progress, reducing the rate when validation performance plateaus.
+
+This solution balances physics knowledge with modern deep learning techniques to create an effective classifier for this challenging high-energy physics task.

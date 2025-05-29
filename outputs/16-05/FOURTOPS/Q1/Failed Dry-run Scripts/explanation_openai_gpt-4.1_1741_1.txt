@@ -1,0 +1,28 @@
+This code is designed for the four-top quark search classification challenge at the LHC, using the dataset structure as described. The main objectives are to maximize AUC by extracting robust features, using a neural network architecture effective for variable-padding event data, and training efficiently.
+
+**Preprocessing (make_preprocessor):**
+- The custom preprocessor class `FourTopPreprocessor` performs event-level and per-object feature encoding.
+- For event-level features: [E_T_miss, phi_{E_T}_miss] are standardized using StandardScaler.
+- For each object (out of 18 maximum/padded per event):
+    - The object type (obj_id) is encoded as a one-hot vector (assuming up to 6 real types; extra slots for safety).
+    - The kinematics (E, pT, eta, phi) are transformed: E and pT are log1p-scaled to reduce skew and then standardized; eta and phi are standardized as well.
+    - Kinematic standardization parameters are fitted only on real (non-padding) objects.
+- Each event is transformed into a fixed-length vector: [2 meta] + 18 objects * (one-hot(7) + 4 kin) = 2 + 18*11 = 200 features.
+
+**Model (make_model):**
+- The classifier is an MLP with three hidden layers (128→64→32), with batch normalization and dropout (0.15) for regularization and stability.
+- Output is a single logit (binary classifier), with BCEWithLogitsLoss during training.
+
+**Training Loop (train_model):**
+- The model is trained for `EPOCHS=16` (determined for a strong result within time/memory constraints).
+- Utilizes Adam optimizer with a mild weight decay for generalization.
+- For each epoch, tracks average batch loss and accuracy for both training and validation sets.
+- Assumes that train_loader and val_loader yield batches of (features, labels) and are set up for optimal RAM usage.
+
+**Challenge Key Points**
+- By standardizing meta and object kinematics and encoding object types, the model will have access to event structure in a regular way, maximizing its statistical power.
+- Use of dropout and batchnorm enables deeper learning while controlling overfitting.
+- The code is efficient and picklable (as required), and the model size is well below the 50 MB constraint.
+- No random transformations are applied in preprocessor's transform; all outputs are deterministic.
+
+**Result**: A robust, scalable, and physics-informed system that maximizes AUC by precise and regular handling of per-object and event-level features, built to integrate with torch DataLoaders as required by the original template.

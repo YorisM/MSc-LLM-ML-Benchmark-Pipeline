@@ -1,0 +1,18 @@
+The code implements a Transformer-based classifier for particle physics collision events. Key features:
+
+1. **Physics-Informed Processing**:
+   - Extracts object features (E, pT, η, φ) and global event features
+   - Computes pairwise kinematic features (Δη, Δφ, ΔR, invariant mass)
+   - Aggregates pairwise features per particle using masked averaging
+
+2. **Transformer Architecture**:
+   - Combines particle embeddings with physics features
+   - Uses multiple Transformer encoder layers with masked self-attention
+   - Maintains permutation invariance through feature aggregation
+
+3. **Training Pipeline**:
+   - Uses BCEWithLogitsLoss with Adam optimizer
+   - Tracks validation AUC for model selection
+   - Handles variable-length events through zero-padding masks
+
+The model explicitly incorporates domain knowledge through invariant mass calculations and symmetry-preserving feature engineering while leveraging Transformer's attention mechanisms to learn complex interaction patterns between particles.

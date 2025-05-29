@@ -1,0 +1,6 @@
+question,model,accuracy,auc,path,missing_files
+Q1,openai_gpt-4o-mini,0.5032,0.5000,outputs\23-04\FOURTOPS\Q1\openai_gpt-4o-mini\openai_gpt-4o-mini_1653_1_scripted.pt,*_accuracy.png
+Q1,anthropic_claude-3.7-sonnet,0.7425,0.8197,outputs\23-04\FOURTOPS\Q1\anthropic_claude-3.7-sonnet\anthropic_claude-3.7-sonnet_1714_4_scripted.pt,
+Q1,google_gemini-2.0-flash-001,0.7410,0.8177,outputs\23-04\FOURTOPS\Q1\google_gemini-2.0-flash-001\google_gemini-2.0-flash-001_1717_1_scripted.pt,
+Q1,meta-llama_llama-3.3-70b-instruct,0.4968,0.5000,outputs\23-04\FOURTOPS\Q1\meta-llama_llama-3.3-70b-instruct\meta-llama_llama-3.3-70b-instruct_1720_1_scripted.pt,
+Q1,deepseek_deepseek-r1,0.7418,0.8202,outputs\23-04\FOURTOPS\Q1\deepseek_deepseek-r1\deepseek_deepseek-r1_1739_3_scripted.pt,

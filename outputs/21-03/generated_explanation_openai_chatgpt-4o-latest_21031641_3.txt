@@ -1,0 +1,9 @@
+This code implements a binary classifier using a simple fully connected neural network (ParticleNet) to maximize the AUC for distinguishing signal from background in particle physics data.
+
+1. **Model Definition:** The neural network consists of three fully connected layers with ReLU activation and batch normalization to stabilize training. A sigmoid activation is used at the final layer to produce probabilities.
+2. **Data Preparation:** A PyTorch `TensorDataset` is used to wrap `X_train` and `Y_train` for efficient batch processing with a `DataLoader`.
+3. **Training Process:** The model is trained using the Adam optimizer and binary cross-entropy loss for a total of 20 epochs.
+4. **Evaluation:** After each epoch, the model's AUC score is computed using the `roc_auc_score` function from `sklearn`.
+5. **Batch Processing:** A batch size of 512 ensures efficient training without excessive memory consumption.
+
+This approach leverages batch normalization and non-linearity to effectively capture complex particle interactions, improving background rejection and maximizing AUC.

@@ -1,0 +1,19 @@
+1. **Preprocessing: PhysicsEventPreprocessor**
+   - The raw padded event vectors are converted into a set of high-level physics features that give the model easy access to the relevant kinematics: object multiplicity, HT, MET, scalar pt sum, eta stats, leading/subleading pt, scalar energy sum, and more. These features are far less sparse and better structured for simple non-image deep learning architectures. Features are standardized using a StandardScaler.
+   - Object type indices, energy, pt, eta, phi are extracted using numpy slicing for quick vectorized calculations. Objects are masked (zeros for padded/absent). Some features (e.g., type counts) assume that nonzero obj_type is real.
+   - Adds both summary (per-event) and global variables. Easy to extend for further improvements.
+
+2. **Architecture: ParticleNet**
+   - A deep feedforward net with 3 hidden layers (128-64-32) with batchnorm and dropout for regularization. This battles overfitting and leverages eventual batch statistics, crucial given potential covariance between event-level physics variables.
+   - The network output is a scalar (via .Linear(32,1)) -- matches torch's BCEWithLogitsLoss for binary classification. The architecture is robust and moderate in size, chosen for its ability to fit the complexity of multi-particle final states but not overfit quickly.
+
+3. **Training Setup**
+   - Uses AdamW optimizer (decoupled weight decay) and CosineAnnealingLR to schedule and reduce learning rates, helping avoid local minima and overshooting during training.
+   - BCEWithLogitsLoss for binary classification; outputs and targets properly float/dtype handled.
+   - Evaluation is done at every epoch (loss and accuracy for both train/val sets) for monitoring.
+   - Inputs and outputs are always on the correct device (cpu/gpu).
+   - All predictions threshold at sigmoid(0.5) to get class predictions for accuracy calculation, but models can also be evaluated with un-thresholded outputs for AUC.
+
+4. **Epochs**: 25, balancing learning capacity and overfitting. This is a reasonable default; empirically, smaller or larger can be set with adjustment.
+
+5. **Code is modular and fully compliant with the instructions and usage with PyTorch and scikit-learn interfaces. All state is picklable. Preprocessing is deterministic and robust. The network enables extension to more sophisticated particle-physics architectures (e.g., set-based / permutation-invariant- such as Deep Sets if desired for further improvements).

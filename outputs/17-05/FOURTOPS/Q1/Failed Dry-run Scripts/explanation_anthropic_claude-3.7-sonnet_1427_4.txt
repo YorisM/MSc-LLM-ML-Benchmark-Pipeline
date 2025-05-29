@@ -1,0 +1,37 @@
+I've developed a solution for classifying rare four-top quark events in particle physics data. Here's a detailed explanation of my approach:
+
+1. **Preprocessing Strategy**:
+   - The `MyPreprocessor` class handles feature engineering and normalization of physics data.
+   - I normalize the raw kinematic features (E, pT, eta, phi) for numerical stability.
+   - I extract object presence indicators showing which particle types exist in each event.
+   - I count occurrences of each object type to capture multiplicity information.
+   - I create physics-motivated derived features like total energy and total transverse momentum.
+   - The preprocessor maintains state (means, standard deviations) fitted on training data to ensure consistent transformations.
+
+2. **Model Architecture**:
+   - I've designed a deep neural network with residual connections for better gradient flow.
+   - The `PhysicsClassifier` starts with batch normalization on input features.
+   - Three residual blocks with skip connections help maintain information through the network.
+   - Dropout layers (30% rate) prevent overfitting.
+   - BatchNorm layers stabilize training and enable faster convergence.
+   - The model outputs unnormalized logits for binary classification.
+
+3. **Training Process**:
+   - Binary cross-entropy with logits loss for stable binary classification.
+   - AdamW optimizer with weight decay (1e-4) for regularization.
+   - Learning rate scheduler to reduce LR when validation AUC plateaus.
+   - 30 training epochs balancing training time and performance.
+   - The training loop tracks loss, accuracy, and AUC metrics for both training and validation sets.
+
+4. **Physics Insights**:
+   - The preprocessor explicitly understands the structure of physics events with multiple particles.
+   - By tracking object counts and energy distributions, the model can recognize patterns characteristic of four-top quark events.
+   - Normalizing angular and energy-based features separately acknowledges their different scales and distributions.
+   - Combining raw and derived features provides both low-level details and high-level physics concepts to the model.
+
+5. **Additional Components**:
+   - `ParticleDataset` class for efficient batching and handling of physics data during training.
+   - Residual blocks that maintain feature dimensions while allowing deeper model training.
+   - AUC-based learning rate scheduling to optimize directly for our evaluation metric.
+
+This approach balances physics domain knowledge with modern deep learning techniques to maximize AUC for the rare signal process classification task.

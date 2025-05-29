@@ -1,0 +1,19 @@
+The code implements a physics-aware neural network for four-top quark event classification. Key components:
+
+1. **Data Normalization**: Features are standardized using training set statistics while preserving object structure. Zero-padded objects are explicitly masked.
+
+2. **Embedding Architecture**:
+   - Object types are embedded to capture categorical particle information
+   - Continuous kinematics (E, pT, η, φ) are processed through dense layers
+   - Transformer-like pooling aggregates variable-length objects using mask-aware summation
+
+3. **Physics Integration**:
+   - Explicit separation of global (MET, φ_miss) and object-level features
+   - Permutation-invariant aggregation respects particle physics symmetries
+   - Kinematic normalization preserves physical meaning of features
+
+4. **Weighted Learning**:
+   - Event weights modify loss function to account for cross-section differences
+   - AUC evaluation incorporates weights for proper performance measurement
+
+The model combines Deep Learning with physics principles for improved sensitivity to rare processes, while handling sparse, variable-length particle data through structured feature processing.

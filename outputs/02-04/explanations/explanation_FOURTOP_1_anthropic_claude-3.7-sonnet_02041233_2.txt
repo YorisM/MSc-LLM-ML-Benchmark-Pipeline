@@ -1,0 +1,32 @@
+This code implements a binary classifier for particle physics events with the goal of maximizing the AUC metric. Here's a breakdown of the code structure and key components:
+
+1. **Data Preprocessing and Feature Engineering**:
+   - The `preprocess_data` function extracts important physics features from the raw data, including:
+     - Weight, missing transverse energy (ET_miss), and its phi angle
+     - Sum of transverse momentum (pT) and energy across all objects
+     - High-level features like HT (scalar sum of jet pT)
+     - Object counts (jets, leptons, b-jets) based on object ID
+     - MET to HT ratio, which is useful for discriminating signal from background
+   - StandardScaler normalizes all features to improve training stability
+
+2. **Neural Network Architecture**:
+   - A flexible deep neural network with customizable hidden layer dimensions
+   - Includes dropout (0.3) and batch normalization to prevent overfitting
+   - ReLU activations for hidden layers and sigmoid for the output layer
+   - The model processes the engineered features to predict signal probability
+
+3. **Training Procedure**:
+   - Uses BCE (Binary Cross-Entropy) loss, appropriate for binary classification
+   - Adam optimizer with weight decay (1e-5) for regularization
+   - Learning rate scheduler (ReduceLROnPlateau) to adapt the learning rate based on validation loss
+   - Saves the best model based on validation AUC
+   - Training visualizations (loss curves and AUC) are saved as 'training_history.png'
+
+4. **Implementation Details**:
+   - Implements dry run functionality with synthetic data when the --dryrun flag is used
+   - Properly handles device selection (CPU/GPU)
+   - Includes proper batch processing to handle large datasets efficiently
+   - Saves the trained model with the filename_model.pth format
+   - Prints the final AUC score for easy evaluation
+
+The model is designed to capture complex patterns in the collision data by processing both low-level object kinematics and high-level derived features. The architecture balances complexity with regularization to avoid overfitting on the training data while maximizing AUC on the validation set.

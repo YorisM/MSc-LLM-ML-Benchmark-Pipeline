@@ -1,0 +1,26 @@
+The code defines a deep learning classifier using PyTorch to maximize the AUC for distinguishing signal from background events in high-energy physics data.
+
+1. **Model Architecture**: The model consists of:
+   - Fully connected layers with 128, 64, and 32 neurons respectively.
+   - ReLU activation and batch normalization to improve training stability.
+   - A final sigmoid activation for binary classification.
+
+2. **Data Preparation**:
+   - X_train and X_val are tensor datasets combined with Y_train and Y_val.
+   - DataLoaders enable batch processing (batch size 1024) with shuffling for training.
+
+3. **Training Procedure**:
+   - Uses Binary Cross Entropy (BCELoss) as the loss function.
+   - Adam optimizer with a learning rate of 0.001 is used for optimization.
+   - Training iterates through 20 epochs.
+   - For each batch:
+     - Inputs and labels are moved to the appropriate device (GPU if available).
+     - Predictions are computed and compared against ground truth labels.
+     - Backpropagation updates weights.
+   
+4. **Evaluation**:
+   - After each training epoch, the model is evaluated on the validation dataset.
+   - The AUC score is calculated using `roc_auc_score` from `sklearn.metrics`.
+   - The computed AUC is printed to track model improvement.
+
+The model is designed to effectively learn features from particle physics event data while focusing on maximizing AUC for classification performance.

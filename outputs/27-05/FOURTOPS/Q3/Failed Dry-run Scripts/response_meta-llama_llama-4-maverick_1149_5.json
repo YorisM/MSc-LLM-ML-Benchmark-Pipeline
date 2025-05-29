@@ -1,0 +1,48 @@
+{
+  "model": "meta-llama/llama-4-maverick",
+  "usage": {
+    "prompt_tokens": 2034,
+    "completion_tokens": 1868,
+    "total_tokens": 3902,
+    "prompt_tokens_details": null,
+    "completion_tokens_details": null
+  },
+  "prompt_chars": 8666,
+  "code": "# 0. ---------- IMPORTS ----------\nimport torch\nimport numpy as np\nfrom torch import nn\nfrom torch.utils.data import TensorDataset, DataLoader\nimport math\n\n# 1. ---------- PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.obj_dim = 5  # obj_id, E, p_T, eta, phi\n        self.max_objs = 18\n        self.feature_dim = self.obj_dim - 1  # exclude obj_id\n\n    def fit(self, X, y=None):\n        return self\n\n    def transform(self, X):\n        # Separate out E_T_miss and phi_Et_miss\n        E_T_miss = X[:, 0].unsqueeze(1)  # (N, 1)\n        phi_Et_miss = X[:, 1].unsqueeze(1)  # (N, 1)\n        obj_features = X[:, 2:].view(-1, self.max_objs, self.obj_dim)  # (N, max_objs, obj_dim)\n        obj_features = obj_features[:, :, 1:]  # exclude obj_id, (N, max_objs, feature_dim)\n        # Calculate augmented features\n        p_T = obj_features[:, :, 1]  # (N, max_objs)\n        eta = obj_features[:, :, 2]  # (N, max_objs)\n        phi = obj_features[:, :, 3]  # (N, max_objs)\n        obj_features_augmented = torch.stack([\n            p_T,\n            eta,\n            phi,\n            torch.cos(phi - phi_Et_miss.squeeze()),\n            torch.sqrt(p_T ** 2 + E_T_miss ** 2 + 2 * p_T * E_T_miss * torch.cos(phi - phi_Et_miss.squeeze()))\n        ], dim=-1)  # (N, max_objs, 5)\n        obj_features_augmented = torch.cat([obj_features, obj_features_augmented], dim=-1)  # (N, max_objs, feature_dim + 5)\n        # Mask for padding objects\n        obj_mask = (obj_features[:, :, 0] != 0).float().unsqueeze(-1)  # (N, max_objs, 1)\n        return torch.cat([E_T_miss, obj_features_augmented.view(X.size(0), -1) * obj_mask.view(X.size(0), -1)], dim=1)\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# 2. ---------- MODEL DEFINITION ----------\nclass SlotAttention(nn.Module):\n    def __init__(self, num_slots, dim, iters=3):\n        super().__init__()\n        self.num_slots = num_slots\n        self.iters = iters\n        self.dim = dim\n        self.slots_mu = nn.Parameter(torch.randn(1, 1, dim))\n        self.slots_log_sigma = nn.Parameter(torch.randn(1, 1, dim))\n        self.to_q = nn.Linear(dim, dim)\n        self.to_k = nn.Linear(dim, dim)\n        self.to_v = nn.Linear(dim, dim)\n        self.gru = nn.GRUCell(dim, dim)\n        self.norm = nn.LayerNorm(dim)\n\n    def forward(self, feat, mask):\n        b, n, d = feat.shape\n        mu = self.slots_mu.expand(b, self.num_slots, -1)\n        sigma = self.slots_log_sigma.exp().expand(b, self.num_slots, -1)\n        slots = mu + sigma * torch.randn_like(mu)\n        for _ in range(self.iters):\n            slots_prev = slots\n            q = self.to_q(slots)\n            k = self.to_k(feat)\n            v = self.to_v(feat)\n            dots = torch.einsum('bid,bjd->bij', q, k) * (d ** -0.5)\n            dots = dots + (1 - mask.float()) * -1e8\n            attn = dots.softmax(dim=1)\n            updates = torch.einsum('bjd,bij->bid', v, attn)\n            slots = self.gru(updates.reshape(-1, d), slots_prev.reshape(-1, d))\n            slots = slots.reshape(b, -1, d)\n            slots = self.norm(slots)\n        return slots\n\nclass TransformerClassifier(nn.Module):\n    def __init__(self, input_dim):\n        super().__init__()\n        self.preprocessor = make_preprocessor()\n        self.embedding = nn.Linear(input_dim, 128)\n        self.slot_attention = SlotAttention(num_slots=4, dim=128)\n        self.transformer = nn.TransformerEncoderLayer(d_model=128, nhead=8, dim_feedforward=256, dropout=0.1)\n        self.classifier = nn.Linear(128 * 4, 2)\n\n    def forward(self, x):\n        x = self.preprocessor.transform(x)\n        x = x.view(x.size(0), -1, 9)  # (N, max_objs + 1, 9)\n        E_T_miss = x[:, 0, :].unsqueeze(1)  # (N, 1, 9)\n        obj_features = x[:, 1:, :]  # (N, max_objs, 9)\n        obj_mask = (obj_features[:, :, 0] != 0).float().unsqueeze(-1)  # (N, max_objs, 1)\n        obj_features = self.embedding(obj_features * obj_mask)  # (N, max_objs, 128)\n        slots = self.slot_attention(obj_features, obj_mask.squeeze(-1))  # (N, num_slots, 128)\n        slots = slots + self.transformer(slots.transpose(0, 1)).transpose(0, 1)\n        x = slots.reshape(x.size(0), -1)\n        x = self.classifier(x)\n        return x\n\ndef make_model(input_dim: int):\n    return TransformerClassifier(input_dim)\n\n# 3. ---------- MODEL TRAINING ----------\nEPOCHS = 10\ndef train_model(model, train_loader, val_loader, epochs):\n    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')\n    model.to(device)\n    criterion = nn.CrossEntropyLoss()\n    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)\n    train_loss, val_loss, train_acc, val_acc = [], [], [], []\n    for epoch in range(epochs):\n        model.train()\n        total_loss, total_correct = 0, 0\n        for batch in train_loader:\n            x, y = batch\n            x, y = x.to(device), y.to(device)\n            optimizer.zero_grad()\n            outputs = model(x)\n            loss = criterion(outputs, y)\n            loss.backward()\n            optimizer.step()\n            total_loss += loss.item()\n            total_correct += (outputs.argmax(-1) == y).sum().item()\n        train_loss.append(total_loss / len(train_loader))\n        train_acc.append(total_correct / len(train_loader.dataset))\n        model.eval()\n        total_loss, total_correct = 0, 0\n        with torch.no_grad():\n            for batch in val_loader:\n                x, y = batch\n                x, y = x.to(device), y.to(device)\n                outputs = model(x)\n                loss = criterion(outputs, y)\n                total_loss += loss.item()\n                total_correct += (outputs.argmax(-1) == y).sum().item()\n        val_loss.append(total_loss / len(val_loader))\n        val_acc.append(total_correct / len(val_loader.dataset))\n    return model, train_loss, val_loss, train_acc, val_acc",
+  "explanation": "The provided code defines a Transformer-based binary classifier that utilizes a Slot-Attention mechanism. The model is designed to classify particle physics events as either signal or background. The input data is preprocessed to extract relevant features and augmented with additional physics-informed features. The model consists of an embedding layer, a Slot-Attention module, a Transformer encoder layer, and a classification head. The Slot-Attention mechanism is used to group particles corresponding to top quark decays. The model is trained using the Adam optimizer and cross-entropy loss. The training loop includes evaluation on the validation set after each epoch.",
+  "reasoning": null,
+  "PyLint": [],
+  "Bandit": {
+    "errors": [],
+    "generated_at": "2025-05-27T09:49:30Z",
+    "metrics": {
+      ".\\./outputs/27-05/FOURTOPS/Q3/script_meta-llama_llama-4-maverick_1149_5.py": {
+        "CONFIDENCE.HIGH": 0,
+        "CONFIDENCE.LOW": 0,
+        "CONFIDENCE.MEDIUM": 0,
+        "CONFIDENCE.UNDEFINED": 0,
+        "SEVERITY.HIGH": 0,
+        "SEVERITY.LOW": 0,
+        "SEVERITY.MEDIUM": 0,
+        "SEVERITY.UNDEFINED": 0,
+        "loc": 196,
+        "nosec": 0,
+        "skipped_tests": 0
+      },
+      "_totals": {
+        "CONFIDENCE.HIGH": 0,
+        "CONFIDENCE.LOW": 0,
+        "CONFIDENCE.MEDIUM": 0,
+        "CONFIDENCE.UNDEFINED": 0,
+        "SEVERITY.HIGH": 0,
+        "SEVERITY.LOW": 0,
+        "SEVERITY.MEDIUM": 0,
+        "SEVERITY.UNDEFINED": 0,
+        "loc": 196,
+        "nosec": 0,
+        "skipped_tests": 0
+      }
+    },
+    "results": []
+  }
+}

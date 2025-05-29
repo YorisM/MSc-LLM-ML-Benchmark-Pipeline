@@ -1,0 +1,18 @@
+This code defines a Transformer-based binary classifier for classifying proton-proton collision events in order to distinguish signal from background events, maximizing the AUC evaluation metric.
+
+1. **Feature Engineering**:
+   - Pairwise kinematic features (ΔR and invariant mass) are computed between all pairs of objects in an event, ensuring that physics-inspired features are included in the data representation.
+
+2. **Transformer-based Model**:
+   - A transformer encoder-based architecture is implemented. The input features are mapped to a hidden representation and passed through a multi-head self-attention mechanism to capture long-range correlations between objects in an event. The final output is reduced by averaging and passed through a fully connected layer for classification.
+
+3. **Training Process**:
+   - Binary cross-entropy loss is used;
+   - Adam optimizer is used with a learning rate of 1e-4;
+   - During training, the model uses PyTorch's built-in automatic differentiation for backpropagation;
+   - The AUC metric is computed on validation data after each epoch to track performance.
+
+4. **Output & Evaluation**:
+   - The model is trained for 10 epochs, and the validation AUC is printed at each step to monitor classification effectiveness.
+
+By integrating pairwise kinematic features with a transformer-based approach, this model leverages physics-inspired insights and deep learning capabilities to optimize classification performance.

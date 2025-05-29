@@ -1,0 +1,13 @@
+The provided code implements a PyTorch-based binary classifier to distinguish signal events from background in a high-energy physics context using the AUC score as the evaluation metric. Here's a breakdown of the components:
+
+1. **Model architecture**: The `ParticleClassifier` neural network uses several fully connected layers with batch normalization, ReLU activation and dropout for regularization. The final layer is a sigmoid activation to output probabilities.
+
+2. **Training**: The `train_model` function performs one epoch of training on the given DataLoader, using binary cross-entropy loss and the Adam optimizer with L2 regularization.
+
+3. **Evaluation**: The `evaluate_model` function gathers predictions and labels across the validation set and calculates the AUC score using `sklearn.metrics.roc_auc_score`.
+
+4. **Main logic**: In `main`, the training and validation Tensor datasets are wrapped in DataLoaders. The network is trained over multiple epochs (10 for dry run, 50 otherwise). Finally, the AUC is printed and the trained model is saved to `classifier_model.pth`.
+
+5. **Command-line execution**: The script supports a `--dryrun` mode for quick testing and includes random tensor placeholders to simulate the training and validation datasets.
+
+This architecture is designed for robust classification performance and maximal AUC while respecting the sparsity and high dimensionality of the particle physics data.

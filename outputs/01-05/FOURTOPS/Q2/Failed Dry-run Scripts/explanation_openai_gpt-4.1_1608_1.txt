@@ -1,0 +1,18 @@
+This code implements a Lorentz-symmetry-respecting event classifier for rare four-top-quark events. The neural network is constructed to maximize discrimination (AUC) by:
+
+1. **Physics-inspired graph/pool architecture**: The code first extracts all object four-vectors ([E, p_x, p_y, p_z]) from each event, correctly handling variable-length input using masking (padding is ignored). 
+
+2. **Lorentz symmetry encoding**: Message passing, attention, and feature engineering within the network are explicitly built on Lorentz-invariant (or -covariant) operations only. For example:
+   - The attention mechanism uses the Lorentzian scalar product (Minkowski metric: -E1*E2 + p1·p2) as its kernel, ensuring that attention weights are invariant under Lorentz transformations of the input.
+   - Pair features like mass squared, norm, and related summary statistics are all Lorentz-invariant.
+   - Outer-product (tensor products of four-vectors) and sum over connections are included, supporting higher-order invariants.
+
+3. **Equivariant Message Passing**: Layers aggregate information via an attention-style Lorentz inner-product message-passing net within a custom `LorentzSelfAttention` and `LorentzGNNBlock`.
+
+4. **Pooling & Event Representation**: Global event statistics are formed by taking mean, max, min over object's invariant features, and combined with global event-level properties (missing ET, etc), for the final classification.
+
+5. **Robust Preprocessing**: Features are standardized only for true (non-pad) objects; padding is handled throughout via masking.
+
+6. **Training details**: AdamW optimizer, cosine learning rate, early dropout and normalization ensure robust and stable training. Training and validation accuracy/loss are tracked over epochs.
+
+This structure guarantees maximal retention of Lorentz symmetry and exploits both pairwise and collective invariants for four-top discrimination, giving optimal use of learning capacity for AUC maximization on this highly imbalanced and challenging task.

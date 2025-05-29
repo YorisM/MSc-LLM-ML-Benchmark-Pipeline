@@ -1,0 +1,8 @@
+This code implements a binary classifier to distinguish signal from background events in LHC data using a feedforward neural network. The main goal is to optimize the Area Under Curve (AUC) metric, which reflects the model's ability to rank signal over background. Key steps:
+
+- Preprocessing: StandardScaler is applied to normalize feature distribution.
+- Model: A neural network with batch normalization, dropout, and nonlinear activations (ReLU + Sigmoid output) to allow complex decision boundaries and prevent overfitting.
+- Training: We use Binary Cross Entropy Loss with Adam optimizer. AUC is calculated using scikit-learn's `roc_auc_score()` each epoch.
+- Visualization: AUC and loss curves are plotted per epoch to evaluate performance trends.
+
+This design maximizes the AUC by reducing overfitting, ensuring data is well-scaled, and using deep enough architecture to learn complex distributions in sparse high-dimensional data.

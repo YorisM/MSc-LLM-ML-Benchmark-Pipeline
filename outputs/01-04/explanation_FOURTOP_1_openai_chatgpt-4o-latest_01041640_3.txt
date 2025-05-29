@@ -1,0 +1,13 @@
+This Python script implements a deep neural network in PyTorch to classify rare high energy physics events for an AUC-optimized binary classification problem.
+
+1. **Model Architecture**: The network `ParticleClassifier` has 3 fully connected hidden layers with batch normalization and dropout to improve generalization. ReLU activation is used and sigmoid at the output layer for binary classification.
+
+2. **Training Strategy**: Uses BCE loss (binary cross entropy) with the Adam optimizer. The network is trained over epochs using batches for improved stability and convergence.
+
+3. **Evaluation**: On the validation set, the model outputs probabilities which are used with sklearn's `roc_auc_score` to calculate AUC.
+
+4. **Dry Run Support**: The `--dryrun` flag generates random dummy tensors and trains the model on it for 2 epochs to test if the pipeline works correctly without needing real data.
+
+5. **Model Saving**: After training on the real dataset (if not `--dryrun`), the model is saved to disk with the filename `<filename>_model.pth`.
+
+This setup ensures modular, efficient, and reusable code that satisfies both evaluation metric and dry run constraint posed in the challenge.

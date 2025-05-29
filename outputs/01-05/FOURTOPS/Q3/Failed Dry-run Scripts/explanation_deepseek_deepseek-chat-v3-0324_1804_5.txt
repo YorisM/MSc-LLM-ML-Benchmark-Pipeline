@@ -1,0 +1,13 @@
+The provided code implements a Transformer-based binary classifier with Slot-Attention mechanism for particle physics event classification. Key components:
+
+1. **Preprocessing**: Normalizes the kinematic features of each particle (energy, pT, eta, phi) and reshapes the input data for processing.
+
+2. **Slot Attention**: Implements a mechanism to group particles corresponding to potential top quark decays. It learns to dynamically assign particles to 'slots' (representing potential decay products) through iterative attention computations.
+
+3. **Transformer Architecture**: Uses multi-head self-attention to model complex relationships between the grouped particles, with layer normalization and feed-forward networks for stable training.
+
+4. **Physics-Informed Features**: The model processes the raw kinematic features of particles (E, pT, eta, phi) and learns representations that capture physical relationships important for identifying four-top events.
+
+5. **Training**: Uses binary cross-entropy loss with sigmoid activation for the binary classification task. The evaluation includes standard metrics (accuracy, loss) and the crucial AUC metric for physics applications.
+
+This architecture combines the pattern recognition capabilities of transformers with physics-motivated grouping mechanisms (Slot-Attention) to effectively discriminate between signal (four-top) and background processes in high-energy physics data.

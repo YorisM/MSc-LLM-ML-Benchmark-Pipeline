@@ -1,0 +1,8 @@
+This solution implements a binary classifier using a neural network for high-energy physics event classification with the goal of maximizing the AUC.
+
+1. **Preprocessing:** The data is standardized using StandardScaler, ensuring zero-padded elements remain unchanged.
+2. **Model Architecture:** A fully connected feed-forward neural network with batch normalization and ReLU activations is used for classification. The final layer includes a sigmoid activation function for probability outputs.
+3. **Training Procedure:** The model uses binary cross-entropy loss and the Adam optimizer for training. AUC is calculated for model selection using validation data.
+4. **Model Selection:** The best performing model checkpoint based on validation AUC is retained.
+
+This multi-step approach ensures efficient learning and robustness to noisy high-dimensional data while incorporating domain knowledge about sparsity in event representations.

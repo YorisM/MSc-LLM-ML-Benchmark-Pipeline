@@ -1,0 +1,24 @@
+The code is designed to maximize AUC for distinguishing pp->tttt events (signal) from Standard Model backgrounds at the LHC. 
+
+1. **Preprocessing**
+- The `PhysicsPreprocessor` uses knowledge of detector and event topology. It converts the padded 92-long data into a compact, information-rich vector.
+- It computes:
+  - Global event-level features: missing ET and phi, object multiplicity, scalar sum pT, total energy, mean eta, jet count (|eta|<2.5), and a composite invariant mass of the two leading-pT objects.
+  - Per-object features: for each object, extracts E, pT, eta, phi (pad zeros for missing objects).
+- All features are standardized with `StandardScaler`.
+
+2. **Model**
+- The classifier is a compact, regularized fully connected neural network.
+- Layer sizes: [input_dim, 96, 48, 18, 1] with BatchNorm and Dropout to maintain high AUC and generalizability.
+- Output is 1D logits for BCEWithLogitsLoss.
+
+3. **Training**
+- The training loop uses Adam optimizer and BCEWithLogitsLoss (stable). Dropout and BatchNorm further help AUC.
+- Trains for a moderate 16 epochs (empirically reasonable for given sample size and feature set), capturing learning curve.
+- Reports per-epoch lists for train/val loss and accuracy for monitoring, but core metric is AUC (to be computed post-training).
+
+**Scientific rationale:**
+- Physics-inspired feature engineering (invariant mass, object multiplicity, etc) yields discriminative features for multi-top vs tt+X backgrounds.
+- Neural net with BatchNorm and Dropout is robust to variable event structure and class imbalance/noise, maximizing AUC as required in high energy physics.
+- Explicit masking handles variable object count in zero-padded arrays.
+- All steps are deterministic, reproducible, and pickle-friendly for challenge requirements.

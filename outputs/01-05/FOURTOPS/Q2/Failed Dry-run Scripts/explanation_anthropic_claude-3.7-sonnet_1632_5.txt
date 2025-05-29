@@ -1,0 +1,74 @@
+This implementation addresses the task of classifying particle collision events while explicitly encoding Lorentz symmetry and using equivariant message passing.
+
+## Preprocessing Module
+
+The `PreprocessModule` class handles data normalization, reshaping, and structuring for the neural network:
+
+1. **Normalization**: Features are normalized using means and standard deviations calculated from non-zero entries in the training data.
+2. **Reshaping**: The flat input tensor is reshaped to represent individual particles with their properties.
+3. **Masking**: Creates validity masks for particles, ignoring padding and zero entries.
+
+## Physics-Informed Neural Network Architecture
+
+The model is designed to respect Lorentz symmetry through several components:
+
+### 1. LorentzLayer
+
+This layer computes Lorentz-invariant quantities from the 4-vectors of particles:
+- Invariant mass squared (m²)
+- Pairwise Minkowski inner products between particles
+- Transverse momentum (pT)
+- Pseudorapidity (η)
+- Angular distances (ΔR)
+
+These quantities are invariant under Lorentz transformations and provide physically meaningful features.
+
+### 2. LorentzEquivariantLayer
+
+This layer implements equivariant message passing between particles:
+- Creates messages between all pairs of particles
+- Processes pair features through an MLP
+- Aggregates messages for each particle
+- Updates particle representations while respecting Lorentz symmetry
+
+### 3. ParticleAttention
+
+This attention mechanism allows the model to focus on important interactions between particles:
+- Computes attention scores between all pairs of particles
+- Applies masking to ignore padding
+- Produces context-aware particle representations
+
+### 4. GlobalAttentionPool
+
+This pooling layer aggregates particle-level information into event-level features:
+- Uses learned attention scores to weight the importance of each particle
+- Produces a fixed-size representation for the entire event
+
+## Main Classifier
+
+The main `Classifier` combines these physics-informed components:
+
+1. Input preprocessing to extract particle structure from flat tensors
+2. Multiple LorentzEquivariantLayer instances for message passing
+3. Attention mechanism to capture complex particle interactions
+4. Global pooling to aggregate event information
+5. Final MLP for binary classification
+
+## Training Strategy
+
+The training loop includes:
+
+1. BCEWithLogitsLoss for stable binary classification training
+2. AdamW optimizer with weight decay to prevent overfitting
+3. ReduceLROnPlateau scheduler that adjusts learning rate based on validation AUC
+4. Gradient clipping to prevent explosive gradients
+5. Best model saving based on validation AUC
+
+## Physics Considerations
+
+1. **Lorentz Invariance**: The model uses quantities that are invariant under Lorentz transformations (like m², pT, η, ΔR).
+2. **Message Passing**: Particles exchange information in a way that respects the underlying physics of the problem.
+3. **Attention Mechanisms**: The model can focus on relevant interactions, which is crucial for rare signal detection.
+4. **Valid Particle Masking**: The model distinguishes between real particles and padding, focusing computation on meaningful objects.
+
+This physics-informed approach enhances the model's ability to identify the rare four-top-quark signal events while maximizing the AUC metric.

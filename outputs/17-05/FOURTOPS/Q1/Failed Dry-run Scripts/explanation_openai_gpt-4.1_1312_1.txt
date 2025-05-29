@@ -1,0 +1,26 @@
+This solution is structured to maximize AUC via careful physics-inspired feature engineering and a robust feed-forward neural network. 
+
+1. **Preprocessing:**
+   - The `FourTopPreprocessor` scales event-level features (missing ET) and per-object kinematic variables (E, pT, eta, phi) using `StandardScaler` (fit only to present, non-padded objects).
+   - Each event's objects are zero-padded up to 18; for each event, a mask encoding which slots are real is added.
+   - Derived physics-inspired features are computed: number of present objects, sum E, sum pT (log-transformed for scale robustness), average eta, and minimal deltaR between any distinct object pair, as well as the basic mask.
+   - The final feature vector per-event consists of: 
+     - 2 scaled ETmiss features
+     - 18x4=72 scaled per-object kinematics
+     - 18 presence mask bits
+     - 1 object count fraction
+     - 2 sum features
+     - 1 mean eta
+     - 1 min deltaR
+     Combined total: 2 + 72 + 18 + 1 + 2 + 1 + 1 = 97 features.
+
+2. **Model:**
+   - The `FourTopNet` is a fully connected feed-forward network with layers: [input_dim->192->96->48->16->1], ReLU activations throughout, and modest dropout on two layers for regularization and to prevent overfitting.
+   - The output is a single logit (as required for `BCEWithLogitsLoss`).
+
+3. **Training:**
+   - The model is trained with Adam optimizer, small weight decay, and reasonable learning rate. BCEWithLogitsLoss is used for stable learning.
+   - Loss and accuracy (sigmoid over logit, 0.5 threshold) are tracked per-epoch on train and validation sets. No overfitting countermeasures for early stopping are used, but dropout is employed.
+   - Number of epochs set to 18 for a good balance given computational constraints.
+
+This setup is designed to maximize discrimination between signal and background by engineering relevant global and per-object features, scaling all appropriately, and using a robust but compact neural network architecture. All preprocessing is deterministic and fits standard Scikit-learn and PyTorch conventions. The code does not violate memory or runtime constraints and the model file size stays modest (<50MB), as requested.

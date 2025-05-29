@@ -1,0 +1,23 @@
+The code implements a physics-informed particle event classifier leveraging a Particle-Transformer with Slot Attention for object grouping, targeting discrimination between four-top (signal) and tt+X (background) processes. 
+
+**Data Preprocessing:**
+- The PreprocessModule standardizes features using only valid (unpadded) particle values.
+- Custom physics augmentations per object: mass and radial distance R (for each padded particle), computed from (E, pT, eta, phi). These are appended to the feature vector for each event, informing the model about composite mass scales and event topology.
+- Particle mask for zero-padding is derived per event, guiding later attention blocks.
+
+**Classifier Architecture:**
+- Each particle’s kinematic features (including augmented features) are run through an MLP embedding. Object index is included via an embedding layer to provide positional or slot-based context.
+- Two ParticleTransformerBlocks (multi-head self-attention + MLP) allow modeling relationships among particles.
+- A SlotAttention block remains at the core: It clusters the per-particle features into 4 groups (slots) intended to capture top candidates, iteratively refining via soft attention. The entire block is permutation-invariant and processes all objects together, with mask-aware attention to ignore padded entries.
+- Global event features (missing transverse energy and its direction) are separately embedded via a small head and concatenated with slot outputs.
+- Final output head is an MLP predicting a single logit for binary classification.
+
+**Training:**
+- Standard BCEWithLogitsLoss and AdamW optimizer are used.
+- During training and validation, the code tracks both accuracy and (on last epoch) ROC-AUC, which is the challenge metric.
+
+**Physics Inductive Bias:**
+- Slot Attention is set to 4 slots (the known number of tops in signal) to force the grouping of decay products.
+- The classifier explicitly encodes physics-based features (masses, R) commonly useful in reconstructing heavy objects.
+
+The code is fully torch-native and portable; it adheres to template conventions including torchscript compatibility for deployment. The transformer/slot structure improves tagging of composite physics objects and is naturally robust to the variable, unordered nature of the padded detector dataset.

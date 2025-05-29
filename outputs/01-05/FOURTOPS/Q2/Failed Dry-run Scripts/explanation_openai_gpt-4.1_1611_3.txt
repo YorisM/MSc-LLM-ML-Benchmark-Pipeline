@@ -1,0 +1,22 @@
+This solution is specifically tailored for the physics challenge and leverages physical symmetries as follows:
+
+1. **Preprocessing**: Inputs are normalized per column, ignoring padded objects. Padded object feature slots are masked, so only genuine physics objects affect feature statistics and neural processing.
+
+2. **Lorentz Equivariance (Explicit Construction)**:
+    - Input objects are parsed into ([E, pt, eta, phi]). For each physics object, these are converted into Lorentz four-vectors ([E, px, py, pz]) by analytical transformation inside the neural network. Padding is respected by zero-masking unused slots.
+    - The network contains three layers of 'LorentzTensorLayer', each acting strictly linearly on the four-vector features (apart from possible nonlinearity and normalization at the end), explicitly preserving Lorentz symmetry in their action: a Lorentz transformation on inputs will be consistently encoded through these layers.
+    - 'LorentzPairwiseInvariant' constructs several explicit Lorentz- and permutation-invariant features: each object's mass (E^2 - |p|^2), rapidity, as well as all pairwise (i,j) invariant masses and several pooled statistics over their distributions (mean, min, max, etc). This deep injection of scalar invariants is proven to aid the AUC while inherently respecting symmetry.
+
+3. **Global Structure**:
+    - The network processes 'Etmiss' (global event-wide missing transverse energy) with a short MLP, and all objects together (as a set) through the Lorentzically-constrained deep network. Features are concatenated before the classifier head.
+
+4. **Classifier**:
+    - The classifier uses a combined vector: [flattened representation of all object features (after symmetry-aware processing), the explicit pairwise invariants, and the event missing energy block], followed by a deep MLP.
+
+5. **Training**:
+    - Training uses AdamW, cosine learning-rate scheduling, AUC/accuracy tracking.
+
+6. **Evaluation**:
+    - The model is built to maximize AUC by using both deep features (from symmetry-respecting message passing) and explicit invariant quantities. Masking and construction of the four-vectors ensure explicit Lorentz and permutation symmetry encoding.
+
+Overall, this code combines modern ML best practices (deep message passing, normalization, padding/masking) with hard-coded physics symmetries: Lorentz invariance, permutation symmetry (object order doesn't matter), and explicit pairwise invariant construction. This should lead to robust generalization and maximal AUC for the four-top signature.

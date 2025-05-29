@@ -1,0 +1,6 @@
+The code implements a neural network classifier using PyTorch. The model processes both global event features and per-particle object data. For each event:
+1. Global features (first 3 elements) are processed through an MLP.
+2. Object data (next 100 elements) is reshaped into 20 particles with 5 features each (type + kinematics).
+3. Particle types are embedded and concatenated with kinematic features, then passed through an MLP.
+4. Average of all valid particle representations is combined with global features for final classification.
+The training uses BCE with logits loss and evaluates using AUC. A dryrun mode uses random data for quick validation. The model saves to 'particle_model.pth' and reports AUC on the validation set.

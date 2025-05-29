@@ -1,0 +1,6 @@
+The code implements a neural network for classifying particle collision events. Key aspects:
+1. **Architecture**: Uses an embedding layer for particle type IDs and processes kinematic features through MLPs. Combines pooled object features with global event features.
+2. **Data Handling**: Excludes sample weights from input features but uses them in loss calculation. Handles variable-length objects via padding and masking.
+3. **Efficient Training**: Uses weighted BCE loss and Adam optimizer. Implements early stop mechanism in validation.
+4. **Evaluation**: Computes weighted AUC using sklearn to match physics analysis requirements.
+5. **Practices**: Includes GPU support, modular dataset class, and dry run capability for testing.

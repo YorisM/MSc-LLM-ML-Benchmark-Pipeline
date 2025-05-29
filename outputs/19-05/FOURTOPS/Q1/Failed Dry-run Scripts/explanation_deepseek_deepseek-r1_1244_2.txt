@@ -1,0 +1,24 @@
+This solution focuses on maximizing AUC through robust feature engineering and a deep neural network architecture:
+
+1. **Preprocessing**
+- Handles variable-length events using masked aggregation
+- Standardizes all kinematic features (E, pT, η, φ) including missing ET
+- One-hot encodes particle types while maintaining padding
+- Creates a dense fixed-size representation suitable for DNNs
+
+2. **Architecture**
+- Batch normalization layers for stable training
+- Three hidden layers (256-128) for hierarchical feature learning
+- Dropout layers (50%, 30%) for regularization
+- Final sigmoid activation for probabilistic output
+
+3. **Training**
+- BCELoss for probability calibration
+- Adam optimizer for efficient convergence
+- Balanced 30 epochs considering time constraints
+- Dropout prevents overfitting given limited dataset size
+
+4. **Optimizations**
+- Partial_fit in preprocessor handles large datasets
+- Early standardization improves model convergence
+- Mask-aware processing preserves event structure

@@ -1,0 +1,14 @@
+This code implements a Transformer-based binary classifier with Slot Attention for particle physics event classification. Key components:
+
+1. **Preprocessing**: Normalizes input features using mean and standard deviation.
+
+2. **Slot Attention**: Groups particles into a fixed number of slots (4 for 4 top quarks) using iterative attention. This helps identify particle groupings corresponding to top quark decays.
+
+3. **Particle Transformer**:
+   - Augments particle features with physics-inspired quantities like delta phi to missing ET and pT/ET_miss ratio
+   - Uses transformer layers to process the slot representations
+   - Classifies using the processed slot features
+
+4. **Training**: Uses BCE loss with Adam optimizer and learning rate scheduling. Tracks loss, accuracy, and AUC metrics.
+
+The model combines physics knowledge (feature augmentation) with modern deep learning (Slot Attention + Transformers) to effectively classify four-top-quark events while being robust to variable-length input and zero-padding.

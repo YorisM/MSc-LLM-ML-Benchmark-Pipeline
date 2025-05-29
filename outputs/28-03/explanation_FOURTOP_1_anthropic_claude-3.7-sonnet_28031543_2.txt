@@ -1,0 +1,29 @@
+This solution addresses the particle physics classification task by focusing on three key aspects: data preprocessing, model architecture, and training methodology.
+
+1. Data Preprocessing:
+   - The data contains variable-length events with different particle objects, so I created a structured preprocessing pipeline.
+   - Each event contains weight, missing energy, and multiple object entries (each with an identifier and four kinematic properties).
+   - The preprocessing extracts meaningful features like:
+     - Counts of each object type
+     - Statistical summaries (sum, mean, max) of kinematic properties for each object type
+     - Global features like total energy, total momentum, and number of objects
+   - Features are normalized to help with model training stability.
+
+2. Model Architecture:
+   - I implemented a deep neural network with five fully-connected layers.
+   - The architecture includes batch normalization, dropout, and leaky ReLU activations to address potential issues like:
+     - Vanishing gradients
+     - Overfitting
+     - Co-adaptation of neurons
+   - The output uses a sigmoid activation for binary classification.
+
+3. Training Methodology:
+   - Used binary cross-entropy loss which is appropriate for this binary classification task.
+   - Implemented Adam optimizer with weight decay for regularization.
+   - Added a learning rate scheduler that reduces learning rate when performance plateaus.
+   - Employed early stopping by saving the model with the best validation AUC.
+   - Used batch training to handle the large dataset efficiently.
+
+The solution specifically targets AUC optimization, which is important for rare event detection in particle physics where the trade-off between true positive rate and false positive rate is critical. The model learns to distinguish between signal (pp → tttt) and background (tt+X) events by identifying patterns in the kinematic distributions and object multiplicities that are characteristic of four-top production events.
+
+Additional physics-informed features could be added to further improve performance, such as angular separation between objects, invariant masses of object combinations, and other high-level features that physicists typically use for particle identification and event classification.

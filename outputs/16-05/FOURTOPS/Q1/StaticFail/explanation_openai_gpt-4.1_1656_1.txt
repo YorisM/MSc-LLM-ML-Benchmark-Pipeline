@@ -1,0 +1,36 @@
+This solution is designed to maximize the AUC for binary classification of four-top events vs. background in LHC data. The code consists of three main parts: preprocessing, modeling, and training.
+
+--- Preprocessing ---
+1. **Feature Engineering**:
+    - Counts the number of objects in each event.
+    - Sums the per-event transverse momentum (pT) for all objects.
+    - Computes the mean pseudorapidity (eta) per event.
+    - Extracts and flattens all per-object kinematic features (energy, pT, eta, phi) but not object type/id.
+    - Replaces nan values (e.g. events with no objects) with 0.
+2. **Scaling**:
+    - All features are standardized using sklearn's StandardScaler, fitted on a concatenation of the engineered and kinematic features.
+    - The preprocessor returns a numpy array of shape `(n_samples, features)` suitable for neural network input.
+
+--- Model Architecture ---
+1. **ParticleMLP**:
+    - Four fully connected layers with dimensions: input -> 128 -> 64 -> 32 -> 1.
+    - Uses batch normalization and dropout for regularization and to help generalization (crucial for robust AUC performance).
+    - Employs ReLU activations.
+    - Final layer outputs a single logit (for BCEWithLogitsLoss).
+2. **Compact Design**:
+    - The model is wide (especially first layers) rather than deep, as the problem may benefit more from feature cross-effects and strong regularization.
+    - Easily fits within the 50MB constraint.
+
+--- Training Loop ---
+1. **Loss Function**: Uses `BCEWithLogitsLoss` for stable binary classification, which avoids numerical instability compared to sigmoid+BCE.
+2. **Optimizer**: Adam with moderate weight decay for regularization.
+3. **Metrics**: Tracks both loss and accuracy for train/val sets.
+4. **GPU/CPU handling**: Uses CUDA if available, otherwise falls back to CPU.
+5. **Epochs**: 15 epochs chosen as a safe default balancing fitting and overfit risk, given dataset size and batch sizes.
+
+**Notes for Downstream Use**:
+- The data loaders should provide (batch_x, batch_y) as torch tensors for compatibility.
+- For AUC computation, use sigmoid(model(x)) and concatenate predictions, since the above doesn't implement AUC calculation directly (due to template constraints).
+- The input dimensionality of the model after preprocessing is 5 + 18*4 = 77.
+- The code is structured to be easily extensible for further experimentation (e.g., deeper nets, extra features).
+- All custom state (including sklearn objects) is picklable, fulfilling template requirements.

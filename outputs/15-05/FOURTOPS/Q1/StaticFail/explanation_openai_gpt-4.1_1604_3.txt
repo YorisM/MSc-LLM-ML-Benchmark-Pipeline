@@ -1,0 +1,18 @@
+This code is tailored for maximizing AUC on sparse, variable-length particle-physics event data. 
+
+1. **Preprocessing**: The `make_preprocessor()` function returns a transformer that: 
+  - Robustly scales the missing transverse energy (E_T_miss) and its phi, because they are always present.
+  - For each object (there can be up to (105-2)//5 = 20 objects per event, 5 features per object), applies a robust scaling *to each kinematic variable (E, pT, eta, phi)* but only for entries that correspond to real objects (i.e., identifier > 0). The object ID (the obj_n integer) is passed through unmodified, but could be featurized further in later experiments.
+  - Padded entries (where object id == 0) are always left as zeros.
+
+2. **Model**: The classifier is a deep MLP (Multi-layer Perceptron) with layer normalization after each linear layer to stabilize training in this very wide/sparse/high-dim problem. Dropout is included to reduce overfitting. The output is one score per event (i.e., logits shape [N,]).
+
+3. **Training**:
+   - Uses AdamW optimizer with moderate regularization and an initial 2e-4 learning rate. The BCEWithLogitsLoss gives numerical stability. All tensors are moved to GPU if available.
+   - In each epoch, both loss and accuracy are recorded for training and validation sets. 
+   - It also computes AUC at end of each epoch (using sklearn) to monitor the metric of interest.
+   - The training loop returns the trained model and the loss/accuracy history.
+
+4. **Epochs**: Set to 18 as a reasonable trade-off between convergence and overfitting. The actual optimal value should be cross-validated.
+
+All components are deterministic, modular, and memory/pickle-safe, as required by the template.

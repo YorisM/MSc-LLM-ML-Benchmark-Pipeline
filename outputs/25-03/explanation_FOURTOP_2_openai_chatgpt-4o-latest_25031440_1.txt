@@ -1,0 +1,24 @@
+The given approach follows a structured pipeline to maximize the AUC for binary classification. Key components include:
+
+1. **Data Preprocessing**:
+   - We normalize the data while excluding zero-padded values, ensuring stable numerical behavior.
+   - Mean and standard deviation are computed only for non-zero values to avoid biasing the normalization.
+
+2. **Model Architecture**:
+   - We use a feedforward fully connected neural network (`ParticleNet`) with ReLU activations and dropout layers to prevent overfitting.
+   - The final layer uses a sigmoid activation function to output a probability score.
+
+3. **Training Process**:
+   - Binary cross-entropy (BCE) loss is used as the loss function since it is appropriate for binary classification.
+   - The Adam optimizer is chosen for better convergence.
+   - Data is processed in mini-batches to stabilize training.
+
+4. **Evaluation & AUC Maximization**:
+   - The model is evaluated on the validation dataset using the AUC metric.
+   - The validation AUC is printed during training to monitor performance.
+
+5. **Integration of Physics Knowledge**:
+   - The preprocessing step ensures physical relevance by handling zero-padded kinematic quantities carefully.
+   - The network structure allows flexibility to pick up correlations between different particles in an event.
+
+This holistic approach ensures an effective classifier that maximizes AUC while leveraging domain-specific insights from particle physics data.

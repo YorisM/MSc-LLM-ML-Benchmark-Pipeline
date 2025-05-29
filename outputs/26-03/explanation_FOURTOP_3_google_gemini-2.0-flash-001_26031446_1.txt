@@ -1,0 +1,53 @@
+The code implements a Transformer-based binary classifier for particle physics data, incorporating pairwise kinematic features to enhance performance. Here's a breakdown:
+
+1. **PairwiseKinematicFeatures Module:**
+   - This module calculates pairwise kinematic features from the input data. 
+   - It takes the input tensor `x` (batch_size, seq_len, feature_dim), where `seq_len` is the number of objects in an event.  The important features are the energy `E`, transverse momentum `pt`, pseudorapidity `eta`, and azimuthal angle `phi`.
+   - `torch.combinations` generates all combinations of objects.
+   - For each pair of objects, it calculates:
+     - Invariant mass (`m_inv`):
+     - Delta eta (`delta_eta`):
+     - Delta phi (`delta_phi`):
+     - Delta R (`delta_R`):
+   - The calculated features are then concatenated and returned.
+     - Handles edge case of less than two objects by returning a tensor of zeros, which allows the model to run without crashing.
+
+2. **TransformerModel Class:**
+   - It inherits from `nn.Module`.
+   - `__init__`: Initializes the layers of the network.
+     - `PairwiseKinematicFeatures`: Instantiates the module that extracts pairwise features.
+     - `embedding`: A linear layer to embed the input features into a higher-dimensional space.
+     - `transformer_encoder`: A `nn.TransformerEncoder` for processing the embedded features.
+     - `linear`: A linear layer to map the output of the transformer to a single value.
+     - `sigmoid`: A sigmoid activation function to produce probabilities for binary classification.
+     - `dropout`: A dropout layer for regularization.
+   - `forward`: Defines the forward pass of the network.
+     - Applies the `PairwiseKinematicFeatures` transformation to the data.
+     - Embeds the features using the embedding layer.
+     - Passes the embedded features through the Transformer encoder.
+     - Applies global average pooling over the sequence length dimension.
+     - Passes the pooled features through the linear layer and sigmoid activation function.
+
+3. **Training and Evaluation:**
+   - Sets hyperparameters such as `FEATURE_DIM`, `NUM_ENCODER_LAYERS`, `NUM_HEADS`, `HIDDEN_DIM`, `DROPOUT`, `LEARNING_RATE`, `BATCH_SIZE`, and `NUM_EPOCHS`.
+   - Instantiates the `TransformerModel` and moves it to the appropriate device (CUDA if available, otherwise CPU).
+   - Defines the loss function (`nn.BCELoss`) and the optimizer (`optim.Adam`).
+   - Implements the training loop:
+     - Iterates over the training data in batches.
+     - Performs the forward pass, calculates the loss, and updates the model's parameters.
+     - Prints the loss every 10 steps.
+   - Evaluates the model on the validation set:
+     - Disables gradient calculation with `torch.no_grad()`.
+     - Performs the forward pass on the validation data.
+     - Calculates the AUC score using `roc_auc_score` from `sklearn.metrics`.
+     - Prints the validation AUC score.
+
+**Key Improvements and Considerations:**
+
+- **Pairwise Kinematic Features:** The code integrates physics knowledge by computing pairwise features such as invariant mass, delta eta, delta phi, and delta R, which capture relationships between objects in the event.
+- **Transformer Architecture:** The use of a Transformer encoder allows the model to capture long-range dependencies between objects in the event.
+- **Zero-Padding Handling:** The code accounts for variable-length events by zero-padding the input data. The PairwiseKinematicFeatures also has a conditional branch accounting for events with very small objects.
+- **Optimization:** The code uses the Adam optimizer, a standard choice for training deep neural networks.
+- **Regularization:** The code includes dropout for regularization.
+- **AUC Metric:** The code uses the AUC metric to evaluate the model's performance, which is appropriate for binary classification tasks with imbalanced datasets.
+- **Device Handling:** The code automatically detects and uses a CUDA-enabled GPU if available.

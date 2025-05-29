@@ -1,0 +1,46 @@
+{
+  "model": "meta-llama/llama-4-maverick",
+  "usage": {
+    "prompt_tokens": 2034,
+    "completion_tokens": 1695,
+    "total_tokens": 3729
+  },
+  "prompt_chars": 8666,
+  "code": "import torch\nimport numpy as np\nfrom torch import nn\nfrom torch.utils.data import TensorDataset, DataLoader\nimport torch.nn.functional as F\n\nclass MyPreprocessor:\n    def __init__(self):\n        pass\n\n    def fit(self, X, y=None):\n        return self\n\n    def transform(self, X):\n        # Separate object features from other features\n        other_features = X[:, :2]  # E_T_miss, phi_{E_t}_miss\n        object_features = X[:, 2:].view(-1, 18, 5)  # obj_n, E_n, p_Tn, eta_n, phi_n\n        \n        # Create augmented particle features\n        # Calculate p_x, p_y, p_z from p_T, eta, phi\n        p_T = object_features[:, :, 2]  # p_T\n        eta = object_features[:, :, 3]  # eta\n        phi = object_features[:, :, 4]  # phi\n        p_x = p_T * torch.cos(phi)  # (N, 18)\n        p_y = p_T * torch.sin(phi)  # (N, 18)\n        p_z = p_T * torch.sinh(eta)  # (N, 18)\n        E = object_features[:, :, 1]  # E\n        \n        # Concatenate the new features with the original object features\n        new_object_features = torch.stack([p_x, p_y, p_z, E], dim=-1)  # (N, 18, 4)\n        object_features = torch.cat([object_features, new_object_features], dim=-1)  # (N, 18, 9)\n        \n        # Flatten the object features\n        object_features = object_features.view(X.size(0), -1)  # (N, 18*9)\n        \n        # Concatenate other features with the object features\n        X_transformed = torch.cat([other_features, object_features], dim=1)  # (N, 2 + 18*9)\n        return X_transformed\n\n    def fit_transform(self, X, y=None):\n        self.fit(X, y)\n        return self.transform(X)\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\nclass SlotAttention(nn.Module):\n    def __init__(self, num_slots, dim, iters=3):\n        super().__init__()\n        self.num_slots = num_slots\n        self.dim = dim\n        self.iters = iters\n        self.scale = dim ** -0.5\n        self.slots_mu = nn.Parameter(torch.randn(1, 1, dim))\n        self.slots_sigma = nn.Parameter(torch.randn(1, 1, dim))\n        self.to_q = nn.Linear(dim, dim)\n        self.to_k = nn.Linear(dim, dim)\n        self.to_v = nn.Linear(dim, dim)\n        self.gru = nn.GRUCell(dim, dim)\n        self.fc1 = nn.Linear(dim, dim)\n        self.fc2 = nn.Linear(dim, dim)\n\n    def forward(self, x):\n        b, n, d = x.shape\n        slots_mu = self.slots_mu.expand(b, self.num_slots, -1)\n        slots_sigma = self.slots_sigma.expand(b, self.num_slots, -1)\n        slots = torch.normal(slots_mu, slots_sigma)\n        for _ in range(self.iters):\n            slots_prev = slots\n            q = self.to_q(slots)\n            k = self.to_k(x)\n            v = self.to_v(x)\n            dots = torch.einsum('bid,bjd->bij', q, k) * self.scale\n            attn = dots.softmax(dim=1)\n            updates = torch.einsum('bij,bjd->bid', attn, v)\n            slots = self.gru(updates.reshape(-1, d), slots_prev.reshape(-1, d))\n            slots = slots.reshape(b, -1, d)\n            slots = slots + self.fc2(F.relu(self.fc1(slots)))\n        return slots\n\ndef make_model(input_dim: int):\n    model = nn.Sequential(\n        nn.Linear(input_dim, 128),\n        nn.ReLU(),\n        nn.LayerNorm(128),\n        nn.Linear(128, 128),\n        nn.ReLU(),\n        nn.LayerNorm(128),\n        SlotAttention(num_slots=4, dim=128, iters=3),\n        nn.Linear(128*4, 1),\n        nn.Sigmoid()\n    )\n    return model\n\nEPOCHS = 10\ndef train_model(model, train_loader, val_loader, epochs):\n    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')\n    model.to(device)\n    criterion = nn.BCELoss()\n    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)\n    train_loss, val_loss, train_acc, val_acc = [], [], [], []\n    for epoch in range(epochs):\n        model.train()\n        total_loss, total_correct = 0, 0\n        for X, y in train_loader:\n            X, y = X.to(device), y.float().to(device)\n            optimizer.zero_grad()\n            output = model(X).squeeze()\n            loss = criterion(output, y)\n            loss.backward()\n            optimizer.step()\n            total_loss += loss.item()\n            total_correct += ((output > 0.5) == y).sum().item()\n        train_loss.append(total_loss / len(train_loader))\n        train_acc.append(total_correct / len(train_loader.dataset))\n        model.eval()\n        total_loss, total_correct = 0, 0\n        with torch.no_grad():\n            for X, y in val_loader:\n                X, y = X.to(device), y.float().to(device)\n                output = model(X).squeeze()\n                loss = criterion(output, y)\n                total_loss += loss.item()\n                total_correct += ((output > 0.5) == y).sum().item()\n        val_loss.append(total_loss / len(val_loader))\n        val_acc.append(total_correct / len(val_loader.dataset))\n    return model, train_loss, val_loss, train_acc, val_acc",
+  "explanation": "The task is to write a Python code for a Transformer-based binary classifier that utilizes a Slot-Attention mechanism. The classifier is designed to distinguish between signal and background processes in particle physics experiments. The data is preprocessed to create augmented particle features that complement the model architecture. The model is trained using the Adam optimizer and binary cross-entropy loss. The performance is evaluated using the area under the receiver operating characteristic curve (AUC) metric.\n\nThe code is divided into several sections: data preprocessing, model definition, and model training. The preprocessing step involves creating augmented particle features by calculating p_x, p_y, p_z from p_T, eta, phi. The model definition includes a Slot-Attention mechanism that groups particles corresponding to top quark decays. The model is trained using a binary cross-entropy loss function and the Adam optimizer.\n\nThe Slot-Attention mechanism is a key component of the model, allowing it to explicitly group particles corresponding to top quark decays. The mechanism uses a set of slots to attend to the input particles and update the slots based on the attention weights. The output of the Slot-Attention mechanism is then used to make a binary classification decision.\n\nThe model is trained for a specified number of epochs, and the performance is evaluated on the validation set after each epoch. The training and validation loss and accuracy are tracked throughout the training process.",
+  "reasoning": null,
+  "PyLint": [],
+  "Bandit": {
+    "errors": [],
+    "generated_at": "2025-05-27T09:46:35Z",
+    "metrics": {
+      ".\\./outputs/27-05/FOURTOPS/Q3/script_meta-llama_llama-4-maverick_1146_1.py": {
+        "CONFIDENCE.HIGH": 0,
+        "CONFIDENCE.LOW": 0,
+        "CONFIDENCE.MEDIUM": 0,
+        "CONFIDENCE.UNDEFINED": 0,
+        "SEVERITY.HIGH": 0,
+        "SEVERITY.LOW": 0,
+        "SEVERITY.MEDIUM": 0,
+        "SEVERITY.UNDEFINED": 0,
+        "loc": 184,
+        "nosec": 0,
+        "skipped_tests": 0
+      },
+      "_totals": {
+        "CONFIDENCE.HIGH": 0,
+        "CONFIDENCE.LOW": 0,
+        "CONFIDENCE.MEDIUM": 0,
+        "CONFIDENCE.UNDEFINED": 0,
+        "SEVERITY.HIGH": 0,
+        "SEVERITY.LOW": 0,
+        "SEVERITY.MEDIUM": 0,
+        "SEVERITY.UNDEFINED": 0,
+        "loc": 184,
+        "nosec": 0,
+        "skipped_tests": 0
+      }
+    },
+    "results": []
+  }
+}

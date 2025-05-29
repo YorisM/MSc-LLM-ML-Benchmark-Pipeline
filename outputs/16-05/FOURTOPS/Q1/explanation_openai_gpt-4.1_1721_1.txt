@@ -1,0 +1,33 @@
+This solution focuses on maximizing AUC for distinguishing signal (4-top events) from a fairly balanced mixed background, leveraging both physics-driven feature design and efficient, robust model architecture.
+
+1. **Preprocessing (`PhysicsPreprocessor`)**:
+   - **Object Masking**: Maps the variable-length, zero-padded objects to a fixed matrix, and for each event only scales/processes nonzero objects. This avoids polluting statistics with padding.
+   - **Feature Scaling**: Standardizes the main kinematic variables (energy, pT, eta, phi) _only for physically present objects_, fitting on all real-object values across the dataset. This enables the MLP to train efficiently.
+   - **Feature Engineering**: Adds engineered event-level features influential for classification such as:
+        - Number of objects
+        - Scalar sums and maxima of pT (per event)
+        - Transformed missing transverse energy (E_Tmiss)
+        - Ratio of missing-ET to sum pT
+        - Normalized angles (phi)
+   - **Output**: Concatenates the flattened, normalized per-object features with the engineered event-level features.
+
+2. **Model (`TopNet`)**:
+   - Uses a moderately deep fully-connected network (MLP):
+        - Four layers: 192 -> 96 -> 48 -> 1.
+        - **BatchNorm** after the first two layers to stabilize training and offset any distributional shift from preprocessing.
+        - **Dropout** (moderate; tuned for this size/shape) to reduce overfitting risk.
+   - Uses `BCEWithLogitsLoss` for improved numeric stability (no need to pre-sigmoid outputs).
+   - Final output is a single logit per event.
+
+3. **Training Loop**:
+   - Adam optimizer with small but not tiny initial learning rate and weight decay.
+   - For each epoch: tracks losses and (classification) accuracies.
+   - Evaluates on validation loader after each epoch, collecting both accuracy and AUC (sklearn's `roc_auc_score`).
+   - Returns history of losses and accuracy for learning curve analysis, alongside the trained model (in-place).
+
+4. **Other Design Choices**:
+   - **Epochs**: 20 (sufficient to converge without overfitting or time-limit risks).
+   - The model is compact (well under 50MB, even in float32).
+   - All preprocessing logic is self-contained and stateful (picklable), guaranteed deterministic per instructions.
+
+This approach is physics-aware (using variable-length/number of objects, kinematic masks, event-level aggregates), maximizes feature informativeness, and uses a robust, efficient neural classifier suitable for CPU-bound runtime and memory budget.

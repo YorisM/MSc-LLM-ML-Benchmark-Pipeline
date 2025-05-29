@@ -1,0 +1,63 @@
+This code implements a neural network specifically designed for the four-top-quark classification task, with special attention to Lorentz symmetry and equivariant message passing. Here's a detailed explanation of the implementation:
+
+### Preprocessing Module
+
+The `PreprocessModule` performs several key functions:
+
+1. **Feature Extraction**: It extracts missing transverse energy (ET_miss) and separates the objects (particles) from the flat input tensor.
+
+2. **Four-vector Construction**: It transforms the particle features (E, pT, eta, phi) into proper Lorentz four-vectors [E, px, py, pz], which is crucial for maintaining Lorentz invariance.
+
+3. **Normalization**: Energy and momentum components are normalized using statistics computed from the training set.
+
+4. **Validity Masking**: It creates masks to identify real particles versus padding.
+
+### Lorentz-Equivariant Architecture
+
+The key innovation is the `LorentzLayer` which:
+
+1. **Preserves Lorentz Invariance**: Uses the Minkowski inner product between four-vectors (p_i · p_j = E_i*E_j - px_i*px_j - py_i*py_j - pz_i*pz_j) to compute attention between particles.
+
+2. **Message Passing**: Implements equivariant message passing where information flows between particles based on both their learned features and their physical four-vector relationships.
+
+3. **Masked Attention**: Properly handles the variable number of particles by masking out padding during attention computation.
+
+### Classifier Model
+
+The classifier combines multiple components:
+
+1. **Particle Feature Encoder**: Learns embeddings for each particle's four-vector.
+
+2. **Multiple LorentzLayers**: Stacks several Lorentz-equivariant layers with residual connections and layer normalization.
+
+3. **Global Pooling**: Aggregates particle-level features to event-level features, accounting for the valid particle mask.
+
+4. **ET_miss Integration**: Incorporates missing transverse energy information which is crucial for detecting neutrinos from top decays.
+
+5. **Classification Head**: Makes the final binary decision based on combined features.
+
+### Training Loop
+
+The training includes:
+
+1. **Optimization**: Uses AdamW optimizer with weight decay to prevent overfitting.
+
+2. **Learning Rate Scheduling**: Reduces learning rate when validation performance plateaus using ReduceLROnPlateau.
+
+3. **Early Stopping**: Saves the best model based on validation AUC.
+
+4. **Gradient Clipping**: Prevents exploding gradients which can be an issue with deep architectures.
+
+### Physics Insights
+
+The model incorporates several physics-based insights:
+
+1. **Lorentz Invariance**: The use of four-vectors and Minkowski inner products ensures that the model respects relativistic symmetries.
+
+2. **Variable Particle Count**: Handles the variable number of particles per event correctly through masking.
+
+3. **Missing Energy**: Properly processes ET_miss which represents undetected particles (like neutrinos).
+
+4. **Message Passing**: Models particle interactions through sophisticated attention mechanisms, mimicking how particles influence each other in high-energy collisions.
+
+This architecture should achieve high AUC values on the four-top classification task by leveraging both the power of deep learning and the fundamental physics principles of particle interactions.

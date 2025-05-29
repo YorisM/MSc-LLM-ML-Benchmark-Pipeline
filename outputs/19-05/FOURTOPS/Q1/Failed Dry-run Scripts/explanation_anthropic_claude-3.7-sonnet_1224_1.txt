@@ -1,0 +1,37 @@
+This solution addresses the four-top-quark classification task with several key components:
+
+1. **Data Preprocessing (MyPreprocessor class):**
+   - Separates global features (E_T_miss and phi_Et_miss) from object features
+   - Applies standard scaling to all numerical features
+   - Maintains object identity information while scaling their properties
+   - Creates derived features:
+     - Total object count per event
+     - Sum of transverse momentum (pT) across all objects
+     - HT (scalar sum of jet pT)
+   - Handles the variable-length, sparse, zero-padded nature of the data
+
+2. **Model Architecture (FourTopClassifier):**
+   - **Object-Aware Processing**: Each physical object is processed independently at first
+   - **Embedding for Object IDs**: Learns representations for different particle types
+   - **Multi-head Self-Attention**: Uses attention mechanisms to capture relationships between particles
+   - **Feature Integration**: Combines global event features with object-level features
+
+3. **Key Model Components:**
+   - **Attention Blocks**: Enable learning relationships between different objects in an event
+   - **Object Feature Encoding**: Processes each object's features independently
+   - **Masking for Padding**: Zero contributions from padding tokens to avoid their influence
+
+4. **Training Approach:**
+   - Binary cross-entropy loss with logits for stable training
+   - Adam optimizer with weight decay to prevent overfitting
+   - Learning rate scheduling based on validation performance
+   - Full tracking of metrics (loss, accuracy, AUC) during training
+
+The solution is designed to address several key challenges in particle physics event classification:
+
+- **Physics Awareness**: The model architecture respects the inherent structure of collision events
+- **Variable Object Count**: Handles events with different numbers of particles
+- **Feature Engineering**: Derives physically meaningful quantities like total pT and HT
+- **Efficiency**: Processes the data without excessive memory requirements
+
+This approach should effectively distinguish four-top-quark production events from background processes by capturing both the individual properties of particles and their relationships within each event.

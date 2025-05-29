@@ -1,0 +1,7 @@
+This code defines a binary classification model for classifying particle collision events. The model uses PyTorch for implementation. First, the MyPreprocessor class is defined to normalize the input data, ensuring all features contribute equally to model training. It uses the StandardScaler from sklearn to fit and transform the training data. 
+
+The make_model function creates a simple feedforward neural network with three layers: an input layer with 128 neurons, a hidden layer with 64 neurons, and an output layer with a single neuron using a sigmoid activation function to provide probabilities for binary classification. 
+
+The training function, train_model, performs the training process over a specified number of epochs, computing the binary cross-entropy loss and accuracy for both training and validation datasets. The function uses the Adam optimizer and tracks loss and accuracy metrics throughout the epochs, returning the trained model, loss, and accuracy lists for evaluation.
+
+The model architecture is designed to be straightforward, allowing potential learning of patterns in kinematic properties of collision events while maintaining AUC as the evaluation metric.

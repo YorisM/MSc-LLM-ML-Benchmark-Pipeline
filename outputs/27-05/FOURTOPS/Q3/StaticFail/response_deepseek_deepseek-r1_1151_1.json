@@ -1,0 +1,57 @@
+{
+  "model": "deepseek/deepseek-r1",
+  "usage": {
+    "prompt_tokens": 2108,
+    "completion_tokens": 13720,
+    "total_tokens": 15828
+  },
+  "prompt_chars": 8666,
+  "code": "import torch\nimport numpy as np\nfrom torch import nn\nfrom torch.utils.data import TensorDataset, DataLoader\nfrom sklearn.metrics import roc_auc_score\n\nclass MyPreprocessor:\n    def __init__(self):\n        self.unique_obj_types = []\n        \n    def fit(self, X, y=None):\n        obj_types = []\n        for j in range(18):\n            obj_type_col = X[:, 2 +5*j]\n            non_zero = obj_type_col[obj_type_col != 0]\n            obj_types.append(non_zero)\n        all_obj_types = torch.cat(obj_types)\n        self.unique_obj_types = torch.unique_types)._types).tolist()\n        return self\n    \n    def transform(self, X):\n        N = X.shape[0]\n        et_miss = X[:, 0].unsqueeze(1)\n        phi_et_miss = X[:, 1].unsqueeze(1)\n        \n        processed_objects = []\n        num_obj_types = len(self.unique_obj_types)\n        for j in range(18):\n            start_idx = 2 +5*j\n            obj_type = X[:, start_idx]\n            E = X[:, start_idx +1].unsqueeze(1)\n            pT = X[:, start_idx +2].unsqueeze(1)\n            eta = X[:, start_idx +3].unsqueeze(1)\n            phi = X[:, start_idx +4].unsqueeze(1)\n            \n            px = pT * torch.cos(phi)\n            py = pT * torch.sin(phi)\n            delta_phi = phi - phi_et_miss\n            delta_phi = (delta_phi + np.pi) % (2 * np.pi) - np.pi\n            \n            obj_type_onehot = torch.zeros((N, num_obj_types), dtype=torch.float32)\n            if num_obj_types > 0:\n                for k, val in enumerate(self.unique_obj_types):\n                    mask = (obj_type == val)\n                    obj_type_onehot[:, k] = mask.float()\n            \n            features = torch.cat([\n                obj_type_onehot,\n                E, pT, eta, phi,\n                px, py,\n                delta_phi\n            ], dim=1)\n            processed.append(f.append(features)\n        \n        objects_features = torch.cat(processed_objects, dim=1)\n        global_features = torch.cat([et_miss, phi_et_miss], dim=1)\n        all_features = torch.cat([global_features, objects_features], dim=1)\n        return all_features\n    \n    def fit_transform(self, X, y=None):\n        self.fit(X, y)\n        return self.transform(X)\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\ndef make_model(input_dim: int):\n    class ParticleClassifier(nn.Module):\n        def __init__(self, input_dim):\n            super().__init__()\n            self.F = (input_dim -2) //18\n            self.embed_dim = 64\n            self.num_slots = 4\n            self.slot_dim = 64\n            \n            self.obj_embed = nn.Linear(self.F, self.embed_dim)\n            self.slots = nn.Parameter(torch.randn(1, self.num_slots, self.slot_dim))\n            self.num_iterations = 3\n            \n            self.norm_input = nn.LayerNorm(self.embed_dim)\n            self.norm_slots = nn.LayerNorm(self.slot_dim)\n            self.norm_mlp = nn.LayerNorm(self.slot_dim)\n            self.mlp = nn.Sequential(\n                nn.Linear(self.slot_dim, 128),\n                nn.ReLU(),\n                nn.Linear(128, self.slot_dim)\n            )\n            \n            self.global_embed = nn.Linear(2, 64)\n            self.final_mlp = nn.Sequential(\n                nn.Linear(64 + self.num_slots * self.slot_dim, 256),\n                nn.ReLU(),\n                nn.Linear(256, 64),\n                nn.ReLU(),\n                nn.Linear(64, 1)\n            )\n        \n        def forward(self, x):\n            batch_size = x.size(0)\n            global_features = x[:, :2]\n            objects_flat = x[:, 2:].view(batch_size, 18, self.F)\n            \n            obj_emb = self.obj_embed(objects_flat)\n            num_obj_types = self.F -7\n            obj_type_onehot = objects_flat[:, :, :num_obj_types]\n            mask = obj_type_onehot.sum(dim=2) > 0\n            \n            slots = self.slots.repeat(batch_size, 1, 1)\n            for _ in range(self.num_iterations):\n                slots_prev = slots\n                inputs = self.norm_input(obj_emb)\n                slots_norm = self.norm_slots(slots)\n                attn_logits = torch.einsum('bse,bke->bsk', inputs, slots_norm)\n                attn_logits = attn_logits.masked_fill(~mask.unsqueeze(2), -1e9)\n                attn = torch.softmax(attn_logits, dim=1)\n                \n                updates = torch.einsum('bsk,bse->bke', attn, inputs)\n                slots = slots + updates\n                slots = self.mlp(self.norm_mlp(slots)) + slots_prev\n            \n            slots_agg = slots.view(batch_size, -1)\n            global_emb = self.global_embed(global_features)\n            combined = torch.cat([global_emb, slots_agg], dim=1)\n            return self.final_mlp(combined).squeeze(1)\n    \n    return ParticleClassifier(input_dim)\n\nEPOCHS = 10\n\ndef train_model(model, train_loader, val_loader, epochs):\n    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')\n    model.to(device)\n    criterion = nn.BCEWithLogitsLoss()\n    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)\n    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', patience=2, factor=0.5)\n    \n    train_loss, val_loss, train_acc, val_acc = [], [], [], []\n    best_val_auc = 0.0\n    \n    for epoch in range(epochs):\n        model.train()\n        epoch_train_loss = 0.0\n        correct_train = 0\n        total_train = 0\n        for inputs, labels in train_loader:\n            inputs, labels = inputs.to(device), labels.float().to(device)\n            optimizer.zero_grad()\n            outputs = model(inputs)\n            loss = criterion(outputs, labels)\n            loss.backward()\n            optimizer.step()\n            \n            epoch_train_loss += loss.item() * inputs.size(0)\n            preds = (torch.sigmoid(outputs) > 0.5).int()\n            correct_train += (preds == labels.int()).sum().item()\n            total_train += labels.size(0)\n        \n        train_loss.append(epoch_train_loss / total_train)\n        train_acc.append(correct_train / total_train)\n        \n        model.eval()\n        epoch_val_loss = 0.0\n        correct_val = 0\n        total_val = 0\n        all_preds = []\n        all_labels = []\n        with torch.no_grad():\n            for inputs, labels in val_loader:\n                inputs, labels = inputs.to(device), labels.float().to(device)\n                outputs = model(inputs)\n                loss = criterion(outputs, labels)\n                epoch_val_loss += loss.item() * inputs.size(0)\n                preds = (torch.sigmoid(outputs) > 0.5).int()\n                correct_val += (preds == labels.int()).sum().item()\n                total_val += labels.size(0)\n                all_preds.extend(torch.sigmoid(outputs).cpu().numpy())\n                all_labels.extend(labels.cpu().numpy())\n        \n        val_loss.append(epoch_val_loss / total_val)\n        val_acc.append(correct_val / total_val)\n        val_auc = roc_auc_score(all_labels, all_preds)\n        print(f'Epoch {epoch+1}, Val AUC: {val_auc:.4f}')\n        scheduler.step(val_auc)\n        \n        if val_auc > best_val_auc:\n            best_val_auc = val_auc\n            torch.save(model.state_dict(), 'best_model.pth')\n    \n    model.load_state_dict(torch.load('best_model.pth'))\n    return model, train_loss, val_loss, train_acc, val_acc",
+  "explanation": "The solution combines physics-informed feature engineering with a novel architecture:\n\n1. **Preprocessing**:\n- Extracts particle-type information via one-hot encoding\n- Computes physics features: px/py from pT/phi, delta_phi relative to missing ET\n- Preserves global event features (missing ET)\n\n2. **Slot Attention Model**:\n- Uses 4 slots (matching four-top physics) with iterative attention\n- Masking ignores zero-padded particles\n- Combines slot representations with global event features\n\n3. **Training**:\n- BCE loss with adaptive learning rate based on validation AUC\n- Model checkpointing preserves best performing weights\n- Layer normalization stabilizes attention computations\n\nThis approach explicitly models particle groupings while maintaining interpretability through the slot mechanism. The feature engineering incorporates domain knowledge about angular correlations and momentum decomposition, complementing the architecture's ability to discover relevant particle combinations.",
+  "reasoning": null,
+  "PyLint": [
+    {
+      "type": "error",
+      "module": "script_deepseek_deepseek-r1_1151_1",
+      "obj": "",
+      "line": 63,
+      "column": 51,
+      "endLine": null,
+      "endColumn": null,
+      "path": "outputs\\27-05\\FOURTOPS\\Q3\\script_deepseek_deepseek-r1_1151_1.py",
+      "symbol": "syntax-error",
+      "message": "Parsing failed: 'unmatched ')' (script_deepseek_deepseek-r1_1151_1, line 63)'",
+      "message-id": "E0001"
+    }
+  ],
+  "Bandit": {
+    "errors": [
+      {
+        "filename": ".\\./outputs/27-05/FOURTOPS/Q3/script_deepseek_deepseek-r1_1151_1.py",
+        "reason": "syntax error while parsing AST from file"
+      }
+    ],
+    "generated_at": "2025-05-27T09:51:45Z",
+    "metrics": {
+      ".\\./outputs/27-05/FOURTOPS/Q3/script_deepseek_deepseek-r1_1151_1.py": {
+        "loc": 236,
+        "nosec": 0,
+        "skipped_tests": 0
+      },
+      "_totals": {
+        "CONFIDENCE.HIGH": 0,
+        "CONFIDENCE.LOW": 0,
+        "CONFIDENCE.MEDIUM": 0,
+        "CONFIDENCE.UNDEFINED": 0,
+        "SEVERITY.HIGH": 0,
+        "SEVERITY.LOW": 0,
+        "SEVERITY.MEDIUM": 0,
+        "SEVERITY.UNDEFINED": 0,
+        "loc": 236,
+        "nosec": 0,
+        "skipped_tests": 0
+      }
+    },
+    "results": []
+  }
+}

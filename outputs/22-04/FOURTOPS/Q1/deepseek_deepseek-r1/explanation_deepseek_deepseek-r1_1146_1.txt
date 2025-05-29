@@ -1,0 +1,13 @@
+The provided solution addresses the challenge with several key components:
+
+1. **Data Preprocessing**: Separates sample weights from features and normalizes features using training statistics. This ensures proper scaling and accounts for event importance through weights.
+
+2. **Neural Architecture**: Implements a deep MLP with batch normalization and dropout layers to handle high-dimensional sparse data while preventing overfitting. The network structure (512-256-128 nodes) provides sufficient capacity for pattern recognition.
+
+3. **Weighted Loss Function**: Uses BCEWithLogitsLoss with per-sample weighting to properly account for cross-section-based event importance during training. This aligns optimization with the physics significance of events.
+
+4. **Training Optimization**: Employs AdamW with weight decay and learning rate scheduling for stable training convergence. The learning rate adjusts based on validation performance.
+
+5. **Performance Tracking**: Measures both loss and accuracy during training/validation phases, though AUC optimization is implicitly handled through proper weighting and model capacity.
+
+This approach balances processing variable-length particle data through smart preprocessing and a permutation-invariant architecture, while leveraging deep learning best practices for robust classification performance.

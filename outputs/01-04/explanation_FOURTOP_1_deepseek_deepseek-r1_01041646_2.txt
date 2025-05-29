@@ -1,0 +1,14 @@
+The code implements a neural network for classifying particle collision events into signal (tttt) vs background (tt+X). Key features:
+1. **Architecture**: Processes event-level global features (E_T_miss, phi) and per-particle features using parallel embeddings.
+   - Particle features are embedded via MLP and aggregated with mask
+   - Global features processed separately
+   - Combined features pass through final classifier
+2. **Efficient Weight Handling**: Uses event weights (first feature) for weighted BCE loss
+3. **Training Details**:
+   - AdamW optimizer with weight decay
+   - Learning rate scheduling
+   - Gradient clipping
+4. **Validation**: Weighted AUC calculation using validation set weights
+5. **Dry Run Support**: Quick verification via small data subset
+
+The model leverages Deep Sets architecture principles while adapting to particle physics data characteristics (variable-length objects, sparse encoding).

@@ -1,0 +1,26 @@
+This Python code performs binary classification to distinguish four-top events from background processes using a deep neural network, with the goal of maximizing AUC.
+
+Key features:
+
+1. **Data Preprocessing:**
+   - Standardizes input features with `StandardScaler` to ensure faster and more stable training.
+   - Handles tensor conversion and dimensionality correctly.
+
+2. **Model Architecture:**
+   - A feedforward neural network with 3 hidden layers using `ReLU`, `BatchNorm1d`, and `Dropout` (regularization).
+   - Final layer uses `Sigmoid` for binary classification.
+   - Architecture allows learning complex patterns while reducing overfitting.
+
+3. **Training Loop:**
+   - Uses `Adam` optimizer and `BCELoss` on sigmoid output.
+   - Uses `roc_auc_score` to track AUC on training and validation sets each epoch.
+   - Uses PyTorch's `DataLoader` with batching and shuffling.
+
+4. **Evaluation & Plotting:**
+   - Tracks and plots both loss and AUC for training/validation.
+   - Saves plots and trained model.
+
+5. **Device Support:**
+   - Training leverages GPU if available.
+
+This structure is designed with scientific accuracy and numerical performance in mind to give the highest possible AUC score using PyTorch.

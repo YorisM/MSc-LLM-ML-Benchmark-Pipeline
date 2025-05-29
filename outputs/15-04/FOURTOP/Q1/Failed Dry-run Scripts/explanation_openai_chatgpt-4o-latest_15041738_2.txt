@@ -1,0 +1,10 @@
+The solution builds a binary classifier to discriminate signal from background in simulated high-energy physics events using a feed-forward neural network. Key steps include:
+
+1. **Preprocessing**: Standardizes input features using `StandardScaler` for better training performance.
+2. **Model Architecture**: A deep neural network with three hidden layers (128-64-32 neurons) with ReLU activation, batch normalization, and dropout (to reduce overfitting).
+3. **Loss Function**: Binary Cross Entropy (BCE) because this is a binary classification problem.
+4. **AUC Maximization**: During training and evaluation, we compute AUC using `sklearn.metrics.roc_auc_score` to track model's ability to distinguish between classes. AUC is more reliable than accuracy when class distributions are balanced.
+5. **Training Loop**: Includes batch processing using DataLoaders, optimizer (Adam), and real-time printing of loss and AUC progression.
+6. **Plotting**: Saves progress of both loss and AUC across epochs for training and validation sets.
+
+This setup ensures that evaluation is focused on AUC as required, and produces efficient and generalizable models.

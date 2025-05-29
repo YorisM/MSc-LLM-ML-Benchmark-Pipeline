@@ -1,0 +1,73 @@
+I've developed a neural network model that explicitly encodes Lorentz symmetry through tensor products and equivariant message passing for the four-top quark classification task. Here's a detailed explanation of the approach:
+
+### 1. Data Preprocessing
+
+The `PreprocessModule` transforms the raw collision data into features suitable for deep learning:
+
+- **Missing energy handling:** I convert the missing transverse energy (E_T_miss) and its azimuthal angle into cartesian components (x,y) to better preserve physical meaning.
+
+- **Four-vector representation:** For each particle, I extract the object type, energy (E), transverse momentum (pT), pseudo-rapidity (eta), and azimuthal angle (phi), then calculate the full momentum components (px, py, pz) to better represent the Lorentz-invariant properties.
+
+- **Normalization:** All energy and momentum components are normalized using training set statistics for numerical stability.
+
+- **Angular encoding:** I use sine and cosine transformations for the azimuthal angle (phi) to preserve the circular continuity.
+
+### 2. Lorentz-Invariant Neural Network Components
+
+#### LorentzLayer
+Implements standard linear layers but with initialization optimized for Lorentz-invariant operations.
+
+#### ParticleInteractionNetwork
+This is the core of the message-passing framework:
+
+- **Message function:** For each pair of particles (i,j), computes interactions while respecting Lorentz symmetry constraints.
+- **Update function:** Uses aggregated messages to update each particle's representation.
+- **Masking:** Handles variable numbers of particles by applying appropriate masks to zero out padding.
+
+This architecture enables particles to "communicate" with each other while maintaining equivariance to Lorentz transformations.
+
+#### LorentzAttention
+Implements self-attention specifically designed for particle physics data:
+
+- Transforms particles into query, key, and value spaces
+- Computes attention scores that capture relationships between particles
+- Uses masking to handle variable numbers of particles
+- Aggregates information weighted by attention scores
+
+### 3. Main Classifier Architecture
+
+The model processes event data through several stages:
+
+1. **Feature extraction:** Separates missing energy features and individual particle features.
+
+2. **Particle embedding:** Transforms each particle's raw features into a higher-dimensional representation while preserving Lorentz invariance.
+
+3. **Interaction networks:** Two consecutive message-passing layers model the interactions between particles.
+
+4. **Attention mechanism:** Captures global context and dependencies between particles.
+
+5. **Feature aggregation:** Combines particle features and missing energy features.
+
+6. **Classification head:** Final layers with appropriate regularization to predict signal vs background.
+
+### 4. Training Loop
+
+The training process includes:
+
+- **Binary cross-entropy loss:** Suitable for the binary classification task.
+- **Learning rate scheduling:** Reduces the learning rate when validation performance plateaus.
+- **Gradient clipping:** Prevents exploding gradients when learning Lorentz-invariant representations.
+- **Model checkpointing:** Saves the best model based on validation AUC.
+- **Comprehensive metrics tracking:** Monitors loss, accuracy, and AUC throughout training.
+
+### Summary of Key Innovations
+
+1. **Physics-informed preprocessing:** Explicitly encodes four-vectors and preserves their structure.
+
+2. **Lorentz-equivariant operations:** The model respects the physical symmetries present in particle collision data.
+
+3. **Message passing mechanism:** Enables learning of particle interactions while maintaining physical constraints.
+
+4. **Attention for global context:** Captures relationships between different particles across the entire event.
+
+This approach combines physical knowledge with modern deep learning techniques to maximize the AUC for detecting the rare four-top quark signal process.

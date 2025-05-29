@@ -1,0 +1,52 @@
+{
+  "model": "openai/gpt-4o-mini",
+  "usage": {
+    "prompt_tokens": 2064,
+    "completion_tokens": 1234,
+    "total_tokens": 3298,
+    "prompt_tokens_details": {
+      "cached_tokens": 1920
+    },
+    "completion_tokens_details": {
+      "reasoning_tokens": 0
+    }
+  },
+  "prompt_chars": 8666,
+  "code": "import torch\nimport numpy as np\nfrom torch import nn\nfrom torch.utils.data import TensorDataset, DataLoader\nimport torch.nn.functional as F\n\nclass MyPreprocessor:\n    def __init__(self):\n        pass\n\n    def fit(self, X, y=None):\n        return self\n\n    def transform(self, X):\n        # Extract features and reshape for higher dimensional input\n        N, F = X.shape  # N events, F features\n        features = X.view(N, 18, 5)  # Reshaping to (N, max_objects, properties_per_object)\n        # E_T_miss and phi_Et_miss are retained as additional features\n        E_T_miss = features[:, 0, 0].unsqueeze(1)  # (N, 1)\n        phi_Et_miss = features[:, 1, 0].unsqueeze(1)  # (N, 1)\n        # Getting energies and transverse momenta\n        energies = features[:, :, 1]  # (N, max_objects)\n        momenta = features[:, :, 2]  # (N, max_objects)\n        # Create augmented features based on invariant transverse mass (approx)\n        augmented_features = torch.cat((E_T_miss, phi_Et_miss, energies.sum(axis=1, keepdim=True), momenta.sum(axis=1, keepdim=True)), dim=1)  # Concatenate new features\n        return augmented_features.float()  # Return tensor\n\n    def fit_transform(self, X, y=None):\n        self.fit(X, y)\n        return self.transform(X)\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\ndef make_model(input_dim: int):\n    model = nn.Sequential(\n        nn.Linear(input_dim, 128),\n        nn.ReLU(),\n        nn.Linear(128, 64),\n        nn.ReLU(),\n        nn.Linear(64, 1),\n        nn.Sigmoid()\n    )\n    return model\n\nEPOCHS = 10\n\ndef train_model(model, train_loader, val_loader, epochs):\n    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)\n    criterion = nn.BCELoss()\n    train_loss = []\n    val_loss = []\n    train_acc = []\n    val_acc = []\n    for epoch in range(epochs):\n        model.train()\n        running_loss = 0.0\n        correct = 0\n        total = 0\n        for X_batch, y_batch in train_loader:\n            optimizer.zero_grad()\n            outputs = model(X_batch).squeeze()\n            loss = criterion(outputs, y_batch.float())\n            loss.backward()\n            optimizer.step()\n            running_loss += loss.item()\n            predicted = (outputs > 0.5).int()\n            total += y_batch.size(0)\n            correct += (predicted == y_batch).sum().item()\n        train_loss.append(running_loss / len(train_loader))\n        train_acc.append(correct / total)\n\n        # Validation step\n        model.eval()\n        val_running_loss = 0.0\n        correct_val = 0\n        total_val = 0\n        with torch.no_grad():\n            for X_val_batch, y_val_batch in val_loader:\n                val_outputs = model(X_val_batch).squeeze()\n                val_loss_value = criterion(val_outputs, y_val_batch.float())\n                val_running_loss += val_loss_value.item()\n                val_predicted = (val_outputs > 0.5).int()\n                total_val += y_val_batch.size(0)\n                correct_val += (val_predicted == y_val_batch).sum().item()\n        val_loss.append(val_running_loss / len(val_loader))\n        val_acc.append(correct_val / total_val)\n\n    return model, train_loss, val_loss, train_acc, val_acc",
+  "explanation": "This code implements a binary classification model in particle physics to distinguish between signal and background events using a simple feedforward neural network.\n\n1. **Preprocessing Class**: The `MyPreprocessor` class reshapes and extracts relevant features from the input dataset. It reshapes the training data to create a representation that accounts for the variable number of objects in each event, while also allowing for additional features like the sum of energies and momenta. It retains the variables for missing transverse energy and its angle, which are critical for event classification in high-energy collisions.\n\n2. **Model Definition**: The `make_model` function creates a simple feedforward neural network. The first layer takes the dimension of the augmented features and has 128 neurons, a common size that allows the model to learn complex patterns. The model ends with a Sigmoid activation function to give probabilities for the binary classification task.\n\n3. **Training Loop**: The `train_model` function implements the training procedure for the model. It includes both training and validation steps, allowing the model to update its weights based on the training data and evaluate its performance on validation data. The Binary Cross-Entropy (BCE) loss is used, which is suitable for binary classification tasks.\n\n4. **Performance Tracking**: Metrics such as training loss, validation loss, training accuracy, and validation accuracy are tracked over multiple epochs to provide insights into the model's performance and convergence.\n\nWith just a few epochs (10), this configuration aims to balance simplicity and performance without large computational overhead, adhering to the constraints given (e.g., runtime, memory). The model's architecture is efficient enough to stay below the 50 MB limit.",
+  "reasoning": null,
+  "PyLint": [],
+  "Bandit": {
+    "errors": [],
+    "generated_at": "2025-05-27T08:58:24Z",
+    "metrics": {
+      ".\\./outputs/27-05/FOURTOPS/Q3/script_openai_gpt-4o-mini_1058_4.py": {
+        "CONFIDENCE.HIGH": 0,
+        "CONFIDENCE.LOW": 0,
+        "CONFIDENCE.MEDIUM": 0,
+        "CONFIDENCE.UNDEFINED": 0,
+        "SEVERITY.HIGH": 0,
+        "SEVERITY.LOW": 0,
+        "SEVERITY.MEDIUM": 0,
+        "SEVERITY.UNDEFINED": 0,
+        "loc": 150,
+        "nosec": 0,
+        "skipped_tests": 0
+      },
+      "_totals": {
+        "CONFIDENCE.HIGH": 0,
+        "CONFIDENCE.LOW": 0,
+        "CONFIDENCE.MEDIUM": 0,
+        "CONFIDENCE.UNDEFINED": 0,
+        "SEVERITY.HIGH": 0,
+        "SEVERITY.LOW": 0,
+        "SEVERITY.MEDIUM": 0,
+        "SEVERITY.UNDEFINED": 0,
+        "loc": 150,
+        "nosec": 0,
+        "skipped_tests": 0
+      }
+    },
+    "results": []
+  }
+}

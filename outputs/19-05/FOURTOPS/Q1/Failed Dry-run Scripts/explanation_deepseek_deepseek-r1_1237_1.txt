@@ -1,0 +1,23 @@
+The provided solution focuses on maximizing AUC through neural network design and appropriate preprocessing. Key aspects:
+
+1. **Preprocessing**:
+- Normalization using per-feature mean/std while handling sparsity by ignoring zero-padded entries
+- Conversion to PyTorch tensors for GPU acceleration
+
+2. **Model Architecture**:
+- 3-layer MLP with batch normalization and dropout for regularization
+- Starting with 128 units in first hidden layer, reducing to 64
+- Sigmoid output for probabilistic classification
+
+3. **Training Protocol**:
+- Adam optimizer with L2 regularization (weight decay)
+- Learning rate scheduler tied to validation AUC
+- BCE loss optimized directly
+- Balanced accuracy tracking while focusing on AUC metric
+
+4. **Efficiency Considerations**:
+- Model size kept under 50MB through hidden layer dimensions
+- Early stopping potential via scheduler (though epochs fixed at safe 15)
+- Batch processing for memory efficiency
+
+This architecture provides a good tradeoff between model capacity and computational efficiency while incorporating physics knowledge about jet feature relationships through batch normalization and dropout regularization.

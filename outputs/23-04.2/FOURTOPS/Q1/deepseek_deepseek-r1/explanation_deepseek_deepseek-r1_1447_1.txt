@@ -1,0 +1,25 @@
+The code implements a neural network classifier optimized for AUC maximization using particle physics data
+Key aspects:
+1. **Preprocessing**:
+- Log transforms and normalizes weights
+- Normalizes missing energy
+- Decomposes phi angles into sin/cos components
+- Per-feature normalization of 4-vector kinematics (E, pT, η) from non-zero objects
+
+2. **Architecture**:
+- Custom TorchScript-compatible preprocessing module
+- Neural network with batchnorm and dropout for regularization
+- 256 ➔ 128 ➔ 1 architecture
+
+3. **Optimization**:
+- BCEWithLogits loss withAdamW optimizer
+- Cyclical function representations for angles
+- Tracked AUС for early stopping
+
+4. **TechnicalFeatures**:
+- Support for variable-length padded objects via masking
+- GPU acceleration
+- Scriptable modules for deployment
+- Maintains gradient flow through preprocessing
+
+This approach addresses particle physics challenges via angle decomposition, variable-length handling, and feature engineering while maintaining mathematically sound normalization procedures. The architecture balances complexity and regularization to maximize discrimination power.

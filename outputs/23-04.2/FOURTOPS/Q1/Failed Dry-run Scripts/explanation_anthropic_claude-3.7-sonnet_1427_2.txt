@@ -1,0 +1,39 @@
+The code implements a binary classifier to distinguish between signal (pp → tttt) and background (tt + X) processes in particle physics. Here's a detailed explanation of the implementation:
+
+1. **Data Preprocessing (PreprocessModule)**:
+   - Normalizes features using training set statistics (mean and standard deviation)
+   - Handles NaN and Inf values by replacing them with zeros
+   - Structures the data to extract meaningful physics-based features:
+     - Missing transverse energy features
+     - Object-level features (energy, transverse momentum, pseudorapidity, azimuthal angle)
+     - Engineered aggregate features like total energy, total transverse momentum
+     - Object counts by type and their associated kinematic properties
+   - The preprocessing preserves the essential physics information while organizing it for the model
+
+2. **Classifier Architecture**:
+   - Combines a deep neural network with transformer blocks for attention-based learning
+   - Initial feature extraction using dense layers with batch normalization and dropout
+   - Transformer blocks to capture complex relationships between different physics objects
+   - Final classification head with multiple layers for robust prediction
+   - This architecture can handle the variable-length nature of collision events and learn the complex interactions between particles
+
+3. **Training Strategy**:
+   - Uses Focal Loss to handle potential class imbalance, focusing more on hard examples
+   - AdamW optimizer with weight decay for regularization
+   - OneCycleLR scheduler for effective learning rate management
+   - Gradient clipping to prevent exploding gradients
+   - Model selection based on validation AUC (the target metric)
+   - Early saving of best model during training
+
+4. **Physics-Informed Decisions**:
+   - The preprocessing preserves important physics quantities like energy, momentum, and angular distributions
+   - Features are engineered based on physics knowledge (e.g., separating object types and calculating their aggregate properties)
+   - The transformer architecture can learn correlations between particles produced in the collision, which is crucial for identifying rare four-top events
+
+5. **Performance Considerations**:
+   - Efficient data processing with tensor operations for speed
+   - Batch processing to handle large datasets
+   - Memory-efficient design with appropriate batch sizes
+   - Regular evaluation on validation set to monitor performance
+
+This approach maximizes AUC by combining physics domain knowledge with advanced deep learning techniques, particularly leveraging the transformer architecture's ability to model relationships between different particles in collision events.

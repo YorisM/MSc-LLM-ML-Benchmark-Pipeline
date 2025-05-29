@@ -1,0 +1,31 @@
+This solution focuses on maximizing AUC for the binary classification task of identifying four-top quark events in particle physics data. Here's a detailed explanation:
+
+1. **Data Preprocessing**:
+   - I implemented a sophisticated feature extraction function that processes the raw particle physics data into meaningful features, converting the raw tensor data into physics-relevant quantities.
+   - For each event, we extract basic properties (weight, missing transverse energy) and categorize particles into leptons, jets, and b-jets. This categorization is crucial in particle physics analysis.
+   - Engineered features include: counts of different particle types, energy/momentum sums, angular separations between particles (delta-phi, delta-R), and missing energy significance. These are all standard features in high-energy physics analyses.
+   - Features are standardized using StandardScaler to have zero mean and unit variance, which helps with model convergence.
+
+2. **Model Architecture**:
+   - I designed a deep residual neural network with weight normalization, which has proven effective for tabular data while avoiding common issues like vanishing gradients.
+   - The model consists of:
+     - An input projection layer that expands input features to a higher dimensional space
+     - 4 residual blocks with skip connections, each containing layer normalization and non-linear SELU activations
+     - A prediction head that reduces dimensions and outputs a single logit
+   - Weight normalization and SELU activations help with faster convergence and better generalization
+   - Dropout layers (20%) throughout prevent overfitting
+
+3. **Training Strategy**:
+   - Used BCEWithLogitsLoss which combines a sigmoid activation with binary cross-entropy loss, providing better numerical stability
+   - Adam optimizer with a small weight decay term for further regularization
+   - Learning rate scheduler (ReduceLROnPlateau) that reduces the learning rate when validation AUC plateaus
+   - Model selection based on best validation AUC rather than loss or accuracy, directly optimizing for our target metric
+   - Full training loop with separate training and validation phases
+   - Metrics tracking including loss, accuracy and AUC for both training and validation sets
+
+4. **Performance Optimization**:
+   - Use of PyTorch DataLoader for efficient batching and data loading
+   - GPU acceleration when available
+   - Model checkpoint saving to retain the best-performing weights
+
+This approach combines domain knowledge of particle physics with modern deep learning techniques to effectively differentiate between signal and background events in this four-top quark classification task.

@@ -1,0 +1,58 @@
+## Lorentz-Inspired Feature Engineering for Four Top Quark Classification
+
+This solution tackles the four-top-quark signal vs background classification challenge by focusing on **feature engineering** that incorporates principles of Lorentz invariance, rather than implementing a complex Lorentz Equivariant Neural Network (like LGN) which would require external libraries forbidden by the challenge constraints.
+The primary goal is to maximize the Area Under the ROC Curve (AUC).
+
+**1. Data Preprocessing (`PreprocessModule`, `preprocess_data`):**
+
+*   **Understanding Input:** The input tensor `X` (shape `[batch, 105]`) is assumed to contain global event features (Missing Transverse Energy `MET`, `MET_phi` at indices 0, 1) followed by features for up to 20 physics objects (particles like jets, leptons). Each object is assumed to have 5 features (`E`, `pT`, `eta`, `phi`, `tag/other`), totalling 100 features (indices 2-101). The final 3 features are ignored.
+*   **4-Vector Construction:** For each object, the standard 4-momentum `(E, px, py, pz)` is calculated from the given `(E, pT, eta, phi)`. Stability is enhanced by clamping `eta` values before applying `sinh`.
+*   **Masking:** A mask is created based on transverse momentum (`pT > 1e-3`) to identify valid physics objects and ignore zero-padded entries.
+*   **Feature Engineering:** Instead of feeding raw kinematics, a set of physically motivated and Lorentz-inspired features (16 in total) are computed:
+    *   **MET Components:** `met_x`, `met_y`.
+    *   **Global Event Properties:**
+        *   Number of valid objects (`n_obj`).
+        *   Scalar sum of `pT` of valid objects (`sum_pt`).
+        *   Invariant mass of the vector sum of all valid object 4-momenta (`m_total`). This is a Lorentz scalar.
+        *   Scalar sum of energy (`sum_E`) of valid objects (related to `HT`).
+    *   **Leading/Subleading Objects:** Features of the two objects with the highest `pT` are extracted:
+        *   Kinematics: `E`, `pT`, `eta`, `phi`.
+        *   Invariant mass (`m_lead`, `m_sublead`), calculated from their individual 4-vectors (another Lorentz scalar).
+    *   **Log Scaling/Normalization:** Features with large ranges (like energies, momenta, masses) are log-scaled (`log1p`) for stability before normalization. Angular features are roughly scaled.
+*   **Normalization:** The final 16 engineered features are standardized (zero mean, unit variance) using statistics computed *only* from the training set (`X_train`). Mean and standard deviation are stored as buffers in `PreprocessModule`.
+*   **Implementation:** All calculations are done using PyTorch operations only, making the `PreprocessModule` TorchScript-compatible as required.
+
+**2. Classifier Model (`Classifier`):**
+
+*   **Architecture:** A Multi-Layer Perceptron (MLP) is used. Given the engineered features which already encode significant physical information (including some Lorentz invariants), a standard MLP is expected to perform well.
+*   **Layers:** It consists of three hidden layers with ReLU activations, BatchNorm1d, and Dropout for regularization.
+    *   Input (16 features) -> 128 -> 64 -> 32 -> Output (1 logit).
+*   **Output:** A single output neuron producing raw logits is used, suitable for `BCEWithLogitsLoss`.
+*   **Regularization:** BatchNorm helps stabilize training, and Dropout reduces overfitting.
+
+**3. Training Loop (`train_model`):**
+
+*   **Loss Function:** `nn.BCEWithLogitsLoss` is used for binary classification, providing numerical stability compared to using a Sigmoid layer followed by BCELoss.
+*   **Optimizer:** `AdamW` is chosen, often performing well with deep learning models.
+*   **Learning Rate Scheduler:** `ReduceLROnPlateau` monitors the validation AUC and reduces the learning rate if it plateaus, helping to find a better minimum.
+*   **Metric Tracking:** Training/Validation loss and accuracy are tracked per epoch.
+*   **AUC Calculation:** Crucially, the validation AUC (`roc_auc_score`) is calculated at the end of each validation phase. This is the primary metric for model evaluation and for the learning rate scheduler.
+*   **Best Model Saving:** The state dictionary of the model achieving the highest validation AUC during training is stored and loaded back at the end, ensuring the returned/saved model corresponds to the best observed performance on the validation set according to the target metric.
+*   **Gradient Clipping:** Gradient clipping (`clip_grad_norm_`) is added to prevent exploding gradients during training.
+*   **Device Handling:** The code automatically uses a CUDA GPU if available, otherwise falls back to CPU.
+
+**4. Main Function (`main`, plotting, saving):**
+
+*   Follows the provided template structure.
+*   Loads data, sets up preprocessing, initializes the model with the correct input dimension derived from the preprocessed data.
+*   Calls the training loop.
+*   If not a `dryrun`, it saves:
+    *   The best model's state dictionary (`.pth`).
+    *   The scripted model (`.pt`) for deployment.
+    *   The scripted preprocessor module (`.pt`).
+    *   Plots of training/validation loss and accuracy over epochs.
+*   Includes error handling for data loading and file saving.
+
+**Rationale Summary:**
+
+This approach prioritizes extracting meaningful, physics-informed features that incorporate Lorentz invariance (`m_total`, `m_lead`, `m_sublead`) and other relevant event characteristics (`MET`, object counts, `pT` sums, leading object kinematics). This feature engineering step aims to simplify the classification task for a standard MLP, maximizing the AUC within the library constraints. The training loop is carefully constructed with appropriate loss, optimizer, scheduler, and AUC tracking to optimize for the target metric.

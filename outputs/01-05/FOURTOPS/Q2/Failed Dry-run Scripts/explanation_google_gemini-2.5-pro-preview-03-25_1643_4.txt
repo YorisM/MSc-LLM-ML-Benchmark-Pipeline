@@ -1,0 +1,37 @@
+1.  **Introduction**: The code implements a binary classifier for particle physics events (four-top quark signal vs. background) using a neural network designed to incorporate Lorentz symmetry principles. The primary goal is to maximize the Area Under the ROC Curve (AUC).
+
+2.  **Data Loading and Preprocessing**:
+    *   `load_data`: Loads data from CSV files into PyTorch tensors.
+    *   `PreprocessModule`: A `torch.nn.Module` that standardizes the input features using mean and standard deviation derived *only* from the training set. These statistics are stored as buffers, making the module TorchScript-compatible.
+    *   `preprocess_data`: Calculates the mean and standard deviation for standardization, initializes the `PreprocessModule`, applies it to the training and validation sets (though usually deferred), and creates `DataLoader` instances for batching and shuffling.
+
+3.  **Lorentz Symmetry Integration**:
+    *   **Core Idea**: Instead of treating particle kinematic features (`E, pT, eta, phi`) as independent scalars, the network first converts them into relativistic four-vectors (`E, px, py, pz`). Operations are then performed on these four-vectors in a way that respects Lorentz symmetry.
+    *   `to_cartesian`: A helper function (`@torch.jit.script` compatible) to convert (`pT`, `eta`, `phi`, `E`) to Cartesian four-vectors (`E`, `px`, `py`, `pz`). Includes clamping for numerical stability.
+    *   `minkowski_dot`: A helper function (`@torch.jit.script` compatible) to compute the Minkowski dot product (`v1 · v2 = v1[0]*v2[0] - v1[1]*v2[1] - ...`) between two four-vectors, which is a Lorentz invariant scalar.
+    *   `LorentzLayer`: This custom layer processes particle four-vectors. It calculates pairwise Lorentz invariants like the invariant mass squared of pairs `(p_i + p_j)^2` and pairwise dot products `p_i · p_j`. It aggregates these features for each particle (e.g., summing contributions from all other particles) and combines them with single-particle invariants like `p_i^2`. These derived scalar features, along with basic kinematics like energy `E` and momentum magnitude `|p|`, are then processed by a simple Multi-Layer Perceptron (MLP). The use of invariants ensures that the scalar features generated respect Lorentz symmetry.
+
+4.  **Classifier Model (`Classifier`)**:
+    *   **Input Processing**: Takes the standardized, flattened input tensor.
+    *   **Feature Extraction**: Separates global features (Missing Transverse Energy - MET) from particle features. Reshapes the particle data into `(Batch, MaxParticles, FeaturesPerParticle)`. Creates a mask to identify valid (non-padded) particles.
+    *   **Four-Vector Conversion**: Converts particle kinematics to Cartesian four-vectors using `to_cartesian`.
+    *   **Lorentz Network**: Passes the four-vectors and mask through a sequence of `LorentzLayer` instances. Each layer refines the scalar features associated with each particle based on interactions with other particles, maintaining Lorentz covariance principles implicitly through the use of invariants.
+    *   **Aggregation**: Aggregates the final scalar features from all valid particles in an event using masked mean pooling (summing features of valid particles and dividing by their count).
+    *   **Final Prediction**: Concatenates the aggregated particle features with the global MET features. This combined vector is fed into a final MLP that outputs a single logit for binary classification.
+
+5.  **Training Loop (`train_model`)**:
+    *   **Standard Setup**: Uses `AdamW` optimizer and `BCEWithLogitsLoss` (suitable for binary classification logits).
+    *   **Device Handling**: Moves model and data to the appropriate device (GPU if available, else CPU).
+    *   **Metrics Tracking**: Monitors and records training/validation loss and accuracy per epoch.
+    *   **AUC Calculation**: Crucially, calculates the validation AUC score after each epoch by collecting all validation predictions and labels.
+    *   **Learning Rate Scheduling**: Implements `ReduceLROnPlateau` scheduler, which reduces the learning rate if the validation AUC stagnates, helping to fine-tune the model.
+
+6.  **Plotting and Saving (`plot_and_save`, `main`)**:
+    *   Standard functions to plot training/validation loss and accuracy curves.
+    *   Added plotting for the validation AUC curve, as it is the primary metric.
+    *   The `main` function orchestrates the workflow: loading data, preprocessing, initializing the model, training, and saving the trained model (`state_dict`), a TorchScript version of the model, the preprocessor, and performance plots.
+    *   Handles saving artifacts correctly based on the script's execution environment and name.
+
+7.  **Scriptability**: Key components like `PreprocessModule`, `to_cartesian`, `minkowski_dot`, and potentially the `Classifier` itself (if dependencies allow) are made TorchScript-compatible using `torch.jit.script` or `nn.Module` structure, allowing for deployment.
+
+8.  **Overall Design**: The network attempts to learn from the Lorentz structure of the events by computing invariant features derived from four-vectors rather than using the raw kinematic variables directly in a standard MLP or GNN. This physics-informed approach aims to improve classification performance, especially for complex processes sensitive to relativistic effects.

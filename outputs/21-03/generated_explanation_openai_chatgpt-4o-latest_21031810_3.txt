@@ -1,0 +1,11 @@
+This code defines and trains a deep neural network classifier to maximize the AUC score for distinguishing between signal and background events in a particle physics dataset. 
+
+1. **Model Definition**: The `ParticlePhysicsClassifier` is a feedforward neural network with four fully connected layers, `ReLU` activations, and batch normalization, followed by a final sigmoid activation to output probability values.
+
+2. **Data Preparation**: The function `prepare_data` creates PyTorch data loaders to facilitate mini-batch training.
+
+3. **Training Function**: `train_model` uses binary cross-entropy loss (BCELoss) and the Adam optimizer to train the network. After each epoch, it evaluates model performance on the validation set using the AUC metric.
+
+4. **Model Training**: The model is trained on `X_train` with labels `Y_train`, using data loaders in the training loop. The validation AUC is computed after each epoch to track performance improvements.
+
+This approach ensures effective training while monitoring AUC as the primary metric, facilitating optimal classification of rare high-energy physics events.

@@ -1,0 +1,27 @@
+This solution implements an advanced neural network architecture and preprocessing pipeline tailored for particle physics data:
+
+1. **Data Preprocessing**:
+- **Masked Normalization**: Calculates feature statistics while ignoring zero-padded entries to prevent distortion
+- **Weight Separation**: Removes event weights from input features to prevent target leakage
+- **Feature Masking**: Multiplies normalized features by mask to nullify padding effects
+
+2. **Network Architecture**:
+- **Layer Normalization**: Stable training on variable-sparsity data
+- **Multi-head Self-attention**: Captures complex inter-object relationships
+- **Position-wise Feed Forward**: Learned feature transformations
+- **Deep Learning Head**: Creates non-linear decision boundaries
+
+3. **Training Enhancements**:
+- **Large Batch Sizes**: 2048 batch size improves gradient estimates
+- **Learning Rate Scheduling**: Adaptive adjustment based on validation AUC
+- **Early Stopping**: Implicit through model checkpointing
+- **Gradient Clipping**: Prevents exploding gradients
+- **Separating Train/Val Data Loaders**: Prevents data leakage
+- **EBM-calibrated Output**: Sigmoid for probabilistic interpretation
+
+4. **Physical Sensitivities**:
+- Respects variable-length nature through masked operations
+- Maintains permutation invariance via self-attention
+- Preserves physical units through rigorous normalization
+
+This architecture achieves superior performance by focusing on data-specific characteristics while maintaining physical interpretability. The masked attention mechanism is particularly effective at handling sparse particle collision events with variable topology.

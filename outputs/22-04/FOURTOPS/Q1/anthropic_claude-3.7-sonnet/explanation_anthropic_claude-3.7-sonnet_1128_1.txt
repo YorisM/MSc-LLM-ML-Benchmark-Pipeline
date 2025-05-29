@@ -1,0 +1,27 @@
+This code implements a binary classifier for the four-top quark events classification problem. Here's a detailed explanation of the approach:
+
+1. **Data Preprocessing**:
+   - The data is normalized using StandardScaler to ensure all features are on the same scale.
+   - I extract the event weights (first column), which will be used for weighted loss calculation.
+   - I identify valid physics objects by checking for non-zero values in the energy, pT, eta, and phi components.
+   - I count the number of valid objects per event as a new feature, which helps the model understand the event complexity.
+
+2. **Model Architecture**:
+   - I implemented a deep neural network with 5 fully-connected layers, gradually decreasing in size (512→256→128→64→1).
+   - Each hidden layer includes batch normalization to stabilize training and prevent internal covariate shift.
+   - Leaky ReLU activations are used to help with the gradient flow in deeper networks.
+   - Dropout layers with rates between 0.2-0.3 are added to prevent overfitting.
+   - The final layer uses a sigmoid activation to output probabilities for binary classification.
+
+3. **Training Strategy**:
+   - I use Binary Cross Entropy (BCE) loss which is appropriate for binary classification tasks.
+   - The Adam optimizer is employed with a small weight decay (1e-5) for regularization.
+   - A learning rate scheduler (ReduceLROnPlateau) is implemented to reduce the learning rate when the validation AUC plateaus.
+   - Most importantly, I incorporate the event weights into the loss calculation, ensuring that events with higher weights (representing rarer processes) have proportionally greater influence on model training.
+   - I save the best model based on validation AUC, which directly optimizes for our target metric.
+
+4. **Metric Tracking**:
+   - Instead of traditional accuracy, I track and optimize for AUC (Area Under the ROC Curve) using sklearn's roc_auc_score.
+   - This ensures direct optimization of the evaluation metric specified in the problem.
+
+For this high-energy physics problem, the model architecture considers the sparse and variable-length nature of the data. By leveraging physics-inspired features, normalizing the data appropriately, and using a weighted loss function, the model can better distinguish the rare four-top quark signal from the background processes. The AUC optimization strategy directly aligns with the goal of achieving high sensitivity in the classification task.

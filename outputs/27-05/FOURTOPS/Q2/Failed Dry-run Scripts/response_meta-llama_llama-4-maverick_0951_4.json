@@ -1,0 +1,46 @@
+{
+  "model": "meta-llama/llama-4-maverick",
+  "usage": {
+    "prompt_tokens": 2017,
+    "completion_tokens": 1683,
+    "total_tokens": 3700
+  },
+  "prompt_chars": 8559,
+  "code": "import torch\nimport numpy as np\nfrom torch import nn\nfrom torch.utils.data import TensorDataset, DataLoader\nimport torch.nn.functional as F\n\nclass MyPreprocessor:\n    def __init__(self):\n        pass\n\n    def fit(self, X, y=None):\n        return self\n\n    def transform(self, X):\n        # Separate the missing ET magnitude and azimuth from the object features\n        E_T_miss = X[:, 0].unsqueeze(1)  # Shape: [N, 1]\n        phi_E_T_miss = X[:, 1].unsqueeze(1)  # Shape: [N, 1]\n        objects = X[:, 2:].view(-1, 18, 5)  # Shape: [N, 18, 5]\n        # Calculate the total energy and momentum for each object\n        E = objects[:, :, 1].unsqueeze(2)  # Shape: [N, 18, 1]\n        p_T = objects[:, :, 2].unsqueeze(2)  # Shape: [N, 18, 1]\n        eta = objects[:, :, 3].unsqueeze(2)  # Shape: [N, 18, 1]\n        phi = objects[:, :, 4].unsqueeze(2)  # Shape: [N, 18, 1]\n        p_x = p_T * torch.cos(phi)  # Shape: [N, 18, 1]\n        p_y = p_T * torch.sin(phi)  # Shape: [N, 18, 1]\n        p_z = p_T * torch.sinh(eta)  # Shape: [N, 18, 1]\n        # Combine the features\n        features = torch.cat((E_T_miss, phi_E_T_miss, E, p_x, p_y, p_z), dim=1)  # Shape: [N, 19, 1]\n        # Mask out the padded objects\n        mask = (objects[:, :, 0] != 0).unsqueeze(2)  # Shape: [N, 18, 1]\n        features = torch.cat((features[:, :2, :], features[:, 2:, :] * mask), dim=1)  # Shape: [N, 19, 1]\n        # Flatten the features\n        features = features.view(features.size(0), -1)  # Shape: [N, 19]\n        return features\n\n    def fit_transform(self, X, y=None):\n        self.fit(X, y)\n        return self.transform(X)\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\nclass LorentzEquivariantLayer(nn.Module):\n    def __init__(self, input_dim, output_dim):\n        super(LorentzEquivariantLayer, self).__init__()\n        self.fc = nn.Linear(input_dim, output_dim)\n\n    def forward(self, x):\n        # x shape: [N, 19]\n        E_T_miss = x[:, 0].unsqueeze(1)  # Shape: [N, 1]\n        phi_E_T_miss = x[:, 1].unsqueeze(1)  # Shape: [N, 1]\n        objects = x[:, 2:].view(-1, 17)  # Shape: [N, 17]\n        E = objects[:, 0].unsqueeze(1)  # Shape: [N, 1]\n        p_x = objects[:, 1].unsqueeze(1)  # Shape: [N, 1]\n        p_y = objects[:, 2].unsqueeze(1)  # Shape: [N, 1]\n        p_z = objects[:, 3].unsqueeze(1)  # Shape: [N, 1]\n        # Calculate the Lorentz invariant dot product\n        dot_product = E**2 - p_x**2 - p_y**2 - p_z**2  # Shape: [N, 1]\n        # Concatenate the features\n        features = torch.cat((E_T_miss, phi_E_T_miss, dot_product), dim=1)  # Shape: [N, 3]\n        # Apply a fully connected layer\n        output = self.fc(features)  # Shape: [N, output_dim]\n        return output\n\ndef make_model(input_dim: int):\n    model = nn.Sequential(\n        LorentzEquivariantLayer(input_dim, 128),\n        nn.ReLU(),\n        nn.Linear(128, 1),\n        nn.Sigmoid()\n    )\n    return model\n\nEPOCHS = 10\n\ndef train_model(model, train_loader, val_loader, epochs):\n    criterion = nn.BCELoss()\n    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)\n    train_loss = []\n    val_loss = []\n    train_acc = []\n    val_acc = []\n    for epoch in range(epochs):\n        model.train()\n        total_loss = 0\n        total_correct = 0\n        total_samples = 0\n        for X, y in train_loader:\n            optimizer.zero_grad()\n            output = model(X)\n            loss = criterion(output, y.unsqueeze(1).float())\n            loss.backward()\n            optimizer.step()\n            total_loss += loss.item()\n            total_correct += ((output > 0.5) == y.unsqueeze(1)).sum().item()\n            total_samples += y.size(0)\n        train_loss.append(total_loss / len(train_loader))\n        train_acc.append(total_correct / total_samples)\n        model.eval()\n        total_loss = 0\n        total_correct = 0\n        total_samples = 0\n        with torch.no_grad():\n            for X, y in val_loader:\n                output = model(X)\n                loss = criterion(output, y.unsqueeze(1).float())\n                total_loss += loss.item()\n                total_correct += ((output > 0.5) == y.unsqueeze(1)).sum().item()\n                total_samples += y.size(0)\n        val_loss.append(total_loss / len(val_loader))\n        val_acc.append(total_correct / total_samples)\n    return model, train_loss, val_loss, train_acc, val_acc",
+  "explanation": "The problem is to develop a binary classification model that can distinguish between signal and background events in particle physics experiments. The dataset consists of simulated proton-proton collision events with features representing the kinematic properties of the particles involved. The task is to write Python code for a binary classification model that explicitly encodes Lorentz symmetry via tensor products and equivariant message passing.\n\nThe provided code template is used as the basis for the solution. The `MyPreprocessor` class is implemented to preprocess the data by separating the missing ET magnitude and azimuth from the object features, calculating the total energy and momentum for each object, and combining the features. The `LorentzEquivariantLayer` class is implemented to define a Lorentz equivariant layer that calculates the Lorentz invariant dot product of the object features. The `make_model` function is used to define a binary classification model that uses the `LorentzEquivariantLayer`.\n\nThe model is trained using the Adam optimizer and binary cross-entropy loss. The training loop is implemented in the `train_model` function, which also calculates the training and validation loss and accuracy at each epoch. The model is evaluated on the validation dataset after each epoch.\n\nThe code is written in Python using the PyTorch library for deep learning. The explanation is provided as comments in the code and in this text.",
+  "reasoning": null,
+  "PyLint": [],
+  "Bandit": {
+    "errors": [],
+    "generated_at": "2025-05-27T07:52:07Z",
+    "metrics": {
+      ".\\./outputs/27-05/FOURTOPS/Q2/script_meta-llama_llama-4-maverick_0951_4.py": {
+        "CONFIDENCE.HIGH": 0,
+        "CONFIDENCE.LOW": 0,
+        "CONFIDENCE.MEDIUM": 0,
+        "CONFIDENCE.UNDEFINED": 0,
+        "SEVERITY.HIGH": 0,
+        "SEVERITY.LOW": 0,
+        "SEVERITY.MEDIUM": 0,
+        "SEVERITY.UNDEFINED": 0,
+        "loc": 169,
+        "nosec": 0,
+        "skipped_tests": 0
+      },
+      "_totals": {
+        "CONFIDENCE.HIGH": 0,
+        "CONFIDENCE.LOW": 0,
+        "CONFIDENCE.MEDIUM": 0,
+        "CONFIDENCE.UNDEFINED": 0,
+        "SEVERITY.HIGH": 0,
+        "SEVERITY.LOW": 0,
+        "SEVERITY.MEDIUM": 0,
+        "SEVERITY.UNDEFINED": 0,
+        "loc": 169,
+        "nosec": 0,
+        "skipped_tests": 0
+      }
+    },
+    "results": []
+  }
+}

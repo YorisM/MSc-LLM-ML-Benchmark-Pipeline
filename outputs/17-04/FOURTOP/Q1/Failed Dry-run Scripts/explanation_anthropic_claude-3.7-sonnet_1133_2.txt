@@ -1,0 +1,36 @@
+The solution addresses the task of binary classification for detecting four top quark events in high energy physics collisions. Here's a breakdown of the approach:
+
+1. **Data Preprocessing and Feature Engineering**:
+   - The raw data consists of variable-length physics events with kinematic properties of particles.
+   - I extracted meaningful physics-inspired features from the raw tensor data:
+     - Basic features: weight, missing transverse energy, and missing phi angle
+     - Object-specific features: energy, transverse momentum, pseudorapidity, and azimuthal angle for individual objects
+     - Derived features: E/pt and pt/E ratios which help identify different particle types
+     - Inter-object features: delta_phi, delta_eta, delta_R (angular separation), pt ratios between object pairs
+     - Global event features: sum of all object pT, ratio of missing ET to sum of all pT
+   - Applied standardization to normalize the features
+   - Created efficient DataLoaders with appropriate batch size
+
+2. **Model Architecture**:
+   - Implemented a deep neural network with residual connections to facilitate gradient flow during training
+   - Used weight normalization to improve convergence and stability
+   - Key components:
+     - Input layer with batch normalization to handle the various scales of physics features
+     - Multiple residual blocks to learn complex patterns while maintaining gradient flow
+     - Dropout layers to prevent overfitting (critical for generalizing to unseen physics events)
+     - Final output layer with a single logit (for binary classification)
+
+3. **Training Strategy**:
+   - Used BCEWithLogitsLoss for binary classification
+   - Adam optimizer with weight decay to prevent overfitting
+   - Learning rate scheduling with ReduceLROnPlateau to adapt the learning rate based on validation AUC
+   - Early stopping by saving the best model based on validation AUC
+   - Comprehensive tracking of metrics: loss, accuracy, and most importantly, AUC
+
+4. **Physics Relevance**:
+   - The feature engineering is grounded in particle physics understanding:
+     - Used delta_R to capture angular separation between particles (critical for identifying decay products)
+     - Incorporated object counts and kinematic distributions that differentiate signal (four top quarks) from background
+     - Leveraged ratios of energies and momenta that are indicative of specific decay chains
+
+This solution prioritizes the AUC metric by implementing a custom model that learns from physics-inspired features while employing techniques like residual connections, batch normalization, and appropriate regularization to maximize discrimination power between signal and background events.

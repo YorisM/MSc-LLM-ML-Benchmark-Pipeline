@@ -1,0 +1,26 @@
+This code implements a binary classifier using a fully connected neural network with PyTorch to maximize the Area Under the Curve (AUC) metric for a particle classification problem. 
+
+1. **Neural Network Architecture:**
+   - It consists of four layers (256, 128, 64, and output layer of size 1).
+   - Each layer (except the last) uses ReLU activation and batch normalization to stabilize training.
+   - The final layer applies a Sigmoid activation to produce probabilistic outputs.
+
+2. **Data Preparation:**
+   - The input data is assumed to be available as PyTorch tensors (`X_train`, `Y_train`, `X_val`, `Y_val`).
+   - A dataloader is created to efficiently batch process the dataset during training and evaluation.
+
+3. **Training Process:**
+   - The training loop runs for 30 epochs.
+   - Binary cross-entropy loss (`BCELoss`) is used as the optimization criterion.
+   - The Adam optimizer is used with a learning rate of 0.001.
+   - The model trains using mini-batches.
+
+4. **Validation and AUC Computation:**
+   - After each epoch, the model is evaluated on the validation dataset.
+   - The `roc_auc_score` function from `sklearn.metrics` computes the AUC for validation predictions.
+   - The AUC score is printed for each epoch to monitor performance improvements.
+
+5. **GPU Optimization:**
+   - The code automatically detects and utilizes a GPU if available to speed up computations.
+
+By following this approach, the classifier learns to distinguish between signal and background events, thereby maximizing the AUC metric efficiently.
