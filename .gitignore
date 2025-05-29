@@ -9,6 +9,10 @@ test_book.log
 test.py
 
 challenges/FOURTOPS/data/*
+challenges/FOURTOPS/misc/*.csv
+challenges/FOURTOPS/misc/*.h5
+
 challenges/TRACKFORMERS/data*
+challenges/TRACKFORMERS/misc/*.gz
 
 OLD*
