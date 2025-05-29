@@ -23,24 +23,35 @@ logging.basicConfig(
     format=LOG_FORMAT
 )
 
-# Models
-models = ["openai/gpt-4.1",
-          "anthropic/claude-3.7-sonnet",
-          "google/gemini-2.5-pro-preview-03-25", 
-          "x-ai/grok-3-beta",
-          "deepseek/deepseek-chat-v3-0324"]
-
+# Models - Needs at least two models 
+models = ["openai/o3", 
+        "openai/gpt-4o-mini",
+        "anthropic/claude-3.7-sonnet",
+        "google/gemini-2.5-pro-preview",
+        "meta-llama/llama-4-maverick",
+        "deepseek/deepseek-r1"]
 
 # Number of attempts to retrieve correct response
-num_attempts = 5 # set to 5 for 'normal' execution
+num_attempts = 3
 
-# Timers
-execution_timeout = 3600
-dryrun_timeout = 600
+# Max Tokens
+MAX_TOKENS = 16*4096
+
+# Timeouts in seconds
+DRYRUN_TIMEOUT_S = 600
+TRAIN_TIMEOUT_S  = 7200
+EVAL_TIMEOUT_S   = 1800
+
+# Resources
+CPU_LIMIT       = 4
+MEMORY_LIMIT_GB = 32
+PIDS_LIMIT      = 1024
 
 # All the challenges in the pipeline
 challenges = [fourtop_challenge]
 
 # Docker Image
 DOCKER_IMAGE = "llm-script-sandbox:latest"
+DOCKER_TRAINING_IMAGE = "llm-training-sandbox:latest"
+DOCKER_EVAL_IMAGE = "llm-evaluation-sandbox:latest"
 

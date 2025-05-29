@@ -1,12 +1,17 @@
 .env
 .venv
 .venv_bench
+
 __pycache__
+
 log.log
 test_book.ipynb
 test_book.log
 test.py
 outputs/
+
 challenges/FOURTOPS/data/*
 challenges/FOURTOPS/misc/*
+challenges/TRACKFORMERS/data*
+
 OLD*

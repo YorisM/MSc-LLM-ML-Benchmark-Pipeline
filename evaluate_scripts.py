@@ -1,11 +1,12 @@
 # evaluate_scripts.py
 
 # Imports
-import os, glob, logging, torch, csv, time, argparse
+import os, sys, importlib, importlib.util, glob, logging, torch, csv, time, argparse, pickle
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
+from typing import Tuple
 from torch.utils.data import DataLoader, TensorDataset
 from sklearn.metrics import accuracy_score, roc_curve, auc
 
@@ -14,6 +15,52 @@ from sklearn.metrics import accuracy_score, roc_curve, auc
 #   generalize evaluation for multiple challenges
 # - - - - - - - - - - - - -
 
+def _apply_preproc(preproc, x: torch.Tensor) -> torch.Tensor:
+    if callable(preproc):
+        return preproc(x)
+    if hasattr(preproc, "transform"):
+        return preproc.transform(x)
+    raise TypeError("Pre-processor is neither callable nor has .transform()")
+
+def _mount_llm_script(model_dir: str) -> None:
+    """
+    Import the LLM-generated script that lives next to the artefacts and
+    register it *also* as sys.modules['__main__'] so that
+    __main__.MyPreprocessor can be resolved during unpickling.
+    Safe to call more than once per process.
+    """
+    # find the script_<model>_*.py file
+    script_path = next(
+        f for f in os.listdir(model_dir)
+        if f.startswith("script_") and f.endswith(".py")
+    )
+    script_path = os.path.join(model_dir, script_path)
+
+    # If we already loaded *this* script, nothing to do
+    if "__main__" in sys.modules and getattr(sys.modules["__main__"], "__file__", None) == script_path:
+        return
+
+    spec = importlib.util.spec_from_file_location("llm_script", script_path)
+    mod  = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)           # type: ignore[attr-defined]
+
+    sys.modules["llm_script"] = mod        # real name
+    sys.modules["__main__"]   = mod        # alias used inside pickle
+
+def _initialize_artefacts(model_path: str):
+    model_dir = os.path.dirname(model_path)
+
+    # ❶ Make sure MyPreprocessor lives in sys.modules['__main__']
+    _mount_llm_script(model_dir)
+
+    # ❷ Now unpickle safely
+    with open(model_path.replace("_model.pkl", "_preproc.pkl"), "rb") as f:
+        preproc = pickle.load(f)
+    with open(model_path, "rb") as f:
+        model = pickle.load(f)
+
+    return model, preproc
+
 def find_FOURTOPS_models(date_str):
     root = os.path.join("outputs", date_str, "FOURTOPS")
     candidates = []
@@ -21,103 +68,103 @@ def find_FOURTOPS_models(date_str):
         qpath = os.path.join(root, qid)
         if not os.path.isdir(qpath) or qid == "Failed Dry‑run Scripts":
             continue
+        if not os.path.isdir(qpath) or qid == "StaticFail":
+            continue
         for m in os.listdir(qpath):
             mpath = os.path.join(qpath, m)
             if not os.path.isdir(mpath):
                 continue
             # look for any *_scripted.pt
-            for pt in glob.glob(os.path.join(mpath, "*_scripted.pt")):
+            for pt in glob.glob(os.path.join(mpath, "*_model.pkl")):
                 candidates.append((qid, m, pt))
     logging.info(f"Found FOURTOP model candidates: {candidates}")
     return candidates
 
-def load_FOURTOPS_test(batch_size=512):
-    X = pd.read_csv("challenges/FOURTOPS/data/X_test.csv").values
-    Y = pd.read_csv("challenges/FOURTOPS/data/Y_test.csv").values.squeeze()
-    Xt = torch.tensor(X, dtype=torch.float32)
-    Yt = torch.tensor(Y, dtype=torch.long)
-    ds = TensorDataset(Xt, Yt)
-    logging.debug("Loaded FOURTOP test data tensors")
-    return DataLoader(ds, batch_size=batch_size, shuffle=False)
+def load_FOURTOPS_test():
+    X = pd.read_csv('./challenges/FOURTOPS/data/X_test.csv',
+                          dtype=np.float32).to_numpy(copy=False)
+    Y = pd.read_csv('./challenges/FOURTOPS/data/Y_test.csv',
+                          dtype=np.int64).to_numpy(copy=False).ravel()
+    X = torch.from_numpy(X).float()
+    Y = torch.from_numpy(Y).long()
+    test_ds = TensorDataset(X, Y)
+    return (DataLoader(test_ds, batch_size=512, shuffle=False, num_workers=0))
 
-def evaluate_FOURTOPS(pt_path, test_loader):
+def evaluate_FOURTOPS(model_path: str, test_loader) \
+    -> Tuple[np.ndarray, np.ndarray, float, float]:
+    """
+    PARAMETERS
+    model_path  : path to `<MODEL>_model.pkl`
+    test_loader : DataLoader yielding (features, labels)
+
+    RETURNS
+    fpr, tpr : np.ndarray
+    auc      : float
+    acc      : float
+    """
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    logging.info(f"Using device: {device}")
-    logging.info(f"pt_path: {pt_path}")
+    logging.info("Evaluating %s on %s", model_path, device)
 
-    # Load model & preproc
-    model        = torch.jit.load(pt_path, map_location=device).eval()
-    preproc_path = pt_path.replace("_scripted.pt", "_preproc.pt")
-    logging.info(f"preproc_path: {preproc_path}")
-    preproc      = torch.jit.load(preproc_path, map_location=device).eval()
+    model, preproc = _initialize_artefacts(model_path)
+    model = model.to(device)
 
-    # Peek at first batch to choose activation once
-    it = iter(test_loader)
+    # Determine output mode
+    it  = iter(test_loader)
     xb0, yb0 = next(it)
     xb0, yb0 = xb0.to(device), yb0.to(device)
-    xb0 = preproc(xb0)
-    out0 = model(xb0)
+    xb0      = _apply_preproc(preproc, xb0)      # ← fixed: xb0 not xb
+    out0     = model(xb0).detach()
 
     mn, mx = out0.min().item(), out0.max().item()
-    if mn >= 0.0 and mx <= 1.0:
-        mode = "already-probabilities"
+    if 0.0 <= mn <= mx <= 1.0:
+        mode = "prob"
     else:
-        mode = "raw-logits"
+        mode = "logit"
 
-    # Decide head-type & activation function
-    if mode == "already-probabilities":
-        if out0.ndim == 2 and out0.size(1) == 2:
-            act = lambda o: o[:,1]             # two-prob columns
-            head = "2-column probabilities → pick col-1"
-        else:
-            act = lambda o: o.squeeze()       # already 0–1
-            head = "single-probabilities"
+    if mode == "prob":
+        if out0.ndim == 2 and out0.size(1) == 2:          # p(bg), p(sig)
+            act = lambda o: o[:, 1]
+        else:                                             # already (N,)
+            act = lambda o: o.squeeze()
     else:  # raw logits
         if out0.ndim == 2 and out0.size(1) == 1:
             act = lambda o: torch.sigmoid(o).squeeze(1)
-            head = "single-logit → sigmoid"
         elif out0.ndim == 2 and out0.size(1) == 2:
-            act = lambda o: torch.softmax(o,1)[:,1]
-            head = "two-logit → softmax"
+            act = lambda o: torch.softmax(o, 1)[:, 1]
         elif out0.ndim == 1:
             act = lambda o: torch.sigmoid(o)
-            head = "1D logits → sigmoid"
         else:
             raise RuntimeError(f"Unexpected output shape {tuple(out0.shape)}")
 
-    logging.info(f"Detected mode: {mode}; using activation: {head}")
+    logging.info("Output mode: %s; activation chosen.", mode)
 
-    # Now process first batch and the rest
+    # Collect Predictions
+    all_probs  = act(out0).cpu().numpy().tolist()
     all_labels = yb0.cpu().numpy().tolist()
-    all_probs  = act(out0).cpu().detach().numpy().tolist()
 
-    # Continue with remaining batches
     with torch.no_grad():
         for xb, yb in it:
             xb, yb = xb.to(device), yb.to(device)
-            xb = preproc(xb)
-            out = model(xb)
-
-            probs = act(out)
+            xb = _apply_preproc(preproc, xb)
+            probs = act(model(xb))
             all_probs.extend(probs.cpu().numpy().tolist())
             all_labels.extend(yb.cpu().numpy().tolist())
 
-    # Compute ROC / AUC
+    # Metrics
     fpr, tpr, _ = roc_curve(all_labels, all_probs)
     roc_auc     = auc(fpr, tpr)
+    acc         = accuracy_score(all_labels,
+                                 (np.array(all_probs) >= 0.5).astype(int))
 
-    # Compute accuracy at 0.5 threshold
-    preds = (np.array(all_probs) >= 0.5).astype(int)
-    acc   = accuracy_score(all_labels, preds)
-
-    logging.info(f"Eval complete: AUC={roc_auc:.4f}, Acc={acc:.4f}")
+    logging.info("Evaluation finished: AUC %.4f  ACC %.4f", roc_auc, acc)
     return fpr, tpr, roc_auc, acc
 
 def test_FOURTOPS_outputs(date_str: str):
     """
     Walks ./outputs/{date_str}/FOURTOPS/ and, for every question sub-folder
     (except “Failed Dry-run Scripts”), ensures each model folder contains a file
-    that matches the six wildcard patterns below.
+    that matches the seven wildcard patterns below.
 
     Returns dict:  {question_id -> {model_name -> list_of_missing_patterns}}
     """
@@ -135,17 +182,22 @@ def test_FOURTOPS_outputs(date_str: str):
         "*_loss.png",
         "*_accuracy.png",
         "*_ROC.png",
+        "*_manifest.sha256"
     ]
 
     for qid in os.listdir(root):                                    # question folders
         qpath = os.path.join(root, qid)
         if not os.path.isdir(qpath) or qid == "Failed Dry-run Scripts":
             continue
+        if not os.path.isdir(qpath) or qid == "StaticFail":
+            continue
 
         results[qid] = {}
         for model_name in os.listdir(qpath):                        # model folders
             mpath = os.path.join(qpath, model_name)
             if not os.path.isdir(mpath) or model_name == "Failed Dry-run Scripts":
+                continue
+            if not os.path.isdir(mpath) or model_name == "StaticFail":
                 continue
 
             # check each glob-pattern
@@ -156,9 +208,9 @@ def test_FOURTOPS_outputs(date_str: str):
 
             results[qid][model_name] = missing
             if missing:
-                logging.warning("Date %s — %s — Model %s — MISSING: %s", date_str, qid, model_name, ", ".join(missing))
+                logging.warning("Date %s - %s - Model %s - MISSING: %s", date_str, qid, model_name, ", ".join(missing))
             else:
-                logging.info("Date %s — %s — Model %s all present",  date_str, qid, model_name)
+                logging.info("Date %s - %s - Model %s all present",  date_str, qid, model_name)
     return results
 
 
@@ -169,6 +221,7 @@ challenge_evaluators = {
         evaluate=evaluate_FOURTOPS,
         test_outputs=test_FOURTOPS_outputs
     ),
+
     # future ones go here...
 }
 
@@ -225,7 +278,6 @@ def evaluate_results(input_dir):
             plt.close()
 
     logging.info("Summary written to %s", summary_path)
-
 
 def main(date_str="17-04"):
     test_loader = load_FOURTOPS_test()

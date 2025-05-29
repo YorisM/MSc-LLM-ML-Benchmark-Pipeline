@@ -1,0 +1,14 @@
+#  Inference / evaluation container
+
+FROM python:3.13-slim
+RUN useradd -m -s /bin/bash sandbox
+WORKDIR /workspace
+COPY Docker_requirements.txt .
+RUN pip install --no-cache-dir -r Docker_requirements.txt
+COPY docker/seccomp_profile.json /etc/seccomp_profile.json
+COPY docker/predict.sh /usr/local/bin/predict.sh
+RUN chmod +x /usr/local/bin/predict.sh
+USER sandbox
+ENTRYPOINT ["/usr/local/bin/predict.sh"]
+
+# to build the image: docker build -f docker/Dockerfile.eval -t llm-evaluation-sandbox:latest .

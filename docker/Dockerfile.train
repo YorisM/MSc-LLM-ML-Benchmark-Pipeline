@@ -1,0 +1,27 @@
+#  Training-builder container
+
+FROM python:3.13-slim
+
+# 1. Create non-root user
+RUN useradd -m -s /bin/bash sandbox
+
+# 2. Install build essentials then purge
+WORKDIR /workspace
+COPY Docker_requirements.txt .
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends build-essential git \
+ && pip install --no-cache-dir -r Docker_requirements.txt \
+ && apt-get purge -y --auto-remove build-essential git \
+ && rm -rf /var/lib/apt/lists/*
+
+# 3. Copy seccomp profile
+COPY docker/seccomp_profile.json /etc/seccomp_profile.json
+
+# 4. Copy train wrapper
+COPY docker/train.sh /usr/local/bin/train.sh
+RUN chmod +x /usr/local/bin/train.sh
+
+USER sandbox
+ENTRYPOINT ["/usr/local/bin/train.sh"]
+
+# to build the image: docker build -f docker/Dockerfile.train -t llm-training-sandbox:latest .

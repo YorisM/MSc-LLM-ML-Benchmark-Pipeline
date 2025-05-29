@@ -1,12 +1,12 @@
-# ./challenges/TRACKFORMERS/trackformers.py
+# ./challenges/challenge_template.py
 
 from challenges.challenges import Challenge, Question
 
 fourtop_challenge = Challenge(
-    name = "TRACKFORMERS",
+    name = "",
 
     dataset = { 
-        
+
     },
 
     problem_description = r"""** Problem Description **

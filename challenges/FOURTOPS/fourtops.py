@@ -35,7 +35,7 @@ are background processes. All background processes have an equal number of event
 There is not cut on the maximum number of objects and there is no order.    
 
 The contents of the data sets (X_train & X_val) are given below.
-The specific line format is as follows:
+IMPORTANT: The specific line format of the data set is as follows:
 
 E_T_miss, phi_{E_t}_miss, obj_1, E_1, p_T1, eta_1, phi_1, obj_2, E_2, p_t2, eta_2, phi_2, ....
 
@@ -53,169 +53,131 @@ found in the events within in the entire dataset. The dataset is fairly sparse a
 
 The relevant datasets are pytorch tensors with the following properties:
 
-Name: X_train, shape: [241657, 105], dtype: torch.float32, 
+Name: X_train, shape: [241657, 92], dtype: torch.float32, 
 Name: Y_train, shape: [241657], dtype: torch.int64, 
-Name: X_val, shape: [30272, 105], dtype: torch.float32, 
-Name: Y_val, shape: [30272], dtype: torch.int64, 
+Name: X_val, shape: [30272, 92], dtype: torch.float32, 
+Name: Y_val, shape: [30272], dtype: torch.int64
+
+IMPORTANT: Each of these tensors are pre-loaded and available in the environment.
 """,
 
     evaluation_metric = r"""** Evaluation Metric **
 The evaluation metric for this classification task is the area under the curve (AUC)
 value, specified by the area under the receiver operating characteristic (ROC) curve. 
 The AUC summarizes a model's ability to distinguish between positive and 
-negative classes. A value of 1 indicates a perfect classifier, while a 0.5 indicates
-performance no better than random guessing. Mathematically the AUC is defined as:
-$$ AUC = \int_{0}^{1} TPR(t) \, d(FPR(t)) $$
-Where the True Positive Rate (TPR) is defines as:
-$$   TPR = \frac{TP}{TP + FN} $$
-and the False Positive Rate (FPR) is defined as:
-$$ FPR = \frac{FP}{FP + TN} $$
+negative classes. The higher the score the better.
 """,
 
     code_template = r"""** Code Template **
-# ----- FIXED SECTION: Import Libraries -----
-import os, sys, torch
-import pandas as pd
+# 0. ---------- IMPORTS ----------
+import torch
 import numpy as np
-import matplotlib.pyplot as plt
 from torch import nn
 from torch.utils.data import TensorDataset, DataLoader
-from sklearn.metrics import roc_auc_score, accuracy_score
-# <FREE: You may only import python and torch native modules here. NO OTHER MODULES.>
+# Only import extra std-lib modules, torch or sklearn (sub-)modules you actually use.
+# <LLM: Import modules>
 
-# ----- FIXED SECTION: Data Loading -----
-def load_data():
-    X_train_df = pd.read_csv('./challenges/FOURTOPS/data/X_train.csv')
-    Y_train_df = pd.read_csv('./challenges/FOURTOPS/data/Y_train.csv')
-    X_val_df   = pd.read_csv('./challenges/FOURTOPS/data/X_val.csv')
-    Y_val_df   = pd.read_csv('./challenges/FOURTOPS/data/Y_val.csv')
+# 1. ---------- PRE-PROCESSING ----------
+class MyPreprocessor:
+    #    Must implement:
+    #   - fit(X: torch.Tensor, y: torch.Tensor) -> self
+    #   - transform(X: torch.Tensor) -> torch.Tensor
 
-    X_train = torch.tensor(X_train_df.values, dtype=torch.float32)
-    Y_train = torch.tensor(Y_train_df.values, dtype=torch.long).squeeze()
-    X_val   = torch.tensor(X_val_df.values, dtype=torch.float32)
-    Y_val   = torch.tensor(Y_val_df.values, dtype=torch.long).squeeze()
-    return X_train, Y_train, X_val, Y_val
+    # REQUIREMENTS
+    # IMPORTANT: All state must be picklable with the std-lib pickle module.
+    # May allocate NumPy arrays or Torch tensors internally, but:
+    # transform() must be deterministic & output a torch.Tensor of shape (N, features).
+    # Store only derived parameters needed for transform i.e. do not store the raw data
+    # itself in the preprocessor object.
 
-# ----- FREE SECTION: Data Preprocessing -----
-class PreprocessModule(torch.nn.Module):
-    # TorchScript-compatible module applying pre-fitted transformations.
-    # All fitted statistics/constants must be registered as buffers.
-    # Torch operations ONLY (no numpy, no pandas).
-    # Deterministic behavior required (no randomness in forward pass).
-    def __init__(self, **kwargs):
-        super().__init__()
-        # Example pattern for saving constants:
-        # self.register_buffer("my_const", kwargs["my_const"])
-        # <LLM: register any statistics / masks / embeddings here>
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # <LLM: transform x using the stored buffers>
-        return x
+    # DATA SPECIFICS
+    # IMPORTANT: X_train, Y_train, X_val, Y_val are provided as PyTorch tensors in the environment.
+    # Total flat length per event (X_train & X_val): 92
+    # Index  0 :  missing-ET magnitude  (E_T_miss)
+    # Index  1 :  missing-ET azimuth    (phi_Et_miss)
+    # Indices  2-6  : object 1  ->  obj_1, E_1, p_T1, eta_1, phi_1
+    # Indices  7-11 : object 2  -> obj_2, E_2 , p_T_2 , eta_2 , phi_2
+    # ...
+    # Indices 88-92 : object 18 -> obj_18, E_18 , p_T_18 , eta_18 , phi_18
+    # Per-object slice size = 5
+    # Max objects encoded   = 18
 
-def preprocess_data(X_train, Y_train, X_val, Y_val, batch_size):
-    # derive statistics / encodings from training set
-    # <LLM: derive any needed constants here>
+    # TIPS
+    # When modifying data features or feature engineering: annotate tensor size as comments after 
+    # each tensor operation to reduce dimension mismatches.
 
-    preproc = PreprocessModule()
+    # <LLM: Write code to preprocess the data>    
+    def __init__(self):
+        # <LLM: Define and initialize any stateful components here>
+        pass
 
-    X_train_p = preproc(X_train)
-    X_val_p   = preproc(X_val)
+    def fit(self, X, y=None):
+        # <LLM: Extract statistics or fit transformers>
+        return self
 
-    train_ds = TensorDataset(X_train_p, Y_train)
-    val_ds   = TensorDataset(X_val_p,   Y_val)
+    def transform(self, X):
+        # <LLM: Apply preprocessing logic, return torch.Tensor>
+        return X 
 
-    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
-    val_loader   = DataLoader(val_ds,   batch_size=batch_size)
+    def fit_transform(self, X, y=None):
+        self.fit(X, y)
+        return self.transform(X)
 
-    return train_loader, val_loader, preproc
+def make_preprocessor():
+    return MyPreprocessor()
 
-# ----- FREE SECTION: Binary Classifier Definition -----
-class Classifier(nn.Module):
-    def __init__(self, input_dim):
-        super(Classifier, self).__init__()
-        # <LLM: Define your neural network layers here>
+# 2. ---------- MODEL DEFINITION ----------
+def make_model(input_dim: int):
+    # PARAMETERS
+    # inplut_dim : int : Number of features per event after preprocessing.
 
-    def forward(self, x):
-        # <LLM: Define forward propagation here>
-        return x
+    # RETURNS
+    # model : torch.nn.Module : Untrained binary-classifier network.
 
-# ----- FREE SECTION: Training Loop Implementation -----
+    # <LLM: Write code to define a binary-classifier network>
+    return model
+
+# 3. ---------- MODEL TRAINING ----------
+EPOCHS = # <LLM: define the amount of training epochs>    
 def train_model(model, train_loader, val_loader, epochs):
-    # <LLM: Define training loop clearly>
-    # Must return trained model, training_loss, validation_loss, training_acc, validation_acc
-    # Be sure to include basic metric tracking per epoch
-    return model, training_loss, validation_loss, training_acc, validation_acc
+    # PARAMETERS
+    # model : torch.nn.Module   
+    # train_loader: torch.utils.data.DataLoader
+    # val_loader  : torch.utils.data.DataLoader
+    # epochs: int
 
-# ----- FIXED SECTION: Plotting and Saving Outputs -----
-def plot_and_save(metric_train, metric_val, metric_name, filename):
-    plt.figure()
-    plt.plot(metric_train, label=f'Training {metric_name}')
-    plt.plot(metric_val, label=f'Validation {metric_name}')
-    plt.title(f'{metric_name} per Epoch')
-    plt.xlabel('Epoch')
-    plt.ylabel(metric_name)
-    plt.legend()
-    plt.savefig(filename)
-    plt.close()
+    # RETURNS
+    # trained_model : nn.Module          (same instance, trained in-place)
+    # train_loss    : list[float]        (length == epochs)
+    # val_loss      : list[float]
+    # train_acc     : list[float]
+    # val_acc       : list[float]
+    
+    # REQUIREMENTS 
+    # Define training loop clearly including number of epochs
+    # Do NOT pass "verbose=" to any PyTorch scheduler (not supported in this image).
 
-# ----- FIXED SECTION: Main Function -----
-def main(dryrun=False):
-    # Data Loading
-    X_train, Y_train, X_val, Y_val = load_data()
+    # <LLM: Write code to define training loop>
+    return trained_model, train_loss, val_loss, train_acc, val_acc
 
-    # Preprocessing
-    train_loader, val_loader, preproc = preprocess_data(X_train, Y_train, X_val, Y_val)
-
-    # Model Initialization
-    sample_X, _, = next(iter(train_loader))
-    model = Classifier(input_dim=sample_X.shape[1])
-
-    # Training
-    epochs = 1 if dryrun else 10
-
-    # Train the model
-    trained_model, training_loss, validation_loss, training_acc, validation_acc = train_model(
-        model, train_loader, val_loader, epochs=epochs)
-
-    if not dryrun:
-        # determine base name & script directory
-        base       = os.path.splitext(os.path.basename(sys.argv[0]))[0].removeprefix("script_")
-        script_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
-        os.makedirs(script_dir, exist_ok=True)
-
-        # save model
-        model_path = os.path.join(script_dir, f"{base}_model.pth")
-        torch.save(trained_model.state_dict(), model_path)
-
-        # save scripted model
-        scripted_path = os.path.join(script_dir, f"{base}_scripted.pt")
-        torch.jit.script(trained_model).save(scripted_path)
-
-        # save preprocessor
-        scripted_preproc = torch.jit.script(preproc)
-        scripted_preproc.save(os.path.join(script_dir, f"{base}_preproc.pt"))
-
-        # Plot and Save Metrics
-        plot_and_save(training_loss, validation_loss, f"Loss - {base}", os.path.join(script_dir, f"{base}_loss.png"))
-        plot_and_save(training_acc, validation_acc, f"Accuracy - {base}", os.path.join(script_dir, f"{base}_accuracy.png"))
-
-# ----- FIXED SECTION: Entry Point with Dry-run -----
-if __name__ == '__main__':
-    dryrun = '--dryrun' in sys.argv
-    main(dryrun=dryrun)
+# IMPORTANT: DO NOT write code to run the functions defined above,
+# i.e. write code to prepare training data, process-data, traing model, evaluate model performance, etc.
 """,
 
     questions = [
-#        Question("Q1", r""" ** Your Challenge **
-# Write Python code for binary classification maximizing AUC using the code template above.""")
-
-       Question("Q2", r"""** Your Challenge **)
-Write Python code for a neural network which both explicitly encodes Lorentz symmetry via tensor products and equivariant message passing. 
-Maximize the AUC using the code template above.
+        Question("Q1", r""" ** IMPORTANT: Your Challenge **
+Write Python code for a binary classification model focussing on maximizing the AUC using the code template above.
+You may freely choose any pre-processing methods and techniques as well as model architecture and training conventions.                 
 """),
 
-       Question("Q3", r"""** QYour Challenge **)
+       Question("Q2", r"""** IMPORTANT: Your Challenge **
+Write Python code for a binary classification model which both explicitly encodes Lorentz symmetry via tensor products and equivariant message passing. 
+You may freely choose model architecture and training conventions. Focus on maximizing the AUC using the code template above.
+"""),
+
+       Question("Q3", r"""** IMPORTANT: Your Challenge **
 Write Python code for a Transformer based binary classifier which utilizes a "Slot-Attention" mechanism that explicitly groups particles corresponding to top quark decays.
-Inform the model of known physics by creating augmented particle features which complement model architecture. Use the code template above.
-"""),
+Inform the model of known physics by creating augmented particle features which complement model architecture. You may freely choose training conventions. Focus on maximizing the AUC using the code template above.
+""")
 ]
 )

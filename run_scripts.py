@@ -1,16 +1,10 @@
 # run_scripts.py
 
 # Imports
-import os, sys, subprocess, logging, time, argparse, psutil
+import os, sys, config, subprocess, logging, time, argparse, psutil
 import pandas as pd
 from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from config import dryrun_timeout, execution_timeout, DOCKER_IMAGE
-from utils import WSL_path
-
-# - - - - - TODO - - - - - 
-#   properly containerize scripts using docker
-# - - - - - - - - - - - - -
 
 # Execution Flow
 # (main.py)  ─▶ execute_scripts_in_batch(...)
@@ -25,7 +19,6 @@ def naive_safety_check(script_path):
     dangerous_keywords = [
         'os.system',        # executing system commands
         'subprocess.Popen', # launching subprocesses
-        # 'eval(',          # evaluating arbitrary expressions
         'exec(',            # executing arbitrary code
         '__import__',       # dynamic import of modules
         'import socket',    # network operations
@@ -43,13 +36,15 @@ def naive_safety_check(script_path):
         if keyword in code:
             logging.error(f"Script {script_path} contains dangerous keyword: {keyword}")
             return False
-    logging.info("Successfully passed naïve safety check.")    
+    logging.info("Successfully passed naive safety check.")    
     return True
 
 def collect_valid_scripts(base_folder):
     scripts = []
     for root, _, files in os.walk(base_folder):
         if os.path.basename(root) == "Failed Dry-run Scripts":
+            continue
+        elif os.path.basename(root) == "StaticFail":
             continue
         for f in files:
             if f.endswith(".py"):
@@ -84,34 +79,42 @@ def execute_script(
         logging.error("Safety check failed: %s", script_path)
         return False, None, "", "Safety check", 0.0, 0.0
     
+    # Debugging Block
+    logging.debug(f"Script to run inside container: {script_path}")
     rel_script = os.path.relpath(script_path, os.getcwd())
-    # logging.info("Relative script path: %s", rel_script)
-
+    logging.debug("Relative script path: %s", rel_script)
     rel_script = rel_script.replace("\\", "/")
-    # logging.info("Relative script path: %s", rel_script)
-
-    cmd = []
-
-    # path to mount on host, with forward slashes
+    logging.debug("Relative script path: %s", rel_script)
     mount_src = os.path.abspath(os.getcwd()).replace("\\", "/")
-    # logging.info("Docker mount_src: %s", mount_src)
-
-    # build the plain “host:container” volume spec—no embedded quotes!
-    volume_arg = f"{mount_src}:/workspace"
-    # logging.info("Docker volume_arg: %s", volume_arg)
-
+    logging.debug("Docker mount_src: %s", mount_src)
+    
+    cmd = []
     if use_docker:
         cmd = [
             "docker", "run", "--rm",
-            "-v", volume_arg,
+            f"--cpus={config.CPU_LIMIT}",
+            f"--memory={config.MEMORY_LIMIT_GB}g",    # becomes "8g"
+            f"--pids-limit={config.PIDS_LIMIT}",
+            "--network", "none",
+            "--security-opt", f"seccomp=docker/seccomp_profile.json",
+            "-v", f"{mount_src}:/workspace:rw",
+            "-v", f"{mount_src}/challenges/FOURTOPS/data:/data:ro",
             "-w", "/workspace",
-            DOCKER_IMAGE,
-            rel_script
+            "-e", f"TRAIN_TIMEOUT_S={config.TRAIN_TIMEOUT_S}",
+            "-e", f"EVAL_TIMEOUT_S={config.EVAL_TIMEOUT_S}",
+            "-e", f"DRYRUN_TIMEOUT_S={config.DRYRUN_TIMEOUT_S}",
+            "-e", f"CPU_LIMIT={config.CPU_LIMIT}",
+            "-e", f"MEMORY_LIMIT_GB={config.MEMORY_LIMIT_GB}",
+            "-e", f"PIDS_LIMIT={config.PIDS_LIMIT}",
+            "llm-training-sandbox:latest",
+            rel_script,
+            "--dryrun" if dryrun else ""
         ]
         if dryrun:
             cmd.append("--dryrun")
         
-        # logging.info("Final CMD list: %r", cmd)
+        logging.debug("DOCKER CMD: %s", " ".join(cmd))
+
         proc = psutil.Process()
         mem_before = proc.memory_info().rss
         t0 = time.perf_counter()
@@ -121,8 +124,11 @@ def execute_script(
         if dryrun:
             cmd.append("--dryrun")
 
+    logging.debug("Final CMD list: %r", cmd)
+
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=execution_timeout)
+        result = subprocess.run(cmd, capture_output=True, text=True, 
+                                timeout=config.TRAIN_TIMEOUT_S)
         ret = result.returncode
         out, err = result.stdout, result.stderr
         success = (ret == 0)
@@ -141,7 +147,7 @@ def execute_script(
 def run_single_script(script_path: str, *, dryrun: bool = False, 
                       use_docker: bool = True, timeout: float | None = None,
                       ) -> tuple:
-    t = timeout or (dryrun_timeout if dryrun else execution_timeout)
+    t = timeout or (config.DRYRUN_TIMEOUT_S if dryrun else config.TRAIN_TIMEOUT_S)
     return execute_script(
         script_path   = script_path,
         timeout       = t,
@@ -169,7 +175,7 @@ def execute_scripts_in_batch(base_folder, max_workers=1, *, dryrun=False, use_do
     else:
         # parallel
         with ThreadPoolExecutor(max_workers=max_workers) as exe:
-            futures = {exe.submit(run_single_script, s, execution_timeout,
+            futures = {exe.submit(run_single_script, s, config.TRAIN_TIMEOUT_S,
                                 dryrun, use_docker): s for s in scripts}
             for fut in tqdm(as_completed(futures),
                             total=len(scripts),

@@ -1,8 +1,0 @@
-# bandit.yml
-
-skips: [B101, B311]
-exclude_dirs: ["tests"]  # do not scan synthetic exploits
-severity: ["MEDIUM", "HIGH"]
-
-# You can also *include only* certain rules:
-# tests: ["B108","B110","B301","B303","B304"]
