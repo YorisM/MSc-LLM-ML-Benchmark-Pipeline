@@ -1,0 +1,114 @@
+{
+  "LLMGeneration": {
+    "model": "openai/gpt-4o-mini",
+    "Outer_attempt": 1,
+    "Inner attempt": 1,
+    "prompt_tokens": 2041,
+    "prompt_chars": 8535,
+    "response_tokens": 917,
+    "response_chars": 3877,
+    "cost": 3.56175e-05,
+    "generation_ms": 17244,
+    "cached": false,
+    "code": "import torch\nimport numpy as np\nfrom torch import nn\nfrom torch.utils.data import TensorDataset, DataLoader\nfrom sklearn.preprocessing import StandardScaler\n\nclass MyPreprocessor:\n    def __init__(self):\n        self.scaler = StandardScaler()\n\n    def fit(self, X, y=None):\n        self.scaler.fit(X.numpy())\n        return self\n\n    def transform(self, X):\n        return torch.tensor(self.scaler.transform(X.numpy()), dtype=torch.float32)\n\n    def fit_transform(self, X, y=None):\n        self.fit(X, y)\n        return self.transform(X)\n\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n\ndef make_model(input_dim: int):\n    model = nn.Sequential(\n        nn.Linear(input_dim, 128),\n        nn.ReLU(),\n        nn.Dropout(0.5),\n        nn.Linear(128, 64),\n        nn.ReLU(),\n        nn.Linear(64, 1),\n        nn.Sigmoid()\n    )\n    return model\n\nEPOCHS = 30\n\ndef train_model(model, train_loader, val_loader, epochs):\n    criterion = nn.BCELoss()\n    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)\n    train_loss, val_loss, train_acc, val_acc = [], [], [], []\n\n    for epoch in range(epochs):\n        model.train()\n        running_loss = 0.0\n        correct = 0\n        total = 0\n\n        for inputs, labels in train_loader:\n            optimizer.zero_grad()\n            outputs = model(inputs).squeeze()\n            loss = criterion(outputs, labels.float())\n            loss.backward()\n            optimizer.step()\n            running_loss += loss.item()\n\n            predicted = (outputs > 0.5).float()\n            total += labels.size(0)\n            correct += (predicted == labels.float()).sum().item()\n\n        train_acc.append(correct / total)\n        train_loss.append(running_loss / len(train_loader))\n\n        # Validation phase\n        model.eval()\n        val_loss_epoch = 0.0\n        correct_val = 0\n        total_val = 0\n\n        with torch.no_grad():\n            for inputs, labels in val_loader:\n                outputs = model(inputs).squeeze()\n                loss = criterion(outputs, labels.float())\n                val_loss_epoch += loss.item()\n\n                predicted = (outputs > 0.5).float()\n                total_val += labels.size(0)\n                correct_val += (predicted == labels.float()).sum().item()\n\n        val_acc.append(correct_val / total_val)\n        val_loss.append(val_loss_epoch / len(val_loader))\n\n    return model, train_loss, val_loss, train_acc, val_acc",
+    "explanation": "The provided code implements a binary classification model to maximize the AUC metric for distinguishing between particle physics events.\n\n1. **Preprocessing Class**: `MyPreprocessor` is designed to standardize the dataset using sklearn's `StandardScaler`. It fits on the training data and transforms both the training and validation sets.\n2. **Model Architecture**: The `make_model` function constructs a feedforward neural network with two hidden layers (128 and 64 neurons) with ReLU activations and dropout for regularization, suitable for binary classification.\n3. **Training Function**: The `train_model` function includes a standard training loop with the Adam optimizer and binary cross-entropy loss. It tracks both training and validation accuracy/loss over the specified number of epochs.\n4. **Parameters**: EPOCHS is set to 30 for a decent number of training cycles, allowing the model to learn without excessively increasing training time. \n5. **Data Handling**: The model and preprocessor work with PyTorch tensors. Each batch is processed, and loss/accuracy is calculated during the training and validation phases in an efficient manner, adhering to PyTorch practices. Overall, the pipeline is constructed to be efficient while focusing on improving the AUC score through careful preprocessing and model design.",
+    "reasoning": null,
+    "outer_attempt": 3
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-05-30T12:59:37Z",
+    "PyLint": {
+      "passed": false,
+      "messages": [
+        {
+          "type": "error",
+          "module": "script_openai_gpt-4o-mini_1459_3",
+          "obj": "_run",
+          "line": 193,
+          "column": 33,
+          "endLine": 193,
+          "endColumn": 47,
+          "path": "outputs\\30-05\\FOURTOPS\\Q1\\script_openai_gpt-4o-mini_1459_3.py",
+          "symbol": "no-member",
+          "message": "Instance of 'list' has no 'argmin' member",
+          "message-id": "E1101"
+        },
+        {
+          "type": "error",
+          "module": "script_openai_gpt-4o-mini_1459_3",
+          "obj": "_run",
+          "line": 195,
+          "column": 32,
+          "endLine": 195,
+          "endColumn": 45,
+          "path": "outputs\\30-05\\FOURTOPS\\Q1\\script_openai_gpt-4o-mini_1459_3.py",
+          "symbol": "no-member",
+          "message": "Instance of 'list' has no 'argmax' member",
+          "message-id": "E1101"
+        },
+        {
+          "type": "error",
+          "module": "script_openai_gpt-4o-mini_1459_3",
+          "obj": "_run",
+          "line": 197,
+          "column": 31,
+          "endLine": 197,
+          "endColumn": 45,
+          "path": "outputs\\30-05\\FOURTOPS\\Q1\\script_openai_gpt-4o-mini_1459_3.py",
+          "symbol": "no-member",
+          "message": "Instance of 'list' has no 'argmin' member",
+          "message-id": "E1101"
+        },
+        {
+          "type": "error",
+          "module": "script_openai_gpt-4o-mini_1459_3",
+          "obj": "_run",
+          "line": 199,
+          "column": 30,
+          "endLine": 199,
+          "endColumn": 43,
+          "path": "outputs\\30-05\\FOURTOPS\\Q1\\script_openai_gpt-4o-mini_1459_3.py",
+          "symbol": "no-member",
+          "message": "Instance of 'list' has no 'argmax' member",
+          "message-id": "E1101"
+        }
+      ]
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-05-30T12:59:37Z",
+        "metrics": {
+          ".\\./outputs/30-05/FOURTOPS/Q1/script_openai_gpt-4o-mini_1459_3.py": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 158,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 158,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  }
+}

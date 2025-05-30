@@ -1,0 +1,72 @@
+{
+  "LLMGeneration": {
+    "model": "openai/gpt-4o-mini",
+    "Outer_attempt": 1,
+    "Inner attempt": 1,
+    "prompt_tokens": 2041,
+    "prompt_chars": 8535,
+    "response_tokens": 870,
+    "response_chars": 3531,
+    "cost": 4.14075e-05,
+    "generation_ms": 15599,
+    "cached": false,
+    "code": "import torch\nimport numpy as np\nfrom torch import nn\nfrom torch.utils.data import TensorDataset, DataLoader\nfrom sklearn.preprocessing import StandardScaler\n\nclass MyPreprocessor:\n    def __init__(self):\n        self.scaler = StandardScaler()\n\n    def fit(self, X, y=None):\n        self.scaler.fit(X.numpy())  # fit on numpy data\n        return self\n\n    def transform(self, X):\n        return torch.from_numpy(self.scaler.transform(X.numpy())).float()  # transform to tensors\n\n    def fit_transform(self, X, y=None):\n        self.fit(X, y)\n        return self.transform(X)\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\nclass SimpleNN(nn.Module):\n    def __init__(self, input_dim):\n        super(SimpleNN, self).__init__()\n        self.fc1 = nn.Linear(input_dim, 128)\n        self.fc2 = nn.Linear(128, 64)\n        self.fc3 = nn.Linear(64, 1)\n        self.dropout = nn.Dropout(0.2)\n        self.relu = nn.ReLU()\n        self.sigmoid = nn.Sigmoid()\n\n    def forward(self, x):\n        x = self.relu(self.fc1(x))\n        x = self.dropout(x)\n        x = self.relu(self.fc2(x))\n        x = self.dropout(x)\n        x = self.sigmoid(self.fc3(x))\n        return x\n\ndef make_model(input_dim: int):\n    model = SimpleNN(input_dim)\n    return model\n\nEPOCHS = 20  # reasonable epoch number to avoid overfitting\n\ndef train_model(model, train_loader, val_loader, epochs):\n    criterion = nn.BCELoss()  # binary cross entropy loss\n    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)\n    train_loss, val_loss = [], []\n    train_acc, val_acc = [], []\n\n    for epoch in range(epochs):\n        model.train()\n        total_loss, correct = 0, 0\n\n        for batch_x, batch_y in train_loader:\n            optimizer.zero_grad()\n            y_pred = model(batch_x).squeeze()  # remove single-dimensional entries\n            loss = criterion(y_pred, batch_y.float())\n            loss.backward()\n            optimizer.step()\n\n            total_loss += loss.item()\n            preds = (y_pred > 0.5).float()\n            correct += (preds == batch_y).sum().item()\n\n        train_loss.append(total_loss / len(train_loader))\n        train_acc.append(correct / len(train_loader.dataset))\n\n        model.eval()\n        total_val_loss, val_correct = 0, 0\n\n        with torch.no_grad():  # no gradient needed for validation\nde\ntotal_val_loss += criterion(model(batch_x).squeeze(), batch_y.float()).item()\n            val_preds = (model(batch_x).squeeze() > 0.5).float()\n            val_correct += (val_preds == batch_y).sum().item()\n\n        val_loss.append(total_val_loss / len(val_loader))\n        val_acc.append(val_correct / len(val_loader.dataset))\n\n    return model, train_loss, val_loss, train_acc, val_acc",
+    "explanation": "The code defines a simple neural network classification model for distinguishing rare signal processes in particle physics data. The preprocessing is handled using StandardScaler from sklearn to normalize the input features, making the training process more efficient and potentially improving model performance. The model architecture is defined as a feedforward neural network with three linear layers interspersed with dropout for regularization and ReLU activations. The training loop uses binary cross-entropy loss, suitable for binary classification, and tracks both training and validation losses and accuracies. This approach aims to maximize AUC by ensuring robust training and validation processes.",
+    "reasoning": null,
+    "outer_attempt": 2
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-05-30T12:59:04Z",
+    "PyLint": {
+      "passed": false,
+      "messages": [
+        {
+          "type": "error",
+          "module": "script_openai_gpt-4o-mini_1459_2",
+          "obj": "",
+          "line": 122,
+          "column": 0,
+          "endLine": null,
+          "endColumn": null,
+          "path": "outputs\\30-05\\FOURTOPS\\Q1\\script_openai_gpt-4o-mini_1459_2.py",
+          "symbol": "syntax-error",
+          "message": "Parsing failed: 'expected an indented block after 'with' statement on line 121 (script_openai_gpt-4o-mini_1459_2, line 122)'",
+          "message-id": "E0001"
+        }
+      ]
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [
+          {
+            "filename": ".\\./outputs/30-05/FOURTOPS/Q1/script_openai_gpt-4o-mini_1459_2.py",
+            "reason": "syntax error while parsing AST from file"
+          }
+        ],
+        "generated_at": "2025-05-30T12:59:04Z",
+        "metrics": {
+          ".\\./outputs/30-05/FOURTOPS/Q1/script_openai_gpt-4o-mini_1459_2.py": {
+            "loc": 159,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 159,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  }
+}

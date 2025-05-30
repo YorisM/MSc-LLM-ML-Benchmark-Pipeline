@@ -15,8 +15,8 @@ challenges/TRACKFORMERS/data/**
 challenges/TRACKFORMERS/misc/*.gz
 
 outputs/**
+!outputs/**/
 !outputs/**/*.py
 !outputs/**/*.json
 !outputs/**/*.txt
 !outputs/**/*.csv
-

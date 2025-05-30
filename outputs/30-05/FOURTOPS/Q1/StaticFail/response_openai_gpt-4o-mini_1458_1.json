@@ -1,0 +1,114 @@
+{
+  "LLMGeneration": {
+    "model": "openai/gpt-4o-mini",
+    "Outer_attempt": 1,
+    "Inner attempt": 1,
+    "prompt_tokens": 2041,
+    "prompt_chars": 8535,
+    "response_tokens": 1058,
+    "response_chars": 4632,
+    "cost": 3.98475e-05,
+    "generation_ms": 24023,
+    "cached": false,
+    "code": "# 0. ---------- IMPORTS ----------\nimport torch\nimport numpy as np\nfrom torch import nn\nfrom torch.utils.data import TensorDataset, DataLoader\nfrom sklearn.preprocessing import StandardScaler\n\n# 1. ---------- PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.scaler = StandardScaler()\n\n    def fit(self, X, y=None):\n        self.scaler.fit(X.numpy())  # Fit StandardScaler to the training data\n        return self\n\n    def transform(self, X):\n        X_transformed = self.scaler.transform(X.numpy())  # Transform the data using the fitted scaler\n        return torch.tensor(X_transformed, dtype=torch.float32)  # Return as a tensor\n\n    def fit_transform(self, X, y=None):\n        self.fit(X, y)\n        return self.transform(X)\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# 2. ---------- MODEL DEFINITION ----------\ndef make_model(input_dim: int):\n    model = nn.Sequential(\n        nn.Linear(input_dim, 128),\n        nn.ReLU(),\n        nn.Linear(128, 64),\n        nn.ReLU(),\n        nn.Linear(64, 1),\n        nn.Sigmoid()\n    )  # Create a simple feedforward neural network\n    return model\n\n# 3. ---------- MODEL TRAINING ----------\nEPOCHS = 20  # Set the number of training epochs\n\ndef train_model(model, train_loader, val_loader, epochs):\n    criterion = nn.BCELoss()  # Use Binary Cross Entropy loss\n    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)  # Adam optimizer\n    train_loss = []\n    val_loss = []\n    train_acc = []\n    val_acc = []\n\n    for epoch in range(epochs):\n        model.train()  # Set model to training mode\n        total_train_loss = 0\n        total_correct = 0\n        for inputs, labels in train_loader:\n            optimizer.zero_grad()  # Zero gradients\n            outputs = model(inputs)\n            loss = criterion(outputs.squeeze(), labels.float())  # Compute loss\n            loss.backward()  # Backpropagation\n            optimizer.step()  # Update weights\n            total_train_loss += loss.item()\n            predicted = (outputs.squeeze() > 0.5).float()  # Binarize the outputs\n            total_correct += (predicted == labels.float()).sum().item()  # Count correct predictions\n        train_loss.append(total_train_loss / len(train_loader))\n        train_acc.append(total_correct / len(train_loader.dataset))\n\n        model.eval()  # Set model to evaluation mode\n        total_val_loss = 0\n        total_val_correct = 0\n        with torch.no_grad():\n            for inputs, labels in val_loader:\n                outputs = model(inputs)\n                loss = criterion(outputs.squeeze(), labels.float())  # Compute loss\n                total_val_loss += loss.item()\n                predicted = (outputs.squeeze() > 0.5).float()  # Binarize the outputs\n                total_val_correct += (predicted == labels.float()).sum().item()  # Count correct predictions\n        val_loss.append(total_val_loss / len(val_loader))\n        val_acc.append(total_val_correct / len(val_loader.dataset))\n    return model, train_loss, val_loss, train_acc, val_acc",
+    "explanation": "In this implementation, we leverage a simple feed-forward neural network to classify proton-proton collision events as either signal or background processes. \n\n1. **Preprocessing**: We defined a custom class, `MyPreprocessor`, which utilizes `StandardScaler` to normalize the feature data. The preprocessing includes fitting the scaler on the training data and transforming both training and validation data. This helps mitigate biases caused by significant variance in feature scales and datasets. \n\n2. **Model Architecture**: The model consists of three layers with ReLU activation functions and Sigmoid output. The choice of ReLU allows us to handle the non-linearity present in the data, and using a Sigmoid function at the output layer enables binary classification. The architecture is simple to keep the model under 50 MB and computationally efficient given the constraints. \n\n3. **Training Method**: The `train_model` function implements a classical training loop: it computes loss using Binary Cross Entropy, performs backpropagation, and updates weights with the Adam optimizer. It tracks the training and validation losses and accuracies to optimize model performance. The fixed number of epochs is set to 20 to ensure efficient training within the time limit. \n\nOverall, this approach aims to maximize AUC by balancing complexity and interpretability, while ensuring compliance with the outlined treatment of data from the particle physics context.",
+    "reasoning": null,
+    "outer_attempt": 1
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-05-30T12:58:47Z",
+    "PyLint": {
+      "passed": false,
+      "messages": [
+        {
+          "type": "error",
+          "module": "script_openai_gpt-4o-mini_1458_1",
+          "obj": "_run",
+          "line": 186,
+          "column": 33,
+          "endLine": 186,
+          "endColumn": 47,
+          "path": "outputs\\30-05\\FOURTOPS\\Q1\\script_openai_gpt-4o-mini_1458_1.py",
+          "symbol": "no-member",
+          "message": "Instance of 'list' has no 'argmin' member",
+          "message-id": "E1101"
+        },
+        {
+          "type": "error",
+          "module": "script_openai_gpt-4o-mini_1458_1",
+          "obj": "_run",
+          "line": 188,
+          "column": 32,
+          "endLine": 188,
+          "endColumn": 45,
+          "path": "outputs\\30-05\\FOURTOPS\\Q1\\script_openai_gpt-4o-mini_1458_1.py",
+          "symbol": "no-member",
+          "message": "Instance of 'list' has no 'argmax' member",
+          "message-id": "E1101"
+        },
+        {
+          "type": "error",
+          "module": "script_openai_gpt-4o-mini_1458_1",
+          "obj": "_run",
+          "line": 190,
+          "column": 31,
+          "endLine": 190,
+          "endColumn": 45,
+          "path": "outputs\\30-05\\FOURTOPS\\Q1\\script_openai_gpt-4o-mini_1458_1.py",
+          "symbol": "no-member",
+          "message": "Instance of 'list' has no 'argmin' member",
+          "message-id": "E1101"
+        },
+        {
+          "type": "error",
+          "module": "script_openai_gpt-4o-mini_1458_1",
+          "obj": "_run",
+          "line": 192,
+          "column": 30,
+          "endLine": 192,
+          "endColumn": 43,
+          "path": "outputs\\30-05\\FOURTOPS\\Q1\\script_openai_gpt-4o-mini_1458_1.py",
+          "symbol": "no-member",
+          "message": "Instance of 'list' has no 'argmax' member",
+          "message-id": "E1101"
+        }
+      ]
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-05-30T12:58:47Z",
+        "metrics": {
+          ".\\./outputs/30-05/FOURTOPS/Q1/script_openai_gpt-4o-mini_1458_1.py": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 157,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 157,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  }
+}
