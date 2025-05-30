@@ -28,10 +28,10 @@ particle and high energy physics. You will help me answer a question
 in a machine learning challenge format where you strive to maximize
 a scalar metric in order to learn more about your scientific creativity
 and scientific understanding. You will follow all of the instructions 
-to your best capabilities. Prefer a clear, correct solution over elaborate 
-code generation. Focus on producing solutions that you are confident 
-will not break given the constraints.
-"""
+to your best capabilities. Your first priority is to produce a correct 
+solution (runnable code). Your second priority is to do everything
+you can to maximize the metric.
+""" 
 
 DEFAULT_RUNTIME_CONSTRAINTS = r"""** Runtime Constraints **	
 - 4 CPU / 32 GB RAM / 2h wall-clock.
@@ -60,7 +60,7 @@ meets all requirements (all functions implemented, correct tensor shapes, etc.).
 """
 
 DEFAULT_PREFIX = r"""
-import os, sys, pickle, torch, gc
+import os, sys, pickle, torch, gc, json
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -153,6 +153,24 @@ def _run(dryrun=False):
     _plot(tr_loss, va_loss, "Loss",     os.path.join(SCRIPT_DIR, f"{base}_loss.png"))
     _plot(tr_acc,  va_acc,  "Accuracy", os.path.join(SCRIPT_DIR, f"{base}_accuracy.png"))
 
+    # 6. Write JSON Summary
+    summary = {
+        "epochs": n_epochs,
+        "train_loss": tr_loss,
+        "val_loss":   va_loss,
+        "train_acc":  tr_acc,
+        "val_acc":    va_acc,
+        "best_train_loss": min(tr_loss),
+        "best_train_loss_epoch": tr_loss.index(min(tr_loss))+1,
+        "best_train_acc":  max(tr_acc),
+        "best_train_acc_epoch": tr_acc.index(max(tr_acc))+1,
+        "best_val_loss": min(va_loss),
+        "best_val_loss_epoch": va_loss.index(min(va_loss))+1,
+        "best_val_acc":  max(va_acc),
+        "best_val_acc_epoch": va_acc.index(max(va_acc))+1,
+    }
+    print("#TRAIN_METRICS#" + json.dumps(summary))
+
 if "__main__" not in sys.modules:
     sys.modules["__main__"] = sys.modules[__name__]
 
@@ -194,7 +212,7 @@ class Challenge:
             f"{self.problem_description}\n"
             f"{self.evaluation_metric}\n"
             f"{self.dataset_description}\n"
-            f"{self.runtime_constraints}\n"
+            # f"{self.runtime_constraints}\n"
             f"{self.code_template}\n"
             f"{question.text}\n"
             f"{question.context}\n"

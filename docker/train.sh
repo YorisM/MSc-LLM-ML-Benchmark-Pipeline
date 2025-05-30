@@ -28,17 +28,6 @@ ulimit -t  "$TIMEOUT"                  # CPU-seconds
 ulimit -v  $((MEM_GB * 1024 * 1024))   # address-space KB
 ulimit -n  "$PIDS_LIMIT"               # open files / pids
 
-# ───────────────  resource runtime diagnostics  ────────────────
-echo "Runtime Resource Diagnostics:"
-echo "TIMEOUT       = $TIMEOUT seconds"
-echo "MEMORY_LIMIT  = ${MEM_GB} GB"
-echo "PIDS_LIMIT    = ${PIDS_LIMIT}"
-echo "---------- ulimit -a ----------"
-ulimit -a
-echo "---------- free -h (if available) ----------"
-echo "Mem cgroup limit: $(cat /sys/fs/cgroup/memory.max)"
-echo "Mem in use     : $(cat /sys/fs/cgroup/memory.current)"
-
 # ───────────────  run user script  ────────────────
 timeout --signal=KILL "${TIMEOUT}s" python "$PY" $DRY
 python_rc=$?

@@ -45,13 +45,16 @@ def query_openrouter(model: str, prompt: str, *, max_retries = 3):
     payload = {
         "model": model,
         "prompt": prompt,
+        "usage": {"include": True},
         "response_format": {"type": "json_object"}, 
         "max_tokens": (MAX_TOKENS),
     }
 
     # Request Timer (since Gemini is slow... and other connectivity issues wwere risen)
-    for attempt in range(max_retries):
-        timeout = min(60 * 2**attempt, 240)             # 60 -> 120 -> 240 (s)
+    for inner_attempt in range(max_retries):
+        timeout = min(60 * 2**inner_attempt, 240)             # 60 -> 120 -> 240 (s)
+        t0 = time.perf_counter()                          # start latency timer
+
         try:
             r = _session.post(
                     OPENROUTER_API_COMPLETIONS,
@@ -66,6 +69,7 @@ def query_openrouter(model: str, prompt: str, *, max_retries = 3):
 
             r.raise_for_status()                        # HTTP 4xx/5xx → error
             result = r.json()
+            duration_ms = round(1000 * (time.perf_counter() - t0)) # end latency timer
 
             # Provider-side error block
             if "error" in result:
@@ -75,38 +79,50 @@ def query_openrouter(model: str, prompt: str, *, max_retries = 3):
 
             # Missing Choices also treated as retryable
             if "choices" not in result or not result["choices"]:
-                logging.error(f"No 'choices' field in JSON on attempt {attempt+1}, retrying...")
+                logging.error(f"No 'choices' field in JSON on inner_attempt {inner_attempt+1}, retrying...")
                 raise requests.Timeout("No 'choices' field in JSON")
 
         except (RequestException, ValueError) as e:
-            logging.warning(f"LLM query attempt {attempt + 1}/{max_retries} for {model} failed: {e}")
-            if attempt == max_retries - 1: return None
-            time.sleep(BACKOFF[min(attempt, len(BACKOFF)-1)])
+            logging.warning(f"LLM query inner_attempt {inner_attempt + 1}/{max_retries} for {model} failed: {e}")
+            if inner_attempt == max_retries - 1: return None
+            time.sleep(BACKOFF[min(inner_attempt, len(BACKOFF)-1)])
+            continue
 
         # SUCCESSFUL RESPONSE - Still need to parse
         raw_text = result["choices"][0]["text"]
         try:    
             parsed   = robust_parse(raw_text)
         except (ValueError, json.JSONDecodeError) as e:
-            logging.warning("Parse failure on attempt %d: %s", attempt+1, e)
-            if attempt == max_retries - 1:
+            logging.warning("Parse failure on inner_attempt %d: %s", inner_attempt+1, e)
+            if inner_attempt == max_retries - 1:
                 return None
             continue
 
         code        = parsed.get("code", "").strip()
         explanation = parsed.get("explanation", "").strip()
+        usage       = result.get("usage", {})
         if not code or not explanation:
-            raise requests.Timeout("Parsed JSON lacks code/explanation")
+            logging.warning("Parsed JSON lacks code/explanation")
+            if inner_attempt == max_retries - 1:
+                return None
+            continue
 
-        response_txt = {
+        llm_block = {
             "model": model,
-            "usage": result.get("usage", {}),
+            "prompt_tokens": usage.get("prompt_tokens"),
             "prompt_chars": len(prompt),
+            "response_tokens": usage.get("completion_tokens"),
+            "response_chars": len(raw_text),
+            "cost": usage.get("cost"),
+            "generation_ms": duration_ms,
+            "cached": bool(parsed.get("cached", False)),  
             "code":  code,
             "explanation": explanation,
-                "reasoning": parsed.get("reasoning"),
+            "reasoning": parsed.get("reasoning"),
+            "Inner attempt": inner_attempt + 1,
         }
-        return response_txt
+
+        return llm_block
 
 def robust_parse(raw: str) -> dict:
     """
@@ -191,9 +207,10 @@ def save_response(output_dir: str,
                   response_blob: dict):
     """
     Writes two files:
-      • script_...py  – runnable script
-      • response_...json – full LLM JSON incl. explanation / usage
+      - script_...py        : runnable script
+      - response_...json    : full LLM JSON incl. explanation / usage
     """
+
     ts   = time.strftime("%H%M")
     safe = model.replace("/", "_")
     base = f"{safe}_{ts}_{attempt}"
@@ -254,9 +271,11 @@ def generate_and_dryrun():
                         logging.error("Model %s: No response on attempt %d", model, attempt)
                         continue
                     
+                    response["Outer_attempt"] = attempt
+
                     code         = response["code"]
                     explanation  = response["explanation"]
-                    response_blob = {**response, "prompt_chars": len(prompt)}
+                    response_blob = {"LLMGeneration": response}
 
                     if not code or not explanation:
                         logging.error("Model %s: Missing code/explanation on attempt %d", model, attempt)
@@ -267,19 +286,21 @@ def generate_and_dryrun():
                     py_file, json_file = save_response(
                         output_dir, safe_model, attempt, script, response_blob)
 
-                    # Set-Up PyLint & Bandit static checks\
+                    # Set-Up PyLint & Bandit static checks
                     pylint_ok, pylint_report = run_pylint(py_file)
                     bandit_ok, bandit_report = run_bandit(py_file)
 
-                    # Append reports to JSON
-                    with open(json_file, encoding="utf-8") as fh:
-                        resp_data = json.load(fh)
-
-                    resp_data["PyLint"] = pylint_report
-                    resp_data["Bandit"] = bandit_report
-
-                    with open(json_file, "w", encoding="utf-8") as fh:
-                        json.dump(resp_data, fh, ensure_ascii=False, indent=2)
+                    append_to_response_json(json_file, "StaticChecks",
+                    {
+                        "PyLint": {
+                            "passed": pylint_ok,
+                            "messages": pylint_report,
+                        },
+                        "Bandit": {
+                            "passed": bandit_ok,
+                            "results": bandit_report,
+                        }
+                    })   
 
                     # PyLint & Bandit Static Checks
                     if not pylint_ok and bandit_ok:
@@ -287,21 +308,21 @@ def generate_and_dryrun():
                         move_file(py_file, failed_folder)
                         move_file(json_file, failed_folder)
                         continue
-                        
+                    
                     # Perform Dry-Run
                     run_success, stdout, stderr = script_dryrun(py_file)
 
+                    STD = {
+                        "stdout": stdout, 
+                        "stderr": stderr
+                    }
 
-                    append_to_response_json(
-                        json_file,
-                        "DryRun",
+                    append_to_response_json(json_file,"DryRun",
                         {
                             "passed"      : bool(run_success),
-                            "stdout"      : stdout[-5000:],   # keep it short – last 5 000 chars
-                            "stderr"      : stderr[-5000:],
+                            "STD"         : STD,
                             "return_code" : 0 if run_success else 1
-                        }
-                    )
+                        })
 
                     if run_success:
                         logging.info("Model %s passed dry-run on attempt %d", model, attempt)

@@ -5,10 +5,13 @@ import os, sys, importlib, importlib.util, glob, logging, torch, csv, time, argp
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+
 from pathlib import Path
 from typing import Tuple
 from torch.utils.data import DataLoader, TensorDataset
 from sklearn.metrics import accuracy_score, roc_curve, auc
+
+from utils import append_to_response_json
 
 # - - - - - TODO - - - - - 
 #   fix test_FOURTOPS_outputs
@@ -176,9 +179,9 @@ def test_FOURTOPS_outputs(date_str: str):
         raise FileNotFoundError(f"Folder {root!r} does not exist")
 
     PATTERNS = [
-        "*_model.pth",
-        "*_scripted.pt",
-        "*_preproc.pt",
+        "*_model.pkl",
+        "*_state.pt",
+        "*_preproc.pkl",
         "*_loss.png",
         "*_accuracy.png",
         "*_ROC.png",
@@ -240,10 +243,39 @@ def evaluate_results(input_dir):
     # 2) find scripted models
     candidates  = challenge_evaluators[challenge]["find_models"](date_str)
 
-    # 3) run all evaluate_FOURTOPS (or whatever) and stash results
+    # 3) run all evaluate_FOURTOPS (or whatever) and stash results + write JSON block
     eval_results = []   # will hold tuples (qid, model_name, pt_path, fpr, tpr, auc, acc)
     for qid, model_name, pt_path in candidates:
-        fpr, tpr, roc_auc, acc = challenge_evaluators[challenge]["evaluate"](pt_path, test_loader)
+        t0 = time.perf_counter() # start timer
+        try:
+            fpr, tpr, roc_auc, acc = \
+                challenge_evaluators[challenge]["evaluate"](pt_path, test_loader)
+            eval_ok = True
+        except Exception as e:
+            logging.error("Evaluation failed for %s: %s", pt_path, e)
+            roc_auc = acc = None
+            eval_ok = False
+        eval_time = time.perf_counter() - t0 # end timer
+
+        # Write Evaluation block response JSON
+        model_dir = os.path.dirname(pt_path)
+        try:
+            json_file = next(p for p in os.listdir(model_dir)
+                             if p.startswith("response_") and p.endswith(".json"))
+            json_path = os.path.join(model_dir, json_file)
+
+            append_to_response_json(
+                json_path,
+                "Evaluation",
+                {
+                    "passed": eval_ok,
+                    "metrics": {"auc": roc_auc, "accuracy": acc},
+                    "runtime_s": round(eval_time, 2)
+                }
+            )
+        except StopIteration:
+            logging.warning("No response_…json found in %s; skipping append", model_dir)
+
         eval_results.append((qid, model_name, pt_path, fpr, tpr, roc_auc, acc))
         logging.info("Evaluated %s/%s → acc=%.3f auc=%.3f", qid, model_name, acc, roc_auc)
 

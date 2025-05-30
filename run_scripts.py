@@ -1,10 +1,13 @@
 # run_scripts.py
 
 # Imports
-import os, sys, config, subprocess, logging, time, argparse, psutil
+import os, sys, config, subprocess, logging, time, argparse, psutil, json
 import pandas as pd
+
 from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+from utils import append_to_response_json
 
 # Execution Flow
 # (main.py)  ─▶ execute_scripts_in_batch(...)
@@ -126,6 +129,7 @@ def execute_script(
 
     logging.debug("Final CMD list: %r", cmd)
 
+    # Actually run the script
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, 
                                 timeout=config.TRAIN_TIMEOUT_S)
@@ -137,9 +141,51 @@ def execute_script(
     except Exception as e:
         success, ret, out, err = False, None, "", f"Exception: {e}"
 
+    # Pull metrics from output
+    metrics_json = None
+    for line in reversed(out.splitlines()):
+        if line.startswith("#TRAIN_METRICS#"):
+            try:
+                metrics_json = json.loads(line[len("#TRAIN_METRICS#"):])
+            except json.JSONDecodeError:
+                logging.warning("Malformed TRAIN_METRICS in %s", script_path)
+            break
+
+    # Process metrics
     mem_after = proc.memory_info().rss
     duration = time.perf_counter() - t0
     max_rss = (mem_after - mem_before) // 1024
+    cpu_user, cpu_sys = proc.cpu_times()[:2]
+    io  = proc.io_counters()
+
+    resources = {
+        "cpu_seconds_user": round(cpu_user, 2),
+        "cpu_seconds_sys":  round(cpu_sys, 2),
+        "disk_read_mb":     round(io.read_bytes / 1e6, 1),
+        "disk_write_mb":    round(io.write_bytes / 1e6, 1),
+        "max_rss_kb":       max_rss,
+        "training_time_s":  round(duration, 2),
+        "gpu_memory_mb":    None,     # patched later when CUDA available
+    }
+
+    if metrics_json:
+        # derive companion JSON path: script_X.py → response_X.json
+        base = os.path.basename(script_path).replace("script_", "response_")
+        json_file = os.path.join(os.path.dirname(script_path),
+                                    os.path.splitext(base)[0] + ".json")
+    
+    STD = {
+        "stdout": out, 
+        "stderr": err
+    }
+    
+    append_to_response_json(json_file, "Training",
+        {
+            "passed": bool(success),
+            "resources": resources,
+            "metrics": metrics_json,
+            "STD": STD
+        })
 
     logging.info("%s %s → code=%s time=%.2fs mem=%dKB", "Dry-run" if dryrun else "Run", script_path, ret, duration, max_rss)
     return (script_path, success, ret, out, err, duration, max_rss)

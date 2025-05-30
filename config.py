@@ -24,12 +24,12 @@ logging.basicConfig(
 )
 
 # Models - Needs at least two models 
-models = ["openai/o3", 
-        "openai/gpt-4o-mini",
-        "anthropic/claude-3.7-sonnet",
-        "google/gemini-2.5-pro-preview",
-        "meta-llama/llama-4-maverick",
-        "deepseek/deepseek-r1"]
+models = ["openai/gpt-4o-mini"] 
+        #"openai/o3",
+        #"anthropic/claude-3.7-sonnet",
+        #"google/gemini-2.5-pro-preview",
+        #"meta-llama/llama-4-maverick",
+        #"deepseek/deepseek-r1"]
 
 # Number of attempts to retrieve correct response
 num_attempts = 3

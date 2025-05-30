@@ -27912,3 +27912,2032 @@ Started LLM Challenge Pipeline
 2025-05-28 09:56:32,681 - evaluate_scripts.py - INFO - Evaluation finished: AUC 0.5000  ACC 0.5032
 2025-05-28 09:56:32,681 - evaluate_scripts.py - INFO - Evaluated Q2/openai_gpt-4o-mini \u2192 acc=0.503 auc=0.500
 2025-05-28 09:56:32,681 - evaluate_scripts.py - INFO - Evaluating outputs\27-05\FOURTOPS\Q2\openai_gpt-4o-mini\openai_gpt-4o-mini_1740_1_model.pkl on cpu
+2025-05-30 12:49:47,464 - main.py - INFO - 
+
+
+Started LLM Challenge Pipeline
+2025-05-30 12:49:47,464 - main.py - INFO - Mode: Full pipeline execution.
+2025-05-30 12:49:47,464 - main.py - INFO - Start generation and dryrun.
+2025-05-30 12:49:47,464 - generate_and_dryrun.py - INFO - Executing challenge: FOURTOPS
+2025-05-30 12:49:47,466 - generate_and_dryrun.py - INFO - Set-Up Output Directory: ./outputs/30-05/FOURTOPS/Q1/
+2025-05-30 12:49:47,466 - generate_and_dryrun.py - INFO - Prompt: ```markdown
+** Instructions **
+You are an expert at programming in python, machine learning,
+particle and high energy physics. You will help me answer a question
+in a machine learning challenge format where you strive to maximize
+a scalar metric in order to learn more about your scientific creativity
+and scientific understanding. You will follow all of the instructions 
+to your best capabilities. Prefer a clear, correct solution over elaborate 
+code generation. Focus on producing solutions that you are confident 
+will not break given the constraints.
+
+** Problem Description **
+A major task in particle physics is the measurement of rare signal 
+processes ith very small cross-sections. With the unprecedented amount of 
+data provided by the upcoming runs of the Large Hadron Collider (LHC), 
+one can start to measure these processes. An example is the recent 
+observation of four top quarks originating from a single proton-proton 
+collision event. Accurate classification of these events is crucial, 
+as even a small reduction in background noise on the order of a few tens 
+of percent while maintaining the same signal detection efficiency can lead 
+to a profound increase in sensitivity.
+
+** Evaluation Metric **
+The evaluation metric for this classification task is the area under the curve (AUC)
+value, specified by the area under the receiver operating characteristic (ROC) curve. 
+The AUC summarizes a model's ability to distinguish between positive and 
+negative classes. The higher the score the better.
+
+** Dataset Description **
+The dataset used for this problem consists of simulated proton-proton 
+collision at a center of mass energy of 13 TeV. The signal process is defined as 
+$$ pp \rightarrow t \bar{t} t \bar{t} $$. The relevant production processes of the
+backgrounds are $$ t \bar{t} + X $$ where $$ X = Z, W^+, W^+W^- $$.
+
+The dataset includes 302072 events, of which roughly 50% is signal and 50%
+are background processes. All background processes have an equal number of events. 
+There is not cut on the maximum number of objects and there is no order.    
+
+The contents of the data sets (X_train & X_val) are given below.
+IMPORTANT: The specific line format of the data set is as follows:
+
+E_T_miss, phi_{E_t}_miss, obj_1, E_1, p_T1, eta_1, phi_1, obj_2, E_2, p_t2, eta_2, phi_2, ....
+
+Such that each object is represented by a string that starts with an identifier "obj_n", which is an
+integer value representing a particular object in the event. The object identifier is
+followed by its kinematic properties in the form of a four-vector containing the full 
+energy "E" and the transverse momentum "p_T" in units of MeV, as well as the pseudo-rapidity 
+"eta" and the azimuthal angle "phi". The other three quantities are "weight" given by the cross-section
+of thne process divided by the total number of events generated. "E_T_miss" is the magnitude of the
+missing transverse energy in units of MeV and "phi_{E_t}_miss" is the azimuthal angle of the missing
+transverse energy.
+
+Since the length of the events is variable, the data is zero-padded to the largest number of objects
+found in the events within in the entire dataset. The dataset is fairly sparse and not pre-processed.
+
+The relevant datasets are pytorch tensors with the following properties:
+
+Name: X_train, shape: [241657, 92], dtype: torch.float32, 
+Name: Y_train, shape: [241657], dtype: torch.int64, 
+Name: X_val, shape: [30272, 92], dtype: torch.float32, 
+Name: Y_val, shape: [30272], dtype: torch.int64
+
+IMPORTANT: Each of these tensors are pre-loaded and available in the environment.
+
+** Runtime Constraints **	
+- 4 CPU / 32 GB RAM / 2h wall-clock.
+- No internet; importing extra pip packages will fail.
+- Keep model < 50 MB.
+- Avoid large space searches and extensive hyperparameter tuning.
+
+** Code Template **
+# 0. ---------- IMPORTS ----------
+import torch
+import numpy as np
+from torch import nn
+from torch.utils.data import TensorDataset, DataLoader
+# Only import extra std-lib modules, torch or sklearn (sub-)modules you actually use.
+# <LLM: Import modules>
+
+# 1. ---------- PRE-PROCESSING ----------
+class MyPreprocessor:
+    #    Must implement:
+    #   - fit(X: torch.Tensor, y: torch.Tensor) -> self
+    #   - transform(X: torch.Tensor) -> torch.Tensor
+
+    # REQUIREMENTS
+    # IMPORTANT: All state must be picklable with the std-lib pickle module.
+    # May allocate NumPy arrays or Torch tensors internally, but:
+    # transform() must be deterministic & output a torch.Tensor of shape (N, features).
+    # Store only derived parameters needed for transform i.e. do not store the raw data
+    # itself in the preprocessor object.
+
+    # DATA SPECIFICS
+    # IMPORTANT: X_train, Y_train, X_val, Y_val are provided as PyTorch tensors in the environment.
+    # Total flat length per event (X_train & X_val): 92
+    # Index  0 :  missing-ET magnitude  (E_T_miss)
+    # Index  1 :  missing-ET azimuth    (phi_Et_miss)
+    # Indices  2-6  : object 1  ->  obj_1, E_1, p_T1, eta_1, phi_1
+    # Indices  7-11 : object 2  -> obj_2, E_2 , p_T_2 , eta_2 , phi_2
+    # ...
+    # Indices 88-92 : object 18 -> obj_18, E_18 , p_T_18 , eta_18 , phi_18
+    # Per-object slice size = 5
+    # Max objects encoded   = 18
+
+    # TIPS
+    # When modifying data features or feature engineering: annotate tensor size as comments after 
+    # each tensor operation to reduce dimension mismatches.
+
+    # <LLM: Write code to preprocess the data>    
+    def __init__(self):
+        # <LLM: Define and initialize any stateful components here>
+        pass
+
+    def fit(self, X, y=None):
+        # <LLM: Extract statistics or fit transformers>
+        return self
+
+    def transform(self, X):
+        # <LLM: Apply preprocessing logic, return torch.Tensor>
+        return X 
+
+    def fit_transform(self, X, y=None):
+        self.fit(X, y)
+        return self.transform(X)
+
+def make_preprocessor():
+    return MyPreprocessor()
+
+# 2. ---------- MODEL DEFINITION ----------
+def make_model(input_dim: int):
+    # PARAMETERS
+    # inplut_dim : int : Number of features per event after preprocessing.
+
+    # RETURNS
+    # model : torch.nn.Module : Untrained binary-classifier network.
+
+    # <LLM: Write code to define a binary-classifier network>
+    return model
+
+# 3. ---------- MODEL TRAINING ----------
+EPOCHS = # <LLM: define the amount of training epochs>    
+def train_model(model, train_loader, val_loader, epochs):
+    # PARAMETERS
+    # model : torch.nn.Module   
+    # train_loader: torch.utils.data.DataLoader
+    # val_loader  : torch.utils.data.DataLoader
+    # epochs: int
+
+    # RETURNS
+    # trained_model : nn.Module          (same instance, trained in-place)
+    # train_loss    : list[float]        (length == epochs)
+    # val_loss      : list[float]
+    # train_acc     : list[float]
+    # val_acc       : list[float]
+    
+    # REQUIREMENTS 
+    # Define training loop clearly including number of epochs
+    # Do NOT pass "verbose=" to any PyTorch scheduler (not supported in this image).
+
+    # <LLM: Write code to define training loop>
+    return trained_model, train_loss, val_loss, train_acc, val_acc
+
+# IMPORTANT: DO NOT write code to run the functions defined above,
+# i.e. write code to prepare training data, process-data, traing model, evaluate model performance, etc.
+
+ ** IMPORTANT: Your Challenge **
+Write Python code for a binary classification model focussing on maximizing the AUC using the code template above. 
+You may freely choose any pre-processing methods and techniques as well as model architecture and training conventions.                 
+
+
+** Response Format **
+Your reponse must be in a valid JSON dictionary format with the following structure:
+        {
+        'code': <Your complete Python code here>,
+        'explanation': <A detailed explanation of the code>
+        }
+Strictly adhere to this structure and follow these rules:
+
+1. Do not include any text or explanations outside the JSON object.
+2. Do not add any formatting, such as markdown, to the response. 
+3. Properly escape all special characters, especially new lines.
+4. After generating the JSON, internally validate its structure before outputting.
+5. Replace each "# <LLM: ...>" comment, in the code template, with the required code. 
+No placeholder should remain.
+6. Before finalizing your answer, double-check that your code runs without errors and
+meets all requirements (all functions implemented, correct tensor shapes, etc.).
+7. Justify your decisions. Either include them as comments in the code or in the explanation.
+
+```
+2025-05-30 12:49:47,466 - generate_and_dryrun.py - INFO - Querying model openai/o3: Attempt 1
+2025-05-30 12:54:40,861 - main.py - INFO - 
+
+
+Started LLM Challenge Pipeline
+2025-05-30 12:54:40,861 - main.py - INFO - Mode: Full pipeline execution.
+2025-05-30 12:54:40,862 - main.py - INFO - Start generation and dryrun.
+2025-05-30 12:54:40,862 - generate_and_dryrun.py - INFO - Executing challenge: FOURTOPS
+2025-05-30 12:54:40,862 - generate_and_dryrun.py - INFO - Set-Up Output Directory: ./outputs/30-05/FOURTOPS/Q1/
+2025-05-30 12:54:40,862 - generate_and_dryrun.py - INFO - Prompt: ```markdown
+** Instructions **
+You are an expert at programming in python, machine learning,
+particle and high energy physics. You will help me answer a question
+in a machine learning challenge format where you strive to maximize
+a scalar metric in order to learn more about your scientific creativity
+and scientific understanding. You will follow all of the instructions 
+to your best capabilities. Prefer a clear, correct solution over elaborate 
+code generation. Focus on producing solutions that you are confident 
+will not break given the constraints.
+
+** Problem Description **
+A major task in particle physics is the measurement of rare signal 
+processes ith very small cross-sections. With the unprecedented amount of 
+data provided by the upcoming runs of the Large Hadron Collider (LHC), 
+one can start to measure these processes. An example is the recent 
+observation of four top quarks originating from a single proton-proton 
+collision event. Accurate classification of these events is crucial, 
+as even a small reduction in background noise on the order of a few tens 
+of percent while maintaining the same signal detection efficiency can lead 
+to a profound increase in sensitivity.
+
+** Evaluation Metric **
+The evaluation metric for this classification task is the area under the curve (AUC)
+value, specified by the area under the receiver operating characteristic (ROC) curve. 
+The AUC summarizes a model's ability to distinguish between positive and 
+negative classes. The higher the score the better.
+
+** Dataset Description **
+The dataset used for this problem consists of simulated proton-proton 
+collision at a center of mass energy of 13 TeV. The signal process is defined as 
+$$ pp \rightarrow t \bar{t} t \bar{t} $$. The relevant production processes of the
+backgrounds are $$ t \bar{t} + X $$ where $$ X = Z, W^+, W^+W^- $$.
+
+The dataset includes 302072 events, of which roughly 50% is signal and 50%
+are background processes. All background processes have an equal number of events. 
+There is not cut on the maximum number of objects and there is no order.    
+
+The contents of the data sets (X_train & X_val) are given below.
+IMPORTANT: The specific line format of the data set is as follows:
+
+E_T_miss, phi_{E_t}_miss, obj_1, E_1, p_T1, eta_1, phi_1, obj_2, E_2, p_t2, eta_2, phi_2, ....
+
+Such that each object is represented by a string that starts with an identifier "obj_n", which is an
+integer value representing a particular object in the event. The object identifier is
+followed by its kinematic properties in the form of a four-vector containing the full 
+energy "E" and the transverse momentum "p_T" in units of MeV, as well as the pseudo-rapidity 
+"eta" and the azimuthal angle "phi". The other three quantities are "weight" given by the cross-section
+of thne process divided by the total number of events generated. "E_T_miss" is the magnitude of the
+missing transverse energy in units of MeV and "phi_{E_t}_miss" is the azimuthal angle of the missing
+transverse energy.
+
+Since the length of the events is variable, the data is zero-padded to the largest number of objects
+found in the events within in the entire dataset. The dataset is fairly sparse and not pre-processed.
+
+The relevant datasets are pytorch tensors with the following properties:
+
+Name: X_train, shape: [241657, 92], dtype: torch.float32, 
+Name: Y_train, shape: [241657], dtype: torch.int64, 
+Name: X_val, shape: [30272, 92], dtype: torch.float32, 
+Name: Y_val, shape: [30272], dtype: torch.int64
+
+IMPORTANT: Each of these tensors are pre-loaded and available in the environment.
+
+** Runtime Constraints **	
+- 4 CPU / 32 GB RAM / 2h wall-clock.
+- No internet; importing extra pip packages will fail.
+- Keep model < 50 MB.
+- Avoid large space searches and extensive hyperparameter tuning.
+
+** Code Template **
+# 0. ---------- IMPORTS ----------
+import torch
+import numpy as np
+from torch import nn
+from torch.utils.data import TensorDataset, DataLoader
+# Only import extra std-lib modules, torch or sklearn (sub-)modules you actually use.
+# <LLM: Import modules>
+
+# 1. ---------- PRE-PROCESSING ----------
+class MyPreprocessor:
+    #    Must implement:
+    #   - fit(X: torch.Tensor, y: torch.Tensor) -> self
+    #   - transform(X: torch.Tensor) -> torch.Tensor
+
+    # REQUIREMENTS
+    # IMPORTANT: All state must be picklable with the std-lib pickle module.
+    # May allocate NumPy arrays or Torch tensors internally, but:
+    # transform() must be deterministic & output a torch.Tensor of shape (N, features).
+    # Store only derived parameters needed for transform i.e. do not store the raw data
+    # itself in the preprocessor object.
+
+    # DATA SPECIFICS
+    # IMPORTANT: X_train, Y_train, X_val, Y_val are provided as PyTorch tensors in the environment.
+    # Total flat length per event (X_train & X_val): 92
+    # Index  0 :  missing-ET magnitude  (E_T_miss)
+    # Index  1 :  missing-ET azimuth    (phi_Et_miss)
+    # Indices  2-6  : object 1  ->  obj_1, E_1, p_T1, eta_1, phi_1
+    # Indices  7-11 : object 2  -> obj_2, E_2 , p_T_2 , eta_2 , phi_2
+    # ...
+    # Indices 88-92 : object 18 -> obj_18, E_18 , p_T_18 , eta_18 , phi_18
+    # Per-object slice size = 5
+    # Max objects encoded   = 18
+
+    # TIPS
+    # When modifying data features or feature engineering: annotate tensor size as comments after 
+    # each tensor operation to reduce dimension mismatches.
+
+    # <LLM: Write code to preprocess the data>    
+    def __init__(self):
+        # <LLM: Define and initialize any stateful components here>
+        pass
+
+    def fit(self, X, y=None):
+        # <LLM: Extract statistics or fit transformers>
+        return self
+
+    def transform(self, X):
+        # <LLM: Apply preprocessing logic, return torch.Tensor>
+        return X 
+
+    def fit_transform(self, X, y=None):
+        self.fit(X, y)
+        return self.transform(X)
+
+def make_preprocessor():
+    return MyPreprocessor()
+
+# 2. ---------- MODEL DEFINITION ----------
+def make_model(input_dim: int):
+    # PARAMETERS
+    # inplut_dim : int : Number of features per event after preprocessing.
+
+    # RETURNS
+    # model : torch.nn.Module : Untrained binary-classifier network.
+
+    # <LLM: Write code to define a binary-classifier network>
+    return model
+
+# 3. ---------- MODEL TRAINING ----------
+EPOCHS = # <LLM: define the amount of training epochs>    
+def train_model(model, train_loader, val_loader, epochs):
+    # PARAMETERS
+    # model : torch.nn.Module   
+    # train_loader: torch.utils.data.DataLoader
+    # val_loader  : torch.utils.data.DataLoader
+    # epochs: int
+
+    # RETURNS
+    # trained_model : nn.Module          (same instance, trained in-place)
+    # train_loss    : list[float]        (length == epochs)
+    # val_loss      : list[float]
+    # train_acc     : list[float]
+    # val_acc       : list[float]
+    
+    # REQUIREMENTS 
+    # Define training loop clearly including number of epochs
+    # Do NOT pass "verbose=" to any PyTorch scheduler (not supported in this image).
+
+    # <LLM: Write code to define training loop>
+    return trained_model, train_loss, val_loss, train_acc, val_acc
+
+# IMPORTANT: DO NOT write code to run the functions defined above,
+# i.e. write code to prepare training data, process-data, traing model, evaluate model performance, etc.
+
+ ** IMPORTANT: Your Challenge **
+Write Python code for a binary classification model focussing on maximizing the AUC using the code template above. 
+You may freely choose any pre-processing methods and techniques as well as model architecture and training conventions.                 
+
+
+** Response Format **
+Your reponse must be in a valid JSON dictionary format with the following structure:
+        {
+        'code': <Your complete Python code here>,
+        'explanation': <A detailed explanation of the code>
+        }
+Strictly adhere to this structure and follow these rules:
+
+1. Do not include any text or explanations outside the JSON object.
+2. Do not add any formatting, such as markdown, to the response. 
+3. Properly escape all special characters, especially new lines.
+4. After generating the JSON, internally validate its structure before outputting.
+5. Replace each "# <LLM: ...>" comment, in the code template, with the required code. 
+No placeholder should remain.
+6. Before finalizing your answer, double-check that your code runs without errors and
+meets all requirements (all functions implemented, correct tensor shapes, etc.).
+7. Justify your decisions. Either include them as comments in the code or in the explanation.
+
+```
+2025-05-30 12:54:40,862 - generate_and_dryrun.py - INFO - Querying model openai/gpt-4o-mini: Attempt 1
+2025-05-30 12:57:28,924 - main.py - INFO - 
+
+
+Started LLM Challenge Pipeline
+2025-05-30 12:57:28,924 - main.py - INFO - Mode: Full pipeline execution.
+2025-05-30 12:57:28,924 - main.py - INFO - Start generation and dryrun.
+2025-05-30 12:57:28,924 - generate_and_dryrun.py - INFO - Executing challenge: FOURTOPS
+2025-05-30 12:57:28,925 - generate_and_dryrun.py - INFO - Set-Up Output Directory: ./outputs/30-05/FOURTOPS/Q1/
+2025-05-30 12:57:28,925 - generate_and_dryrun.py - INFO - Prompt: ```markdown
+** Instructions **
+You are an expert at programming in python, machine learning,
+particle and high energy physics. You will help me answer a question
+in a machine learning challenge format where you strive to maximize
+a scalar metric in order to learn more about your scientific creativity
+and scientific understanding. You will follow all of the instructions 
+to your best capabilities. Prefer a clear, correct solution over elaborate 
+code generation. Focus on producing solutions that you are confident 
+will not break given the constraints.
+
+** Problem Description **
+A major task in particle physics is the measurement of rare signal 
+processes ith very small cross-sections. With the unprecedented amount of 
+data provided by the upcoming runs of the Large Hadron Collider (LHC), 
+one can start to measure these processes. An example is the recent 
+observation of four top quarks originating from a single proton-proton 
+collision event. Accurate classification of these events is crucial, 
+as even a small reduction in background noise on the order of a few tens 
+of percent while maintaining the same signal detection efficiency can lead 
+to a profound increase in sensitivity.
+
+** Evaluation Metric **
+The evaluation metric for this classification task is the area under the curve (AUC)
+value, specified by the area under the receiver operating characteristic (ROC) curve. 
+The AUC summarizes a model's ability to distinguish between positive and 
+negative classes. The higher the score the better.
+
+** Dataset Description **
+The dataset used for this problem consists of simulated proton-proton 
+collision at a center of mass energy of 13 TeV. The signal process is defined as 
+$$ pp \rightarrow t \bar{t} t \bar{t} $$. The relevant production processes of the
+backgrounds are $$ t \bar{t} + X $$ where $$ X = Z, W^+, W^+W^- $$.
+
+The dataset includes 302072 events, of which roughly 50% is signal and 50%
+are background processes. All background processes have an equal number of events. 
+There is not cut on the maximum number of objects and there is no order.    
+
+The contents of the data sets (X_train & X_val) are given below.
+IMPORTANT: The specific line format of the data set is as follows:
+
+E_T_miss, phi_{E_t}_miss, obj_1, E_1, p_T1, eta_1, phi_1, obj_2, E_2, p_t2, eta_2, phi_2, ....
+
+Such that each object is represented by a string that starts with an identifier "obj_n", which is an
+integer value representing a particular object in the event. The object identifier is
+followed by its kinematic properties in the form of a four-vector containing the full 
+energy "E" and the transverse momentum "p_T" in units of MeV, as well as the pseudo-rapidity 
+"eta" and the azimuthal angle "phi". The other three quantities are "weight" given by the cross-section
+of thne process divided by the total number of events generated. "E_T_miss" is the magnitude of the
+missing transverse energy in units of MeV and "phi_{E_t}_miss" is the azimuthal angle of the missing
+transverse energy.
+
+Since the length of the events is variable, the data is zero-padded to the largest number of objects
+found in the events within in the entire dataset. The dataset is fairly sparse and not pre-processed.
+
+The relevant datasets are pytorch tensors with the following properties:
+
+Name: X_train, shape: [241657, 92], dtype: torch.float32, 
+Name: Y_train, shape: [241657], dtype: torch.int64, 
+Name: X_val, shape: [30272, 92], dtype: torch.float32, 
+Name: Y_val, shape: [30272], dtype: torch.int64
+
+IMPORTANT: Each of these tensors are pre-loaded and available in the environment.
+
+** Runtime Constraints **	
+- 4 CPU / 32 GB RAM / 2h wall-clock.
+- No internet; importing extra pip packages will fail.
+- Keep model < 50 MB.
+- Avoid large space searches and extensive hyperparameter tuning.
+
+** Code Template **
+# 0. ---------- IMPORTS ----------
+import torch
+import numpy as np
+from torch import nn
+from torch.utils.data import TensorDataset, DataLoader
+# Only import extra std-lib modules, torch or sklearn (sub-)modules you actually use.
+# <LLM: Import modules>
+
+# 1. ---------- PRE-PROCESSING ----------
+class MyPreprocessor:
+    #    Must implement:
+    #   - fit(X: torch.Tensor, y: torch.Tensor) -> self
+    #   - transform(X: torch.Tensor) -> torch.Tensor
+
+    # REQUIREMENTS
+    # IMPORTANT: All state must be picklable with the std-lib pickle module.
+    # May allocate NumPy arrays or Torch tensors internally, but:
+    # transform() must be deterministic & output a torch.Tensor of shape (N, features).
+    # Store only derived parameters needed for transform i.e. do not store the raw data
+    # itself in the preprocessor object.
+
+    # DATA SPECIFICS
+    # IMPORTANT: X_train, Y_train, X_val, Y_val are provided as PyTorch tensors in the environment.
+    # Total flat length per event (X_train & X_val): 92
+    # Index  0 :  missing-ET magnitude  (E_T_miss)
+    # Index  1 :  missing-ET azimuth    (phi_Et_miss)
+    # Indices  2-6  : object 1  ->  obj_1, E_1, p_T1, eta_1, phi_1
+    # Indices  7-11 : object 2  -> obj_2, E_2 , p_T_2 , eta_2 , phi_2
+    # ...
+    # Indices 88-92 : object 18 -> obj_18, E_18 , p_T_18 , eta_18 , phi_18
+    # Per-object slice size = 5
+    # Max objects encoded   = 18
+
+    # TIPS
+    # When modifying data features or feature engineering: annotate tensor size as comments after 
+    # each tensor operation to reduce dimension mismatches.
+
+    # <LLM: Write code to preprocess the data>    
+    def __init__(self):
+        # <LLM: Define and initialize any stateful components here>
+        pass
+
+    def fit(self, X, y=None):
+        # <LLM: Extract statistics or fit transformers>
+        return self
+
+    def transform(self, X):
+        # <LLM: Apply preprocessing logic, return torch.Tensor>
+        return X 
+
+    def fit_transform(self, X, y=None):
+        self.fit(X, y)
+        return self.transform(X)
+
+def make_preprocessor():
+    return MyPreprocessor()
+
+# 2. ---------- MODEL DEFINITION ----------
+def make_model(input_dim: int):
+    # PARAMETERS
+    # inplut_dim : int : Number of features per event after preprocessing.
+
+    # RETURNS
+    # model : torch.nn.Module : Untrained binary-classifier network.
+
+    # <LLM: Write code to define a binary-classifier network>
+    return model
+
+# 3. ---------- MODEL TRAINING ----------
+EPOCHS = # <LLM: define the amount of training epochs>    
+def train_model(model, train_loader, val_loader, epochs):
+    # PARAMETERS
+    # model : torch.nn.Module   
+    # train_loader: torch.utils.data.DataLoader
+    # val_loader  : torch.utils.data.DataLoader
+    # epochs: int
+
+    # RETURNS
+    # trained_model : nn.Module          (same instance, trained in-place)
+    # train_loss    : list[float]        (length == epochs)
+    # val_loss      : list[float]
+    # train_acc     : list[float]
+    # val_acc       : list[float]
+    
+    # REQUIREMENTS 
+    # Define training loop clearly including number of epochs
+    # Do NOT pass "verbose=" to any PyTorch scheduler (not supported in this image).
+
+    # <LLM: Write code to define training loop>
+    return trained_model, train_loss, val_loss, train_acc, val_acc
+
+# IMPORTANT: DO NOT write code to run the functions defined above,
+# i.e. write code to prepare training data, process-data, traing model, evaluate model performance, etc.
+
+ ** IMPORTANT: Your Challenge **
+Write Python code for a binary classification model focussing on maximizing the AUC using the code template above. 
+You may freely choose any pre-processing methods and techniques as well as model architecture and training conventions.                 
+
+
+** Response Format **
+Your reponse must be in a valid JSON dictionary format with the following structure:
+        {
+        'code': <Your complete Python code here>,
+        'explanation': <A detailed explanation of the code>
+        }
+Strictly adhere to this structure and follow these rules:
+
+1. Do not include any text or explanations outside the JSON object.
+2. Do not add any formatting, such as markdown, to the response. 
+3. Properly escape all special characters, especially new lines.
+4. After generating the JSON, internally validate its structure before outputting.
+5. Replace each "# <LLM: ...>" comment, in the code template, with the required code. 
+No placeholder should remain.
+6. Before finalizing your answer, double-check that your code runs without errors and
+meets all requirements (all functions implemented, correct tensor shapes, etc.).
+7. Justify your decisions. Either include them as comments in the code or in the explanation.
+
+```
+2025-05-30 12:57:28,925 - generate_and_dryrun.py - INFO - Querying model openai/gpt-4o-mini: Attempt 1
+2025-05-30 13:01:42,277 - main.py - INFO - 
+
+
+Started LLM Challenge Pipeline
+2025-05-30 13:01:42,278 - main.py - INFO - Mode: Full pipeline execution.
+2025-05-30 13:01:42,278 - main.py - INFO - Start generation and dryrun.
+2025-05-30 13:01:42,278 - generate_and_dryrun.py - INFO - Executing challenge: FOURTOPS
+2025-05-30 13:01:42,278 - generate_and_dryrun.py - INFO - Set-Up Output Directory: ./outputs/30-05/FOURTOPS/Q1/
+2025-05-30 13:01:42,278 - generate_and_dryrun.py - INFO - Prompt: ```markdown
+** Instructions **
+You are an expert at programming in python, machine learning,
+particle and high energy physics. You will help me answer a question
+in a machine learning challenge format where you strive to maximize
+a scalar metric in order to learn more about your scientific creativity
+and scientific understanding. You will follow all of the instructions 
+to your best capabilities. Prefer a clear, correct solution over elaborate 
+code generation. Focus on producing solutions that you are confident 
+will not break given the constraints.
+
+** Problem Description **
+A major task in particle physics is the measurement of rare signal 
+processes ith very small cross-sections. With the unprecedented amount of 
+data provided by the upcoming runs of the Large Hadron Collider (LHC), 
+one can start to measure these processes. An example is the recent 
+observation of four top quarks originating from a single proton-proton 
+collision event. Accurate classification of these events is crucial, 
+as even a small reduction in background noise on the order of a few tens 
+of percent while maintaining the same signal detection efficiency can lead 
+to a profound increase in sensitivity.
+
+** Evaluation Metric **
+The evaluation metric for this classification task is the area under the curve (AUC)
+value, specified by the area under the receiver operating characteristic (ROC) curve. 
+The AUC summarizes a model's ability to distinguish between positive and 
+negative classes. The higher the score the better.
+
+** Dataset Description **
+The dataset used for this problem consists of simulated proton-proton 
+collision at a center of mass energy of 13 TeV. The signal process is defined as 
+$$ pp \rightarrow t \bar{t} t \bar{t} $$. The relevant production processes of the
+backgrounds are $$ t \bar{t} + X $$ where $$ X = Z, W^+, W^+W^- $$.
+
+The dataset includes 302072 events, of which roughly 50% is signal and 50%
+are background processes. All background processes have an equal number of events. 
+There is not cut on the maximum number of objects and there is no order.    
+
+The contents of the data sets (X_train & X_val) are given below.
+IMPORTANT: The specific line format of the data set is as follows:
+
+E_T_miss, phi_{E_t}_miss, obj_1, E_1, p_T1, eta_1, phi_1, obj_2, E_2, p_t2, eta_2, phi_2, ....
+
+Such that each object is represented by a string that starts with an identifier "obj_n", which is an
+integer value representing a particular object in the event. The object identifier is
+followed by its kinematic properties in the form of a four-vector containing the full 
+energy "E" and the transverse momentum "p_T" in units of MeV, as well as the pseudo-rapidity 
+"eta" and the azimuthal angle "phi". The other three quantities are "weight" given by the cross-section
+of thne process divided by the total number of events generated. "E_T_miss" is the magnitude of the
+missing transverse energy in units of MeV and "phi_{E_t}_miss" is the azimuthal angle of the missing
+transverse energy.
+
+Since the length of the events is variable, the data is zero-padded to the largest number of objects
+found in the events within in the entire dataset. The dataset is fairly sparse and not pre-processed.
+
+The relevant datasets are pytorch tensors with the following properties:
+
+Name: X_train, shape: [241657, 92], dtype: torch.float32, 
+Name: Y_train, shape: [241657], dtype: torch.int64, 
+Name: X_val, shape: [30272, 92], dtype: torch.float32, 
+Name: Y_val, shape: [30272], dtype: torch.int64
+
+IMPORTANT: Each of these tensors are pre-loaded and available in the environment.
+
+** Runtime Constraints **	
+- 4 CPU / 32 GB RAM / 2h wall-clock.
+- No internet; importing extra pip packages will fail.
+- Keep model < 50 MB.
+- Avoid large space searches and extensive hyperparameter tuning.
+
+** Code Template **
+# 0. ---------- IMPORTS ----------
+import torch
+import numpy as np
+from torch import nn
+from torch.utils.data import TensorDataset, DataLoader
+# Only import extra std-lib modules, torch or sklearn (sub-)modules you actually use.
+# <LLM: Import modules>
+
+# 1. ---------- PRE-PROCESSING ----------
+class MyPreprocessor:
+    #    Must implement:
+    #   - fit(X: torch.Tensor, y: torch.Tensor) -> self
+    #   - transform(X: torch.Tensor) -> torch.Tensor
+
+    # REQUIREMENTS
+    # IMPORTANT: All state must be picklable with the std-lib pickle module.
+    # May allocate NumPy arrays or Torch tensors internally, but:
+    # transform() must be deterministic & output a torch.Tensor of shape (N, features).
+    # Store only derived parameters needed for transform i.e. do not store the raw data
+    # itself in the preprocessor object.
+
+    # DATA SPECIFICS
+    # IMPORTANT: X_train, Y_train, X_val, Y_val are provided as PyTorch tensors in the environment.
+    # Total flat length per event (X_train & X_val): 92
+    # Index  0 :  missing-ET magnitude  (E_T_miss)
+    # Index  1 :  missing-ET azimuth    (phi_Et_miss)
+    # Indices  2-6  : object 1  ->  obj_1, E_1, p_T1, eta_1, phi_1
+    # Indices  7-11 : object 2  -> obj_2, E_2 , p_T_2 , eta_2 , phi_2
+    # ...
+    # Indices 88-92 : object 18 -> obj_18, E_18 , p_T_18 , eta_18 , phi_18
+    # Per-object slice size = 5
+    # Max objects encoded   = 18
+
+    # TIPS
+    # When modifying data features or feature engineering: annotate tensor size as comments after 
+    # each tensor operation to reduce dimension mismatches.
+
+    # <LLM: Write code to preprocess the data>    
+    def __init__(self):
+        # <LLM: Define and initialize any stateful components here>
+        pass
+
+    def fit(self, X, y=None):
+        # <LLM: Extract statistics or fit transformers>
+        return self
+
+    def transform(self, X):
+        # <LLM: Apply preprocessing logic, return torch.Tensor>
+        return X 
+
+    def fit_transform(self, X, y=None):
+        self.fit(X, y)
+        return self.transform(X)
+
+def make_preprocessor():
+    return MyPreprocessor()
+
+# 2. ---------- MODEL DEFINITION ----------
+def make_model(input_dim: int):
+    # PARAMETERS
+    # inplut_dim : int : Number of features per event after preprocessing.
+
+    # RETURNS
+    # model : torch.nn.Module : Untrained binary-classifier network.
+
+    # <LLM: Write code to define a binary-classifier network>
+    return model
+
+# 3. ---------- MODEL TRAINING ----------
+EPOCHS = # <LLM: define the amount of training epochs>    
+def train_model(model, train_loader, val_loader, epochs):
+    # PARAMETERS
+    # model : torch.nn.Module   
+    # train_loader: torch.utils.data.DataLoader
+    # val_loader  : torch.utils.data.DataLoader
+    # epochs: int
+
+    # RETURNS
+    # trained_model : nn.Module          (same instance, trained in-place)
+    # train_loss    : list[float]        (length == epochs)
+    # val_loss      : list[float]
+    # train_acc     : list[float]
+    # val_acc       : list[float]
+    
+    # REQUIREMENTS 
+    # Define training loop clearly including number of epochs
+    # Do NOT pass "verbose=" to any PyTorch scheduler (not supported in this image).
+
+    # <LLM: Write code to define training loop>
+    return trained_model, train_loss, val_loss, train_acc, val_acc
+
+# IMPORTANT: DO NOT write code to run the functions defined above,
+# i.e. write code to prepare training data, process-data, traing model, evaluate model performance, etc.
+
+ ** IMPORTANT: Your Challenge **
+Write Python code for a binary classification model focussing on maximizing the AUC using the code template above. 
+You may freely choose any pre-processing methods and techniques as well as model architecture and training conventions.                 
+
+
+** Response Format **
+Your reponse must be in a valid JSON dictionary format with the following structure:
+        {
+        'code': <Your complete Python code here>,
+        'explanation': <A detailed explanation of the code>
+        }
+Strictly adhere to this structure and follow these rules:
+
+1. Do not include any text or explanations outside the JSON object.
+2. Do not add any formatting, such as markdown, to the response. 
+3. Properly escape all special characters, especially new lines.
+4. After generating the JSON, internally validate its structure before outputting.
+5. Replace each "# <LLM: ...>" comment, in the code template, with the required code. 
+No placeholder should remain.
+6. Before finalizing your answer, double-check that your code runs without errors and
+meets all requirements (all functions implemented, correct tensor shapes, etc.).
+7. Justify your decisions. Either include them as comments in the code or in the explanation.
+
+```
+2025-05-30 13:01:42,278 - generate_and_dryrun.py - INFO - Querying model openai/gpt-4o-mini: Attempt 1
+2025-05-30 13:03:21,822 - main.py - INFO - 
+
+
+Started LLM Challenge Pipeline
+2025-05-30 13:03:21,822 - main.py - INFO - Mode: Full pipeline execution.
+2025-05-30 13:03:21,822 - main.py - INFO - Start generation and dryrun.
+2025-05-30 13:03:21,822 - generate_and_dryrun.py - INFO - Executing challenge: FOURTOPS
+2025-05-30 13:03:21,823 - generate_and_dryrun.py - INFO - Set-Up Output Directory: ./outputs/30-05/FOURTOPS/Q1/
+2025-05-30 13:03:21,823 - generate_and_dryrun.py - INFO - Prompt: ```markdown
+** Instructions **
+You are an expert at programming in python, machine learning,
+particle and high energy physics. You will help me answer a question
+in a machine learning challenge format where you strive to maximize
+a scalar metric in order to learn more about your scientific creativity
+and scientific understanding. You will follow all of the instructions 
+to your best capabilities. Prefer a clear, correct solution over elaborate 
+code generation. Focus on producing solutions that you are confident 
+will not break given the constraints.
+
+** Problem Description **
+A major task in particle physics is the measurement of rare signal 
+processes ith very small cross-sections. With the unprecedented amount of 
+data provided by the upcoming runs of the Large Hadron Collider (LHC), 
+one can start to measure these processes. An example is the recent 
+observation of four top quarks originating from a single proton-proton 
+collision event. Accurate classification of these events is crucial, 
+as even a small reduction in background noise on the order of a few tens 
+of percent while maintaining the same signal detection efficiency can lead 
+to a profound increase in sensitivity.
+
+** Evaluation Metric **
+The evaluation metric for this classification task is the area under the curve (AUC)
+value, specified by the area under the receiver operating characteristic (ROC) curve. 
+The AUC summarizes a model's ability to distinguish between positive and 
+negative classes. The higher the score the better.
+
+** Dataset Description **
+The dataset used for this problem consists of simulated proton-proton 
+collision at a center of mass energy of 13 TeV. The signal process is defined as 
+$$ pp \rightarrow t \bar{t} t \bar{t} $$. The relevant production processes of the
+backgrounds are $$ t \bar{t} + X $$ where $$ X = Z, W^+, W^+W^- $$.
+
+The dataset includes 302072 events, of which roughly 50% is signal and 50%
+are background processes. All background processes have an equal number of events. 
+There is not cut on the maximum number of objects and there is no order.    
+
+The contents of the data sets (X_train & X_val) are given below.
+IMPORTANT: The specific line format of the data set is as follows:
+
+E_T_miss, phi_{E_t}_miss, obj_1, E_1, p_T1, eta_1, phi_1, obj_2, E_2, p_t2, eta_2, phi_2, ....
+
+Such that each object is represented by a string that starts with an identifier "obj_n", which is an
+integer value representing a particular object in the event. The object identifier is
+followed by its kinematic properties in the form of a four-vector containing the full 
+energy "E" and the transverse momentum "p_T" in units of MeV, as well as the pseudo-rapidity 
+"eta" and the azimuthal angle "phi". The other three quantities are "weight" given by the cross-section
+of thne process divided by the total number of events generated. "E_T_miss" is the magnitude of the
+missing transverse energy in units of MeV and "phi_{E_t}_miss" is the azimuthal angle of the missing
+transverse energy.
+
+Since the length of the events is variable, the data is zero-padded to the largest number of objects
+found in the events within in the entire dataset. The dataset is fairly sparse and not pre-processed.
+
+The relevant datasets are pytorch tensors with the following properties:
+
+Name: X_train, shape: [241657, 92], dtype: torch.float32, 
+Name: Y_train, shape: [241657], dtype: torch.int64, 
+Name: X_val, shape: [30272, 92], dtype: torch.float32, 
+Name: Y_val, shape: [30272], dtype: torch.int64
+
+IMPORTANT: Each of these tensors are pre-loaded and available in the environment.
+
+** Runtime Constraints **	
+- 4 CPU / 32 GB RAM / 2h wall-clock.
+- No internet; importing extra pip packages will fail.
+- Keep model < 50 MB.
+- Avoid large space searches and extensive hyperparameter tuning.
+
+** Code Template **
+# 0. ---------- IMPORTS ----------
+import torch
+import numpy as np
+from torch import nn
+from torch.utils.data import TensorDataset, DataLoader
+# Only import extra std-lib modules, torch or sklearn (sub-)modules you actually use.
+# <LLM: Import modules>
+
+# 1. ---------- PRE-PROCESSING ----------
+class MyPreprocessor:
+    #    Must implement:
+    #   - fit(X: torch.Tensor, y: torch.Tensor) -> self
+    #   - transform(X: torch.Tensor) -> torch.Tensor
+
+    # REQUIREMENTS
+    # IMPORTANT: All state must be picklable with the std-lib pickle module.
+    # May allocate NumPy arrays or Torch tensors internally, but:
+    # transform() must be deterministic & output a torch.Tensor of shape (N, features).
+    # Store only derived parameters needed for transform i.e. do not store the raw data
+    # itself in the preprocessor object.
+
+    # DATA SPECIFICS
+    # IMPORTANT: X_train, Y_train, X_val, Y_val are provided as PyTorch tensors in the environment.
+    # Total flat length per event (X_train & X_val): 92
+    # Index  0 :  missing-ET magnitude  (E_T_miss)
+    # Index  1 :  missing-ET azimuth    (phi_Et_miss)
+    # Indices  2-6  : object 1  ->  obj_1, E_1, p_T1, eta_1, phi_1
+    # Indices  7-11 : object 2  -> obj_2, E_2 , p_T_2 , eta_2 , phi_2
+    # ...
+    # Indices 88-92 : object 18 -> obj_18, E_18 , p_T_18 , eta_18 , phi_18
+    # Per-object slice size = 5
+    # Max objects encoded   = 18
+
+    # TIPS
+    # When modifying data features or feature engineering: annotate tensor size as comments after 
+    # each tensor operation to reduce dimension mismatches.
+
+    # <LLM: Write code to preprocess the data>    
+    def __init__(self):
+        # <LLM: Define and initialize any stateful components here>
+        pass
+
+    def fit(self, X, y=None):
+        # <LLM: Extract statistics or fit transformers>
+        return self
+
+    def transform(self, X):
+        # <LLM: Apply preprocessing logic, return torch.Tensor>
+        return X 
+
+    def fit_transform(self, X, y=None):
+        self.fit(X, y)
+        return self.transform(X)
+
+def make_preprocessor():
+    return MyPreprocessor()
+
+# 2. ---------- MODEL DEFINITION ----------
+def make_model(input_dim: int):
+    # PARAMETERS
+    # inplut_dim : int : Number of features per event after preprocessing.
+
+    # RETURNS
+    # model : torch.nn.Module : Untrained binary-classifier network.
+
+    # <LLM: Write code to define a binary-classifier network>
+    return model
+
+# 3. ---------- MODEL TRAINING ----------
+EPOCHS = # <LLM: define the amount of training epochs>    
+def train_model(model, train_loader, val_loader, epochs):
+    # PARAMETERS
+    # model : torch.nn.Module   
+    # train_loader: torch.utils.data.DataLoader
+    # val_loader  : torch.utils.data.DataLoader
+    # epochs: int
+
+    # RETURNS
+    # trained_model : nn.Module          (same instance, trained in-place)
+    # train_loss    : list[float]        (length == epochs)
+    # val_loss      : list[float]
+    # train_acc     : list[float]
+    # val_acc       : list[float]
+    
+    # REQUIREMENTS 
+    # Define training loop clearly including number of epochs
+    # Do NOT pass "verbose=" to any PyTorch scheduler (not supported in this image).
+
+    # <LLM: Write code to define training loop>
+    return trained_model, train_loss, val_loss, train_acc, val_acc
+
+# IMPORTANT: DO NOT write code to run the functions defined above,
+# i.e. write code to prepare training data, process-data, traing model, evaluate model performance, etc.
+
+ ** IMPORTANT: Your Challenge **
+Write Python code for a binary classification model focussing on maximizing the AUC using the code template above. 
+You may freely choose any pre-processing methods and techniques as well as model architecture and training conventions.                 
+
+
+** Response Format **
+Your reponse must be in a valid JSON dictionary format with the following structure:
+        {
+        'code': <Your complete Python code here>,
+        'explanation': <A detailed explanation of the code>
+        }
+Strictly adhere to this structure and follow these rules:
+
+1. Do not include any text or explanations outside the JSON object.
+2. Do not add any formatting, such as markdown, to the response. 
+3. Properly escape all special characters, especially new lines.
+4. After generating the JSON, internally validate its structure before outputting.
+5. Replace each "# <LLM: ...>" comment, in the code template, with the required code. 
+No placeholder should remain.
+6. Before finalizing your answer, double-check that your code runs without errors and
+meets all requirements (all functions implemented, correct tensor shapes, etc.).
+7. Justify your decisions. Either include them as comments in the code or in the explanation.
+
+```
+2025-05-30 13:03:21,823 - generate_and_dryrun.py - INFO - Querying model openai/gpt-4o-mini: Attempt 1
+2025-05-30 13:03:38,279 - generate_and_dryrun.py - INFO - Successfully parsed raw response as JSON.
+2025-05-30 13:03:38,282 - generate_and_dryrun.py - INFO - Saved script \u2192 ./outputs/30-05/FOURTOPS/Q1/script_openai_gpt-4o-mini_1303_1.py  and JSON \u2192 ./outputs/30-05/FOURTOPS/Q1/response_openai_gpt-4o-mini_1303_1.json
+2025-05-30 13:03:38,284 - static_checks.py - INFO - Running Pylint on ./outputs/30-05/FOURTOPS/Q1/script_openai_gpt-4o-mini_1303_1.py
+2025-05-30 13:03:57,126 - static_checks.py - ERROR - Pylint failed (1 blocking issues):
+error:undefined-variable:Undefined variable 'json' @L199
+2025-05-30 13:03:57,126 - static_checks.py - INFO - Running Bandit on ./outputs/30-05/FOURTOPS/Q1/script_openai_gpt-4o-mini_1303_1.py
+2025-05-30 13:03:57,983 - static_checks.py - INFO - Bandit OK (issues=0).
+2025-05-30 13:03:57,986 - generate_and_dryrun.py - INFO - Moved file ./outputs/30-05/FOURTOPS/Q1/script_openai_gpt-4o-mini_1303_1.py to ./outputs/30-05/FOURTOPS/Q1/StaticFail
+2025-05-30 13:03:58,004 - generate_and_dryrun.py - INFO - Moved file ./outputs/30-05/FOURTOPS/Q1/response_openai_gpt-4o-mini_1303_1.json to ./outputs/30-05/FOURTOPS/Q1/StaticFail
+2025-05-30 13:03:58,004 - generate_and_dryrun.py - INFO - Querying model openai/gpt-4o-mini: Attempt 2
+2025-05-30 13:05:21,504 - main.py - INFO - 
+
+
+Started LLM Challenge Pipeline
+2025-05-30 13:05:21,504 - main.py - INFO - Mode: Full pipeline execution.
+2025-05-30 13:05:21,504 - main.py - INFO - Start generation and dryrun.
+2025-05-30 13:05:21,504 - generate_and_dryrun.py - INFO - Executing challenge: FOURTOPS
+2025-05-30 13:05:21,504 - generate_and_dryrun.py - INFO - Set-Up Output Directory: ./outputs/30-05/FOURTOPS/Q1/
+2025-05-30 13:05:21,505 - generate_and_dryrun.py - INFO - Prompt: ```markdown
+** Instructions **
+You are an expert at programming in python, machine learning,
+particle and high energy physics. You will help me answer a question
+in a machine learning challenge format where you strive to maximize
+a scalar metric in order to learn more about your scientific creativity
+and scientific understanding. You will follow all of the instructions 
+to your best capabilities. Prefer a clear, correct solution over elaborate 
+code generation. Focus on producing solutions that you are confident 
+will not break given the constraints.
+
+** Problem Description **
+A major task in particle physics is the measurement of rare signal 
+processes ith very small cross-sections. With the unprecedented amount of 
+data provided by the upcoming runs of the Large Hadron Collider (LHC), 
+one can start to measure these processes. An example is the recent 
+observation of four top quarks originating from a single proton-proton 
+collision event. Accurate classification of these events is crucial, 
+as even a small reduction in background noise on the order of a few tens 
+of percent while maintaining the same signal detection efficiency can lead 
+to a profound increase in sensitivity.
+
+** Evaluation Metric **
+The evaluation metric for this classification task is the area under the curve (AUC)
+value, specified by the area under the receiver operating characteristic (ROC) curve. 
+The AUC summarizes a model's ability to distinguish between positive and 
+negative classes. The higher the score the better.
+
+** Dataset Description **
+The dataset used for this problem consists of simulated proton-proton 
+collision at a center of mass energy of 13 TeV. The signal process is defined as 
+$$ pp \rightarrow t \bar{t} t \bar{t} $$. The relevant production processes of the
+backgrounds are $$ t \bar{t} + X $$ where $$ X = Z, W^+, W^+W^- $$.
+
+The dataset includes 302072 events, of which roughly 50% is signal and 50%
+are background processes. All background processes have an equal number of events. 
+There is not cut on the maximum number of objects and there is no order.    
+
+The contents of the data sets (X_train & X_val) are given below.
+IMPORTANT: The specific line format of the data set is as follows:
+
+E_T_miss, phi_{E_t}_miss, obj_1, E_1, p_T1, eta_1, phi_1, obj_2, E_2, p_t2, eta_2, phi_2, ....
+
+Such that each object is represented by a string that starts with an identifier "obj_n", which is an
+integer value representing a particular object in the event. The object identifier is
+followed by its kinematic properties in the form of a four-vector containing the full 
+energy "E" and the transverse momentum "p_T" in units of MeV, as well as the pseudo-rapidity 
+"eta" and the azimuthal angle "phi". The other three quantities are "weight" given by the cross-section
+of thne process divided by the total number of events generated. "E_T_miss" is the magnitude of the
+missing transverse energy in units of MeV and "phi_{E_t}_miss" is the azimuthal angle of the missing
+transverse energy.
+
+Since the length of the events is variable, the data is zero-padded to the largest number of objects
+found in the events within in the entire dataset. The dataset is fairly sparse and not pre-processed.
+
+The relevant datasets are pytorch tensors with the following properties:
+
+Name: X_train, shape: [241657, 92], dtype: torch.float32, 
+Name: Y_train, shape: [241657], dtype: torch.int64, 
+Name: X_val, shape: [30272, 92], dtype: torch.float32, 
+Name: Y_val, shape: [30272], dtype: torch.int64
+
+IMPORTANT: Each of these tensors are pre-loaded and available in the environment.
+
+** Runtime Constraints **	
+- 4 CPU / 32 GB RAM / 2h wall-clock.
+- No internet; importing extra pip packages will fail.
+- Keep model < 50 MB.
+- Avoid large space searches and extensive hyperparameter tuning.
+
+** Code Template **
+# 0. ---------- IMPORTS ----------
+import torch
+import numpy as np
+from torch import nn
+from torch.utils.data import TensorDataset, DataLoader
+# Only import extra std-lib modules, torch or sklearn (sub-)modules you actually use.
+# <LLM: Import modules>
+
+# 1. ---------- PRE-PROCESSING ----------
+class MyPreprocessor:
+    #    Must implement:
+    #   - fit(X: torch.Tensor, y: torch.Tensor) -> self
+    #   - transform(X: torch.Tensor) -> torch.Tensor
+
+    # REQUIREMENTS
+    # IMPORTANT: All state must be picklable with the std-lib pickle module.
+    # May allocate NumPy arrays or Torch tensors internally, but:
+    # transform() must be deterministic & output a torch.Tensor of shape (N, features).
+    # Store only derived parameters needed for transform i.e. do not store the raw data
+    # itself in the preprocessor object.
+
+    # DATA SPECIFICS
+    # IMPORTANT: X_train, Y_train, X_val, Y_val are provided as PyTorch tensors in the environment.
+    # Total flat length per event (X_train & X_val): 92
+    # Index  0 :  missing-ET magnitude  (E_T_miss)
+    # Index  1 :  missing-ET azimuth    (phi_Et_miss)
+    # Indices  2-6  : object 1  ->  obj_1, E_1, p_T1, eta_1, phi_1
+    # Indices  7-11 : object 2  -> obj_2, E_2 , p_T_2 , eta_2 , phi_2
+    # ...
+    # Indices 88-92 : object 18 -> obj_18, E_18 , p_T_18 , eta_18 , phi_18
+    # Per-object slice size = 5
+    # Max objects encoded   = 18
+
+    # TIPS
+    # When modifying data features or feature engineering: annotate tensor size as comments after 
+    # each tensor operation to reduce dimension mismatches.
+
+    # <LLM: Write code to preprocess the data>    
+    def __init__(self):
+        # <LLM: Define and initialize any stateful components here>
+        pass
+
+    def fit(self, X, y=None):
+        # <LLM: Extract statistics or fit transformers>
+        return self
+
+    def transform(self, X):
+        # <LLM: Apply preprocessing logic, return torch.Tensor>
+        return X 
+
+    def fit_transform(self, X, y=None):
+        self.fit(X, y)
+        return self.transform(X)
+
+def make_preprocessor():
+    return MyPreprocessor()
+
+# 2. ---------- MODEL DEFINITION ----------
+def make_model(input_dim: int):
+    # PARAMETERS
+    # inplut_dim : int : Number of features per event after preprocessing.
+
+    # RETURNS
+    # model : torch.nn.Module : Untrained binary-classifier network.
+
+    # <LLM: Write code to define a binary-classifier network>
+    return model
+
+# 3. ---------- MODEL TRAINING ----------
+EPOCHS = # <LLM: define the amount of training epochs>    
+def train_model(model, train_loader, val_loader, epochs):
+    # PARAMETERS
+    # model : torch.nn.Module   
+    # train_loader: torch.utils.data.DataLoader
+    # val_loader  : torch.utils.data.DataLoader
+    # epochs: int
+
+    # RETURNS
+    # trained_model : nn.Module          (same instance, trained in-place)
+    # train_loss    : list[float]        (length == epochs)
+    # val_loss      : list[float]
+    # train_acc     : list[float]
+    # val_acc       : list[float]
+    
+    # REQUIREMENTS 
+    # Define training loop clearly including number of epochs
+    # Do NOT pass "verbose=" to any PyTorch scheduler (not supported in this image).
+
+    # <LLM: Write code to define training loop>
+    return trained_model, train_loss, val_loss, train_acc, val_acc
+
+# IMPORTANT: DO NOT write code to run the functions defined above,
+# i.e. write code to prepare training data, process-data, traing model, evaluate model performance, etc.
+
+ ** IMPORTANT: Your Challenge **
+Write Python code for a binary classification model focussing on maximizing the AUC using the code template above. 
+You may freely choose any pre-processing methods and techniques as well as model architecture and training conventions.                 
+
+
+** Response Format **
+Your reponse must be in a valid JSON dictionary format with the following structure:
+        {
+        'code': <Your complete Python code here>,
+        'explanation': <A detailed explanation of the code>
+        }
+Strictly adhere to this structure and follow these rules:
+
+1. Do not include any text or explanations outside the JSON object.
+2. Do not add any formatting, such as markdown, to the response. 
+3. Properly escape all special characters, especially new lines.
+4. After generating the JSON, internally validate its structure before outputting.
+5. Replace each "# <LLM: ...>" comment, in the code template, with the required code. 
+No placeholder should remain.
+6. Before finalizing your answer, double-check that your code runs without errors and
+meets all requirements (all functions implemented, correct tensor shapes, etc.).
+7. Justify your decisions. Either include them as comments in the code or in the explanation.
+
+```
+2025-05-30 13:05:21,505 - generate_and_dryrun.py - INFO - Querying model openai/gpt-4o-mini: Attempt 1
+2025-05-30 13:05:43,002 - generate_and_dryrun.py - INFO - Successfully parsed raw response as JSON.
+2025-05-30 13:05:43,004 - generate_and_dryrun.py - INFO - Saved script \u2192 ./outputs/30-05/FOURTOPS/Q1/script_openai_gpt-4o-mini_1305_1.py  and JSON \u2192 ./outputs/30-05/FOURTOPS/Q1/response_openai_gpt-4o-mini_1305_1.json
+2025-05-30 13:05:43,004 - static_checks.py - INFO - Running Pylint on ./outputs/30-05/FOURTOPS/Q1/script_openai_gpt-4o-mini_1305_1.py
+2025-05-30 13:05:54,586 - static_checks.py - INFO - Pylint OK (no fatal/error messages).
+2025-05-30 13:05:54,587 - static_checks.py - INFO - Running Bandit on ./outputs/30-05/FOURTOPS/Q1/script_openai_gpt-4o-mini_1305_1.py
+2025-05-30 13:05:55,104 - static_checks.py - INFO - Bandit OK (issues=0).
+2025-05-30 13:05:55,105 - run_scripts.py - INFO - Dry-run start: ./outputs/30-05/FOURTOPS/Q1/script_openai_gpt-4o-mini_1305_1.py
+2025-05-30 13:05:55,105 - run_scripts.py - INFO - Successfully passed naive safety check.
+2025-05-30 13:06:27,974 - run_scripts.py - INFO - Dry-run ./outputs/30-05/FOURTOPS/Q1/script_openai_gpt-4o-mini_1305_1.py \u2192 code=1 time=32.87s mem=96KB
+2025-05-30 13:06:27,975 - generate_and_dryrun.py - ERROR - Model openai/gpt-4o-mini failed dry-run on attempt 1.
+                                      STDOUT: argv0=/usr/local/bin/train.sh
+argv1=outputs/30-05/FOURTOPS/Q1/script_openai_gpt-4o-mini_1305_1.py
+argv2=--dryrun
+Runtime Resource Diagnostics:
+TIMEOUT       = 600 seconds
+MEMORY_LIMIT  = 32 GB
+PIDS_LIMIT    = 1024
+---------- ulimit -a ----------
+real-time non-blocking time  (microseconds, -R) unlimited
+core file size              (blocks, -c) 0
+data seg size               (kbytes, -d) unlimited
+scheduling priority                 (-e) 0
+file size                   (blocks, -f) unlimited
+pending signals                     (-i) 63294
+max locked memory           (kbytes, -l) unlimited
+max memory size             (kbytes, -m) unlimited
+open files                          (-n) 1024
+pipe size                (512 bytes, -p) 8
+POSIX message queues         (bytes, -q) 819200
+real-time priority                  (-r) 0
+stack size                  (kbytes, -s) 8192
+cpu time                   (seconds, -t) 600
+max user processes                  (-u) unlimited
+virtual memory              (kbytes, -v) 33554432
+file locks                          (-x) unlimited
+---------- free -h (if available) ----------
+Mem cgroup limit: 
+Mem in use     : 
+ERROR during training: not enough values to unpack (expected 5, got 3)
+
+                                      STDERR: cat: /sys/fs/cgroup/memory.max: No such file or directory
+cat: /sys/fs/cgroup/memory.current: No such file or directory
+Traceback (most recent call last):
+  File "/workspace/outputs/30-05/FOURTOPS/Q1/script_openai_gpt-4o-mini_1305_1.py", line 195, in <module>
+    _run(dryrun="--dryrun" in sys.argv)
+    ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/outputs/30-05/FOURTOPS/Q1/script_openai_gpt-4o-mini_1305_1.py", line 149, in _run
+    trained_model, tr_loss, va_loss, tr_acc, va_acc = train_model(
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: not enough values to unpack (expected 5, got 3)
+
+2025-05-30 13:06:27,977 - generate_and_dryrun.py - INFO - Moved file ./outputs/30-05/FOURTOPS/Q1/script_openai_gpt-4o-mini_1305_1.py to ./outputs/30-05/FOURTOPS/Q1/Failed Dry-run Scripts
+2025-05-30 13:06:27,979 - generate_and_dryrun.py - INFO - Moved file ./outputs/30-05/FOURTOPS/Q1/response_openai_gpt-4o-mini_1305_1.json to ./outputs/30-05/FOURTOPS/Q1/Failed Dry-run Scripts
+2025-05-30 13:06:27,979 - generate_and_dryrun.py - INFO - Querying model openai/gpt-4o-mini: Attempt 2
+2025-05-30 13:06:47,907 - generate_and_dryrun.py - INFO - Successfully parsed raw response as JSON.
+2025-05-30 13:06:47,910 - generate_and_dryrun.py - INFO - Saved script \u2192 ./outputs/30-05/FOURTOPS/Q1/script_openai_gpt-4o-mini_1306_2.py  and JSON \u2192 ./outputs/30-05/FOURTOPS/Q1/response_openai_gpt-4o-mini_1306_2.json
+2025-05-30 13:06:47,911 - static_checks.py - INFO - Running Pylint on ./outputs/30-05/FOURTOPS/Q1/script_openai_gpt-4o-mini_1306_2.py
+2025-05-30 13:06:59,802 - static_checks.py - INFO - Pylint OK (no fatal/error messages).
+2025-05-30 13:06:59,802 - static_checks.py - INFO - Running Bandit on ./outputs/30-05/FOURTOPS/Q1/script_openai_gpt-4o-mini_1306_2.py
+2025-05-30 13:07:00,349 - static_checks.py - INFO - Bandit OK (issues=0).
+2025-05-30 13:07:00,350 - run_scripts.py - INFO - Dry-run start: ./outputs/30-05/FOURTOPS/Q1/script_openai_gpt-4o-mini_1306_2.py
+2025-05-30 13:07:00,350 - run_scripts.py - INFO - Successfully passed naive safety check.
+2025-05-30 13:07:14,089 - run_scripts.py - INFO - Dry-run ./outputs/30-05/FOURTOPS/Q1/script_openai_gpt-4o-mini_1306_2.py \u2192 code=1 time=13.74s mem=36KB
+2025-05-30 13:07:14,090 - generate_and_dryrun.py - ERROR - Model openai/gpt-4o-mini failed dry-run on attempt 2.
+                                      STDOUT: argv0=/usr/local/bin/train.sh
+argv1=outputs/30-05/FOURTOPS/Q1/script_openai_gpt-4o-mini_1306_2.py
+argv2=--dryrun
+Runtime Resource Diagnostics:
+TIMEOUT       = 600 seconds
+MEMORY_LIMIT  = 32 GB
+PIDS_LIMIT    = 1024
+---------- ulimit -a ----------
+real-time non-blocking time  (microseconds, -R) unlimited
+core file size              (blocks, -c) 0
+data seg size               (kbytes, -d) unlimited
+scheduling priority                 (-e) 0
+file size                   (blocks, -f) unlimited
+pending signals                     (-i) 63294
+max locked memory           (kbytes, -l) unlimited
+max memory size             (kbytes, -m) unlimited
+open files                          (-n) 1024
+pipe size                (512 bytes, -p) 8
+POSIX message queues         (bytes, -q) 819200
+real-time priority                  (-r) 0
+stack size                  (kbytes, -s) 8192
+cpu time                   (seconds, -t) 600
+max user processes                  (-u) unlimited
+virtual memory              (kbytes, -v) 33554432
+file locks                          (-x) unlimited
+---------- free -h (if available) ----------
+Mem cgroup limit: 
+Mem in use     : 
+ERROR during training: all elements of input should be between 0 and 1
+
+                                      STDERR: cat: /sys/fs/cgroup/memory.max: No such file or directory
+cat: /sys/fs/cgroup/memory.current: No such file or directory
+Traceback (most recent call last):
+  File "/workspace/outputs/30-05/FOURTOPS/Q1/script_openai_gpt-4o-mini_1306_2.py", line 204, in <module>
+    _run(dryrun="--dryrun" in sys.argv)
+    ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/outputs/30-05/FOURTOPS/Q1/script_openai_gpt-4o-mini_1306_2.py", line 158, in _run
+    trained_model, tr_loss, va_loss, tr_acc, va_acc = train_model(
+                                                      ~~~~~~~~~~~^
+        model, train_loader, val_loader, epochs=n_epochs)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/outputs/30-05/FOURTOPS/Q1/script_openai_gpt-4o-mini_1306_2.py", line 104, in train_model
+    loss = criterion(output.squeeze(), target.float())
+  File "/usr/local/lib/python3.13/site-packages/torch/nn/modules/module.py", line 1751, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.13/site-packages/torch/nn/modules/module.py", line 1762, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/usr/local/lib/python3.13/site-packages/torch/nn/modules/loss.py", line 699, in forward
+    return F.binary_cross_entropy(
+           ~~~~~~~~~~~~~~~~~~~~~~^
+        input, target, weight=self.weight, reduction=self.reduction
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/local/lib/python3.13/site-packages/torch/nn/functional.py", line 3569, in binary_cross_entropy
+    return torch._C._nn.binary_cross_entropy(input, target, weight, reduction_enum)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: all elements of input should be between 0 and 1
+
+2025-05-30 13:07:14,091 - generate_and_dryrun.py - INFO - Moved file ./outputs/30-05/FOURTOPS/Q1/script_openai_gpt-4o-mini_1306_2.py to ./outputs/30-05/FOURTOPS/Q1/Failed Dry-run Scripts
+2025-05-30 13:07:14,092 - generate_and_dryrun.py - INFO - Moved file ./outputs/30-05/FOURTOPS/Q1/response_openai_gpt-4o-mini_1306_2.json to ./outputs/30-05/FOURTOPS/Q1/Failed Dry-run Scripts
+2025-05-30 13:07:14,092 - generate_and_dryrun.py - INFO - Querying model openai/gpt-4o-mini: Attempt 3
+2025-05-30 13:07:33,995 - generate_and_dryrun.py - INFO - Successfully parsed raw response as JSON.
+2025-05-30 13:07:33,998 - generate_and_dryrun.py - INFO - Saved script \u2192 ./outputs/30-05/FOURTOPS/Q1/script_openai_gpt-4o-mini_1307_3.py  and JSON \u2192 ./outputs/30-05/FOURTOPS/Q1/response_openai_gpt-4o-mini_1307_3.json
+2025-05-30 13:07:33,998 - static_checks.py - INFO - Running Pylint on ./outputs/30-05/FOURTOPS/Q1/script_openai_gpt-4o-mini_1307_3.py
+2025-05-30 13:07:46,160 - static_checks.py - INFO - Pylint OK (no fatal/error messages).
+2025-05-30 13:07:46,160 - static_checks.py - INFO - Running Bandit on ./outputs/30-05/FOURTOPS/Q1/script_openai_gpt-4o-mini_1307_3.py
+2025-05-30 13:07:46,635 - static_checks.py - INFO - Bandit OK (issues=0).
+2025-05-30 13:07:46,636 - run_scripts.py - INFO - Dry-run start: ./outputs/30-05/FOURTOPS/Q1/script_openai_gpt-4o-mini_1307_3.py
+2025-05-30 13:07:46,637 - run_scripts.py - INFO - Successfully passed naive safety check.
+2025-05-30 13:08:17,575 - run_scripts.py - INFO - Dry-run ./outputs/30-05/FOURTOPS/Q1/script_openai_gpt-4o-mini_1307_3.py \u2192 code=0 time=30.94s mem=16KB
+2025-05-30 13:08:17,578 - generate_and_dryrun.py - INFO - Model openai/gpt-4o-mini passed dry-run on attempt 3
+2025-05-30 13:08:17,581 - generate_and_dryrun.py - INFO - Moved file ./outputs/30-05/FOURTOPS/Q1/script_openai_gpt-4o-mini_1307_3.py to ./outputs/30-05/FOURTOPS/Q1/openai_gpt-4o-mini
+2025-05-30 13:08:17,585 - generate_and_dryrun.py - INFO - Moved file ./outputs/30-05/FOURTOPS/Q1/response_openai_gpt-4o-mini_1307_3.json to ./outputs/30-05/FOURTOPS/Q1/openai_gpt-4o-mini
+2025-05-30 13:08:17,585 - main.py - INFO - Using auto-generated directory for script execution & evaluation: ./outputs/30-05/FOURTOPS/Q1/
+2025-05-30 13:08:17,585 - main.py - INFO - Start script execution.
+2025-05-30 13:08:17,591 - run_scripts.py - INFO - Collected valid scripts for execution: ['./outputs/30-05/FOURTOPS/Q1/openai_gpt-4o-mini\\script_openai_gpt-4o-mini_1307_3.py']
+2025-05-30 13:08:17,591 - run_scripts.py - INFO - Found 1 scripts to run under ./outputs/30-05/FOURTOPS/Q1/
+2025-05-30 13:08:17,595 - run_scripts.py - INFO - Run start: ./outputs/30-05/FOURTOPS/Q1/openai_gpt-4o-mini\script_openai_gpt-4o-mini_1307_3.py
+2025-05-30 13:08:17,595 - run_scripts.py - INFO - Successfully passed naive safety check.
+2025-05-30 13:19:28,017 - run_scripts.py - INFO - Run ./outputs/30-05/FOURTOPS/Q1/openai_gpt-4o-mini\script_openai_gpt-4o-mini_1307_3.py \u2192 code=0 time=670.42s mem=32KB
+2025-05-30 13:19:28,037 - run_scripts.py - INFO - Wrote summary to ./outputs/30-05/FOURTOPS/Q1/summary.csv
+2025-05-30 13:19:28,037 - main.py - INFO - Start model evaluation.
+2025-05-30 13:19:28,326 - evaluate_scripts.py - INFO - Found FOURTOP model candidates: [('Q1', 'openai_gpt-4o-mini', 'outputs\\30-05\\FOURTOPS\\Q1\\openai_gpt-4o-mini\\openai_gpt-4o-mini_1307_3_model.pkl')]
+2025-05-30 13:19:28,326 - evaluate_scripts.py - INFO - Evaluating outputs\30-05\FOURTOPS\Q1\openai_gpt-4o-mini\openai_gpt-4o-mini_1307_3_model.pkl on cpu
+2025-05-30 13:19:28,496 - evaluate_scripts.py - INFO - Output mode: prob; activation chosen.
+2025-05-30 13:19:28,972 - evaluate_scripts.py - INFO - Evaluation finished: AUC 0.8199  ACC 0.7434
+2025-05-30 13:19:28,973 - evaluate_scripts.py - INFO - Evaluated Q1/openai_gpt-4o-mini \u2192 acc=0.743 auc=0.820
+2025-05-30 13:19:28,976 - evaluate_scripts.py - WARNING - Date 30-05 - Q1 - Model openai_gpt-4o-mini - MISSING: *_ROC.png
+2025-05-30 13:19:30,603 - evaluate_scripts.py - INFO - Summary written to outputs\30-05\FOURTOPS\summary.csv
+2025-05-30 13:19:30,604 - main.py - INFO - Completed LLM Challenge Pipeline.
+2025-05-30 14:56:01,201 - main.py - INFO - 
+
+
+Started LLM Challenge Pipeline
+2025-05-30 14:56:01,202 - main.py - INFO - Mode: Full pipeline execution.
+2025-05-30 14:56:01,202 - main.py - INFO - Start generation and dryrun.
+2025-05-30 14:56:01,202 - generate_and_dryrun.py - INFO - Executing challenge: FOURTOPS
+2025-05-30 14:56:01,203 - generate_and_dryrun.py - INFO - Set-Up Output Directory: ./outputs/30-05/FOURTOPS/Q1/
+2025-05-30 14:56:01,203 - generate_and_dryrun.py - INFO - Prompt: ```markdown
+** Instructions **
+You are an expert at programming in python, machine learning,
+particle and high energy physics. You will help me answer a question
+in a machine learning challenge format where you strive to maximize
+a scalar metric in order to learn more about your scientific creativity
+and scientific understanding. You will follow all of the instructions 
+to your best capabilities. Prefer a clear, correct solution over elaborate 
+code generation. Focus on producing solutions that you are confident 
+will not break given the constraints.
+
+** Problem Description **
+A major task in particle physics is the measurement of rare signal 
+processes ith very small cross-sections. With the unprecedented amount of 
+data provided by the upcoming runs of the Large Hadron Collider (LHC), 
+one can start to measure these processes. An example is the recent 
+observation of four top quarks originating from a single proton-proton 
+collision event. Accurate classification of these events is crucial, 
+as even a small reduction in background noise on the order of a few tens 
+of percent while maintaining the same signal detection efficiency can lead 
+to a profound increase in sensitivity.
+
+** Evaluation Metric **
+The evaluation metric for this classification task is the area under the curve (AUC)
+value, specified by the area under the receiver operating characteristic (ROC) curve. 
+The AUC summarizes a model's ability to distinguish between positive and 
+negative classes. The higher the score the better.
+
+** Dataset Description **
+The dataset used for this problem consists of simulated proton-proton 
+collision at a center of mass energy of 13 TeV. The signal process is defined as 
+$$ pp \rightarrow t \bar{t} t \bar{t} $$. The relevant production processes of the
+backgrounds are $$ t \bar{t} + X $$ where $$ X = Z, W^+, W^+W^- $$.
+
+The dataset includes 302072 events, of which roughly 50% is signal and 50%
+are background processes. All background processes have an equal number of events. 
+There is not cut on the maximum number of objects and there is no order.    
+
+The contents of the data sets (X_train & X_val) are given below.
+IMPORTANT: The specific line format of the data set is as follows:
+
+E_T_miss, phi_{E_t}_miss, obj_1, E_1, p_T1, eta_1, phi_1, obj_2, E_2, p_t2, eta_2, phi_2, ....
+
+Such that each object is represented by a string that starts with an identifier "obj_n", which is an
+integer value representing a particular object in the event. The object identifier is
+followed by its kinematic properties in the form of a four-vector containing the full 
+energy "E" and the transverse momentum "p_T" in units of MeV, as well as the pseudo-rapidity 
+"eta" and the azimuthal angle "phi". The other three quantities are "weight" given by the cross-section
+of thne process divided by the total number of events generated. "E_T_miss" is the magnitude of the
+missing transverse energy in units of MeV and "phi_{E_t}_miss" is the azimuthal angle of the missing
+transverse energy.
+
+Since the length of the events is variable, the data is zero-padded to the largest number of objects
+found in the events within in the entire dataset. The dataset is fairly sparse and not pre-processed.
+
+The relevant datasets are pytorch tensors with the following properties:
+
+Name: X_train, shape: [241657, 92], dtype: torch.float32, 
+Name: Y_train, shape: [241657], dtype: torch.int64, 
+Name: X_val, shape: [30272, 92], dtype: torch.float32, 
+Name: Y_val, shape: [30272], dtype: torch.int64
+
+IMPORTANT: Each of these tensors are pre-loaded and available in the environment.
+
+** Runtime Constraints **	
+- 4 CPU / 32 GB RAM / 2h wall-clock.
+- No internet; importing extra pip packages will fail.
+- Keep model < 50 MB.
+- Avoid large space searches and extensive hyperparameter tuning.
+
+** Code Template **
+# 0. ---------- IMPORTS ----------
+import torch
+import numpy as np
+from torch import nn
+from torch.utils.data import TensorDataset, DataLoader
+# Only import extra std-lib modules, torch or sklearn (sub-)modules you actually use.
+# <LLM: Import modules>
+
+# 1. ---------- PRE-PROCESSING ----------
+class MyPreprocessor:
+    #    Must implement:
+    #   - fit(X: torch.Tensor, y: torch.Tensor) -> self
+    #   - transform(X: torch.Tensor) -> torch.Tensor
+
+    # REQUIREMENTS
+    # IMPORTANT: All state must be picklable with the std-lib pickle module.
+    # May allocate NumPy arrays or Torch tensors internally, but:
+    # transform() must be deterministic & output a torch.Tensor of shape (N, features).
+    # Store only derived parameters needed for transform i.e. do not store the raw data
+    # itself in the preprocessor object.
+
+    # DATA SPECIFICS
+    # IMPORTANT: X_train, Y_train, X_val, Y_val are provided as PyTorch tensors in the environment.
+    # Total flat length per event (X_train & X_val): 92
+    # Index  0 :  missing-ET magnitude  (E_T_miss)
+    # Index  1 :  missing-ET azimuth    (phi_Et_miss)
+    # Indices  2-6  : object 1  ->  obj_1, E_1, p_T1, eta_1, phi_1
+    # Indices  7-11 : object 2  -> obj_2, E_2 , p_T_2 , eta_2 , phi_2
+    # ...
+    # Indices 88-92 : object 18 -> obj_18, E_18 , p_T_18 , eta_18 , phi_18
+    # Per-object slice size = 5
+    # Max objects encoded   = 18
+
+    # TIPS
+    # When modifying data features or feature engineering: annotate tensor size as comments after 
+    # each tensor operation to reduce dimension mismatches.
+
+    # <LLM: Write code to preprocess the data>    
+    def __init__(self):
+        # <LLM: Define and initialize any stateful components here>
+        pass
+
+    def fit(self, X, y=None):
+        # <LLM: Extract statistics or fit transformers>
+        return self
+
+    def transform(self, X):
+        # <LLM: Apply preprocessing logic, return torch.Tensor>
+        return X 
+
+    def fit_transform(self, X, y=None):
+        self.fit(X, y)
+        return self.transform(X)
+
+def make_preprocessor():
+    return MyPreprocessor()
+
+# 2. ---------- MODEL DEFINITION ----------
+def make_model(input_dim: int):
+    # PARAMETERS
+    # inplut_dim : int : Number of features per event after preprocessing.
+
+    # RETURNS
+    # model : torch.nn.Module : Untrained binary-classifier network.
+
+    # <LLM: Write code to define a binary-classifier network>
+    return model
+
+# 3. ---------- MODEL TRAINING ----------
+EPOCHS = # <LLM: define the amount of training epochs>    
+def train_model(model, train_loader, val_loader, epochs):
+    # PARAMETERS
+    # model : torch.nn.Module   
+    # train_loader: torch.utils.data.DataLoader
+    # val_loader  : torch.utils.data.DataLoader
+    # epochs: int
+
+    # RETURNS
+    # trained_model : nn.Module          (same instance, trained in-place)
+    # train_loss    : list[float]        (length == epochs)
+    # val_loss      : list[float]
+    # train_acc     : list[float]
+    # val_acc       : list[float]
+    
+    # REQUIREMENTS 
+    # Define training loop clearly including number of epochs
+    # Do NOT pass "verbose=" to any PyTorch scheduler (not supported in this image).
+
+    # <LLM: Write code to define training loop>
+    return trained_model, train_loss, val_loss, train_acc, val_acc
+
+# IMPORTANT: DO NOT write code to run the functions defined above,
+# i.e. write code to prepare training data, process-data, traing model, evaluate model performance, etc.
+
+ ** IMPORTANT: Your Challenge **
+Write Python code for a binary classification model focussing on maximizing the AUC using the code template above. 
+You may freely choose any pre-processing methods and techniques as well as model architecture and training conventions.                 
+
+
+** Response Format **
+Your reponse must be in a valid JSON dictionary format with the following structure:
+        {
+        'code': <Your complete Python code here>,
+        'explanation': <A detailed explanation of the code>
+        }
+Strictly adhere to this structure and follow these rules:
+
+1. Do not include any text or explanations outside the JSON object.
+2. Do not add any formatting, such as markdown, to the response. 
+3. Properly escape all special characters, especially new lines.
+4. After generating the JSON, internally validate its structure before outputting.
+5. Replace each "# <LLM: ...>" comment, in the code template, with the required code. 
+No placeholder should remain.
+6. Before finalizing your answer, double-check that your code runs without errors and
+meets all requirements (all functions implemented, correct tensor shapes, etc.).
+7. Justify your decisions. Either include them as comments in the code or in the explanation.
+
+```
+2025-05-30 14:56:01,203 - generate_and_dryrun.py - INFO - Querying model openai/gpt-4o-mini: Attempt 1
+2025-05-30 14:56:24,318 - generate_and_dryrun.py - INFO - Successfully parsed raw response as JSON.
+2025-05-30 14:58:07,010 - main.py - INFO - 
+
+
+Started LLM Challenge Pipeline
+2025-05-30 14:58:07,010 - main.py - INFO - Mode: Full pipeline execution.
+2025-05-30 14:58:07,010 - main.py - INFO - Start generation and dryrun.
+2025-05-30 14:58:07,010 - generate_and_dryrun.py - INFO - Executing challenge: FOURTOPS
+2025-05-30 14:58:07,010 - generate_and_dryrun.py - INFO - Set-Up Output Directory: ./outputs/30-05/FOURTOPS/Q1/
+2025-05-30 14:58:07,010 - generate_and_dryrun.py - INFO - Prompt: ```markdown
+** Instructions **
+You are an expert at programming in python, machine learning,
+particle and high energy physics. You will help me answer a question
+in a machine learning challenge format where you strive to maximize
+a scalar metric in order to learn more about your scientific creativity
+and scientific understanding. You will follow all of the instructions 
+to your best capabilities. Prefer a clear, correct solution over elaborate 
+code generation. Focus on producing solutions that you are confident 
+will not break given the constraints.
+
+** Problem Description **
+A major task in particle physics is the measurement of rare signal 
+processes ith very small cross-sections. With the unprecedented amount of 
+data provided by the upcoming runs of the Large Hadron Collider (LHC), 
+one can start to measure these processes. An example is the recent 
+observation of four top quarks originating from a single proton-proton 
+collision event. Accurate classification of these events is crucial, 
+as even a small reduction in background noise on the order of a few tens 
+of percent while maintaining the same signal detection efficiency can lead 
+to a profound increase in sensitivity.
+
+** Evaluation Metric **
+The evaluation metric for this classification task is the area under the curve (AUC)
+value, specified by the area under the receiver operating characteristic (ROC) curve. 
+The AUC summarizes a model's ability to distinguish between positive and 
+negative classes. The higher the score the better.
+
+** Dataset Description **
+The dataset used for this problem consists of simulated proton-proton 
+collision at a center of mass energy of 13 TeV. The signal process is defined as 
+$$ pp \rightarrow t \bar{t} t \bar{t} $$. The relevant production processes of the
+backgrounds are $$ t \bar{t} + X $$ where $$ X = Z, W^+, W^+W^- $$.
+
+The dataset includes 302072 events, of which roughly 50% is signal and 50%
+are background processes. All background processes have an equal number of events. 
+There is not cut on the maximum number of objects and there is no order.    
+
+The contents of the data sets (X_train & X_val) are given below.
+IMPORTANT: The specific line format of the data set is as follows:
+
+E_T_miss, phi_{E_t}_miss, obj_1, E_1, p_T1, eta_1, phi_1, obj_2, E_2, p_t2, eta_2, phi_2, ....
+
+Such that each object is represented by a string that starts with an identifier "obj_n", which is an
+integer value representing a particular object in the event. The object identifier is
+followed by its kinematic properties in the form of a four-vector containing the full 
+energy "E" and the transverse momentum "p_T" in units of MeV, as well as the pseudo-rapidity 
+"eta" and the azimuthal angle "phi". The other three quantities are "weight" given by the cross-section
+of thne process divided by the total number of events generated. "E_T_miss" is the magnitude of the
+missing transverse energy in units of MeV and "phi_{E_t}_miss" is the azimuthal angle of the missing
+transverse energy.
+
+Since the length of the events is variable, the data is zero-padded to the largest number of objects
+found in the events within in the entire dataset. The dataset is fairly sparse and not pre-processed.
+
+The relevant datasets are pytorch tensors with the following properties:
+
+Name: X_train, shape: [241657, 92], dtype: torch.float32, 
+Name: Y_train, shape: [241657], dtype: torch.int64, 
+Name: X_val, shape: [30272, 92], dtype: torch.float32, 
+Name: Y_val, shape: [30272], dtype: torch.int64
+
+IMPORTANT: Each of these tensors are pre-loaded and available in the environment.
+
+** Runtime Constraints **	
+- 4 CPU / 32 GB RAM / 2h wall-clock.
+- No internet; importing extra pip packages will fail.
+- Keep model < 50 MB.
+- Avoid large space searches and extensive hyperparameter tuning.
+
+** Code Template **
+# 0. ---------- IMPORTS ----------
+import torch
+import numpy as np
+from torch import nn
+from torch.utils.data import TensorDataset, DataLoader
+# Only import extra std-lib modules, torch or sklearn (sub-)modules you actually use.
+# <LLM: Import modules>
+
+# 1. ---------- PRE-PROCESSING ----------
+class MyPreprocessor:
+    #    Must implement:
+    #   - fit(X: torch.Tensor, y: torch.Tensor) -> self
+    #   - transform(X: torch.Tensor) -> torch.Tensor
+
+    # REQUIREMENTS
+    # IMPORTANT: All state must be picklable with the std-lib pickle module.
+    # May allocate NumPy arrays or Torch tensors internally, but:
+    # transform() must be deterministic & output a torch.Tensor of shape (N, features).
+    # Store only derived parameters needed for transform i.e. do not store the raw data
+    # itself in the preprocessor object.
+
+    # DATA SPECIFICS
+    # IMPORTANT: X_train, Y_train, X_val, Y_val are provided as PyTorch tensors in the environment.
+    # Total flat length per event (X_train & X_val): 92
+    # Index  0 :  missing-ET magnitude  (E_T_miss)
+    # Index  1 :  missing-ET azimuth    (phi_Et_miss)
+    # Indices  2-6  : object 1  ->  obj_1, E_1, p_T1, eta_1, phi_1
+    # Indices  7-11 : object 2  -> obj_2, E_2 , p_T_2 , eta_2 , phi_2
+    # ...
+    # Indices 88-92 : object 18 -> obj_18, E_18 , p_T_18 , eta_18 , phi_18
+    # Per-object slice size = 5
+    # Max objects encoded   = 18
+
+    # TIPS
+    # When modifying data features or feature engineering: annotate tensor size as comments after 
+    # each tensor operation to reduce dimension mismatches.
+
+    # <LLM: Write code to preprocess the data>    
+    def __init__(self):
+        # <LLM: Define and initialize any stateful components here>
+        pass
+
+    def fit(self, X, y=None):
+        # <LLM: Extract statistics or fit transformers>
+        return self
+
+    def transform(self, X):
+        # <LLM: Apply preprocessing logic, return torch.Tensor>
+        return X 
+
+    def fit_transform(self, X, y=None):
+        self.fit(X, y)
+        return self.transform(X)
+
+def make_preprocessor():
+    return MyPreprocessor()
+
+# 2. ---------- MODEL DEFINITION ----------
+def make_model(input_dim: int):
+    # PARAMETERS
+    # inplut_dim : int : Number of features per event after preprocessing.
+
+    # RETURNS
+    # model : torch.nn.Module : Untrained binary-classifier network.
+
+    # <LLM: Write code to define a binary-classifier network>
+    return model
+
+# 3. ---------- MODEL TRAINING ----------
+EPOCHS = # <LLM: define the amount of training epochs>    
+def train_model(model, train_loader, val_loader, epochs):
+    # PARAMETERS
+    # model : torch.nn.Module   
+    # train_loader: torch.utils.data.DataLoader
+    # val_loader  : torch.utils.data.DataLoader
+    # epochs: int
+
+    # RETURNS
+    # trained_model : nn.Module          (same instance, trained in-place)
+    # train_loss    : list[float]        (length == epochs)
+    # val_loss      : list[float]
+    # train_acc     : list[float]
+    # val_acc       : list[float]
+    
+    # REQUIREMENTS 
+    # Define training loop clearly including number of epochs
+    # Do NOT pass "verbose=" to any PyTorch scheduler (not supported in this image).
+
+    # <LLM: Write code to define training loop>
+    return trained_model, train_loss, val_loss, train_acc, val_acc
+
+# IMPORTANT: DO NOT write code to run the functions defined above,
+# i.e. write code to prepare training data, process-data, traing model, evaluate model performance, etc.
+
+ ** IMPORTANT: Your Challenge **
+Write Python code for a binary classification model focussing on maximizing the AUC using the code template above. 
+You may freely choose any pre-processing methods and techniques as well as model architecture and training conventions.                 
+
+
+** Response Format **
+Your reponse must be in a valid JSON dictionary format with the following structure:
+        {
+        'code': <Your complete Python code here>,
+        'explanation': <A detailed explanation of the code>
+        }
+Strictly adhere to this structure and follow these rules:
+
+1. Do not include any text or explanations outside the JSON object.
+2. Do not add any formatting, such as markdown, to the response. 
+3. Properly escape all special characters, especially new lines.
+4. After generating the JSON, internally validate its structure before outputting.
+5. Replace each "# <LLM: ...>" comment, in the code template, with the required code. 
+No placeholder should remain.
+6. Before finalizing your answer, double-check that your code runs without errors and
+meets all requirements (all functions implemented, correct tensor shapes, etc.).
+7. Justify your decisions. Either include them as comments in the code or in the explanation.
+
+```
+2025-05-30 14:58:07,011 - generate_and_dryrun.py - INFO - Querying model openai/gpt-4o-mini: Attempt 1
+2025-05-30 14:58:31,033 - generate_and_dryrun.py - INFO - Successfully parsed raw response as JSON.
+2025-05-30 14:58:31,038 - generate_and_dryrun.py - INFO - Saved script \u2192 ./outputs/30-05/FOURTOPS/Q1/script_openai_gpt-4o-mini_1458_1.py  and JSON \u2192 ./outputs/30-05/FOURTOPS/Q1/response_openai_gpt-4o-mini_1458_1.json
+2025-05-30 14:58:31,038 - static_checks.py - INFO - Running Pylint on ./outputs/30-05/FOURTOPS/Q1/script_openai_gpt-4o-mini_1458_1.py
+2025-05-30 14:58:46,383 - static_checks.py - ERROR - Pylint failed (4 blocking issues):
+error:no-member:Instance of 'list' has no 'argmin' member @L186
+error:no-member:Instance of 'list' has no 'argmax' member @L188
+error:no-member:Instance of 'list' has no 'argmin' member @L190
+error:no-member:Instance of 'list' has no 'argmax' member @L192
+2025-05-30 14:58:46,383 - static_checks.py - INFO - Running Bandit on ./outputs/30-05/FOURTOPS/Q1/script_openai_gpt-4o-mini_1458_1.py
+2025-05-30 14:58:47,202 - static_checks.py - INFO - Bandit OK (issues=0).
+2025-05-30 14:58:47,209 - generate_and_dryrun.py - INFO - Moved file ./outputs/30-05/FOURTOPS/Q1/script_openai_gpt-4o-mini_1458_1.py to ./outputs/30-05/FOURTOPS/Q1/StaticFail
+2025-05-30 14:58:47,212 - generate_and_dryrun.py - INFO - Moved file ./outputs/30-05/FOURTOPS/Q1/response_openai_gpt-4o-mini_1458_1.json to ./outputs/30-05/FOURTOPS/Q1/StaticFail
+2025-05-30 14:58:47,212 - generate_and_dryrun.py - INFO - Querying model openai/gpt-4o-mini: Attempt 2
+2025-05-30 14:59:02,811 - generate_and_dryrun.py - INFO - Successfully parsed raw response as JSON.
+2025-05-30 14:59:02,816 - generate_and_dryrun.py - INFO - Saved script \u2192 ./outputs/30-05/FOURTOPS/Q1/script_openai_gpt-4o-mini_1459_2.py  and JSON \u2192 ./outputs/30-05/FOURTOPS/Q1/response_openai_gpt-4o-mini_1459_2.json
+2025-05-30 14:59:02,817 - static_checks.py - INFO - Running Pylint on ./outputs/30-05/FOURTOPS/Q1/script_openai_gpt-4o-mini_1459_2.py
+2025-05-30 14:59:04,114 - static_checks.py - ERROR - Pylint failed (1 blocking issues):
+error:syntax-error:Parsing failed: 'expected an indented block after 'with' statement on line 121 (script_openai_gpt-4o-mini_1459_2, line 122)' @L122
+2025-05-30 14:59:04,114 - static_checks.py - INFO - Running Bandit on ./outputs/30-05/FOURTOPS/Q1/script_openai_gpt-4o-mini_1459_2.py
+2025-05-30 14:59:04,775 - static_checks.py - INFO - Bandit OK (issues=0).
+2025-05-30 14:59:04,779 - generate_and_dryrun.py - INFO - Moved file ./outputs/30-05/FOURTOPS/Q1/script_openai_gpt-4o-mini_1459_2.py to ./outputs/30-05/FOURTOPS/Q1/StaticFail
+2025-05-30 14:59:04,781 - generate_and_dryrun.py - INFO - Moved file ./outputs/30-05/FOURTOPS/Q1/response_openai_gpt-4o-mini_1459_2.json to ./outputs/30-05/FOURTOPS/Q1/StaticFail
+2025-05-30 14:59:04,781 - generate_and_dryrun.py - INFO - Querying model openai/gpt-4o-mini: Attempt 3
+2025-05-30 14:59:22,025 - generate_and_dryrun.py - INFO - Successfully parsed raw response as JSON.
+2025-05-30 14:59:22,029 - generate_and_dryrun.py - INFO - Saved script \u2192 ./outputs/30-05/FOURTOPS/Q1/script_openai_gpt-4o-mini_1459_3.py  and JSON \u2192 ./outputs/30-05/FOURTOPS/Q1/response_openai_gpt-4o-mini_1459_3.json
+2025-05-30 14:59:22,030 - static_checks.py - INFO - Running Pylint on ./outputs/30-05/FOURTOPS/Q1/script_openai_gpt-4o-mini_1459_3.py
+2025-05-30 14:59:36,909 - static_checks.py - ERROR - Pylint failed (4 blocking issues):
+error:no-member:Instance of 'list' has no 'argmin' member @L193
+error:no-member:Instance of 'list' has no 'argmax' member @L195
+error:no-member:Instance of 'list' has no 'argmin' member @L197
+error:no-member:Instance of 'list' has no 'argmax' member @L199
+2025-05-30 14:59:36,910 - static_checks.py - INFO - Running Bandit on ./outputs/30-05/FOURTOPS/Q1/script_openai_gpt-4o-mini_1459_3.py
+2025-05-30 14:59:37,551 - static_checks.py - INFO - Bandit OK (issues=0).
+2025-05-30 14:59:37,555 - generate_and_dryrun.py - INFO - Moved file ./outputs/30-05/FOURTOPS/Q1/script_openai_gpt-4o-mini_1459_3.py to ./outputs/30-05/FOURTOPS/Q1/StaticFail
+2025-05-30 14:59:37,556 - generate_and_dryrun.py - INFO - Moved file ./outputs/30-05/FOURTOPS/Q1/response_openai_gpt-4o-mini_1459_3.json to ./outputs/30-05/FOURTOPS/Q1/StaticFail
+2025-05-30 14:59:37,556 - generate_and_dryrun.py - ERROR - Model openai/gpt-4o-mini failed to produce a runnable script after 3 attempts
+2025-05-30 14:59:37,556 - main.py - INFO - Using auto-generated directory for script execution & evaluation: ./outputs/30-05/FOURTOPS/Q1/
+2025-05-30 14:59:37,556 - main.py - INFO - Start script execution.
+2025-05-30 14:59:37,558 - run_scripts.py - INFO - Collected valid scripts for execution: ['./outputs/30-05/FOURTOPS/Q1/openai_gpt-4o-mini\\script_openai_gpt-4o-mini_1307_3.py']
+2025-05-30 14:59:37,558 - run_scripts.py - INFO - Found 1 scripts to run under ./outputs/30-05/FOURTOPS/Q1/
+2025-05-30 14:59:37,560 - run_scripts.py - INFO - Run start: ./outputs/30-05/FOURTOPS/Q1/openai_gpt-4o-mini\script_openai_gpt-4o-mini_1307_3.py
+2025-05-30 14:59:37,560 - run_scripts.py - INFO - Successfully passed naive safety check.
+2025-05-30 15:10:31,731 - run_scripts.py - INFO - Run ./outputs/30-05/FOURTOPS/Q1/openai_gpt-4o-mini\script_openai_gpt-4o-mini_1307_3.py \u2192 code=0 time=654.16s mem=128KB
+2025-05-30 15:10:31,754 - run_scripts.py - INFO - Wrote summary to ./outputs/30-05/FOURTOPS/Q1/summary.csv
+2025-05-30 15:10:31,755 - main.py - INFO - Start model evaluation.
+2025-05-30 15:10:32,470 - evaluate_scripts.py - INFO - Found FOURTOP model candidates: [('Q1', 'openai_gpt-4o-mini', 'outputs\\30-05\\FOURTOPS\\Q1\\openai_gpt-4o-mini\\openai_gpt-4o-mini_1307_3_model.pkl')]
+2025-05-30 15:10:32,470 - evaluate_scripts.py - INFO - Evaluating outputs\30-05\FOURTOPS\Q1\openai_gpt-4o-mini\openai_gpt-4o-mini_1307_3_model.pkl on cpu
+2025-05-30 15:10:32,520 - evaluate_scripts.py - INFO - Output mode: prob; activation chosen.
+2025-05-30 15:10:33,589 - evaluate_scripts.py - INFO - Evaluation finished: AUC 0.8199  ACC 0.7434
+2025-05-30 15:10:33,594 - evaluate_scripts.py - INFO - Evaluated Q1/openai_gpt-4o-mini \u2192 acc=0.743 auc=0.820
+2025-05-30 15:10:33,603 - evaluate_scripts.py - INFO - Date 30-05 - Q1 - Model openai_gpt-4o-mini all present
+2025-05-30 15:10:34,571 - evaluate_scripts.py - INFO - Summary written to outputs\30-05\FOURTOPS\summary.csv
+2025-05-30 15:10:34,572 - main.py - INFO - Completed LLM Challenge Pipeline.
+2025-05-30 15:25:02,880 - main.py - INFO - 
+
+
+Started LLM Challenge Pipeline
+2025-05-30 15:25:02,880 - main.py - INFO - Mode: Full pipeline execution.
+2025-05-30 15:25:02,880 - main.py - INFO - Start generation and dryrun.
+2025-05-30 15:25:02,880 - generate_and_dryrun.py - INFO - Executing challenge: FOURTOPS
+2025-05-30 15:25:02,880 - generate_and_dryrun.py - INFO - Set-Up Output Directory: ./outputs/30-05/FOURTOPS/Q1/
+2025-05-30 15:25:02,880 - generate_and_dryrun.py - INFO - Prompt: ```markdown
+** Instructions **
+You are an expert at programming in python, machine learning,
+particle and high energy physics. You will help me answer a question
+in a machine learning challenge format where you strive to maximize
+a scalar metric in order to learn more about your scientific creativity
+and scientific understanding. You will follow all of the instructions 
+to your best capabilities. Your first priority is to produce a correct 
+solution (runnable code). Your second priority is to do everything
+you can to maximize the metric.
+
+** Problem Description **
+A major task in particle physics is the measurement of rare signal 
+processes ith very small cross-sections. With the unprecedented amount of 
+data provided by the upcoming runs of the Large Hadron Collider (LHC), 
+one can start to measure these processes. An example is the recent 
+observation of four top quarks originating from a single proton-proton 
+collision event. Accurate classification of these events is crucial, 
+as even a small reduction in background noise on the order of a few tens 
+of percent while maintaining the same signal detection efficiency can lead 
+to a profound increase in sensitivity.
+
+** Evaluation Metric **
+The evaluation metric for this classification task is the area under the curve (AUC)
+value, specified by the area under the receiver operating characteristic (ROC) curve. 
+The AUC summarizes a model's ability to distinguish between positive and 
+negative classes. The higher the score the better.
+
+** Dataset Description **
+The dataset used for this problem consists of simulated proton-proton 
+collision at a center of mass energy of 13 TeV. The signal process is defined as 
+$$ pp \rightarrow t \bar{t} t \bar{t} $$. The relevant production processes of the
+backgrounds are $$ t \bar{t} + X $$ where $$ X = Z, W^+, W^+W^- $$.
+
+The dataset includes 302072 events, of which roughly 50% is signal and 50%
+are background processes. All background processes have an equal number of events. 
+There is not cut on the maximum number of objects and there is no order.    
+
+The contents of the data sets (X_train & X_val) are given below.
+IMPORTANT: The specific line format of the data set is as follows:
+
+E_T_miss, phi_{E_t}_miss, obj_1, E_1, p_T1, eta_1, phi_1, obj_2, E_2, p_t2, eta_2, phi_2, ....
+
+Such that each object is represented by a string that starts with an identifier "obj_n", which is an
+integer value representing a particular object in the event. The object identifier is
+followed by its kinematic properties in the form of a four-vector containing the full 
+energy "E" and the transverse momentum "p_T" in units of MeV, as well as the pseudo-rapidity 
+"eta" and the azimuthal angle "phi". The other three quantities are "weight" given by the cross-section
+of thne process divided by the total number of events generated. "E_T_miss" is the magnitude of the
+missing transverse energy in units of MeV and "phi_{E_t}_miss" is the azimuthal angle of the missing
+transverse energy.
+
+Since the length of the events is variable, the data is zero-padded to the largest number of objects
+found in the events within in the entire dataset. The dataset is fairly sparse and not pre-processed.
+
+The relevant datasets are pytorch tensors with the following properties:
+
+Name: X_train, shape: [241657, 92], dtype: torch.float32, 
+Name: Y_train, shape: [241657], dtype: torch.int64, 
+Name: X_val, shape: [30272, 92], dtype: torch.float32, 
+Name: Y_val, shape: [30272], dtype: torch.int64
+
+IMPORTANT: Each of these tensors are pre-loaded and available in the environment.
+
+** Code Template **
+# 0. ---------- IMPORTS ----------
+import torch
+import numpy as np
+from torch import nn
+from torch.utils.data import TensorDataset, DataLoader
+# Only import extra std-lib modules, torch or sklearn (sub-)modules you actually use.
+# <LLM: Import modules>
+
+# 1. ---------- PRE-PROCESSING ----------
+class MyPreprocessor:
+    #    Must implement:
+    #   - fit(X: torch.Tensor, y: torch.Tensor) -> self
+    #   - transform(X: torch.Tensor) -> torch.Tensor
+
+    # REQUIREMENTS
+    # IMPORTANT: All state must be picklable with the std-lib pickle module.
+    # May allocate NumPy arrays or Torch tensors internally, but:
+    # transform() must be deterministic.
+    # Store only derived parameters needed for transform i.e. do not store the raw data
+    # itself in the preprocessor object.
+
+    # DATA SPECIFICS
+    # IMPORTANT: X_train, Y_train, X_val, Y_val are provided as PyTorch tensors in the environment.
+    # Total flat length per event (X_train & X_val): 92
+    # Index  0 :  missing-ET magnitude  (E_T_miss)
+    # Index  1 :  missing-ET azimuth    (phi_Et_miss)
+    # Indices  2-6  : object 1  ->  obj_1, E_1, p_T1, eta_1, phi_1
+    # Indices  7-11 : object 2  -> obj_2, E_2 , p_T_2 , eta_2 , phi_2
+    # ...
+    # Indices 88-92 : object 18 -> obj_18, E_18 , p_T_18 , eta_18 , phi_18
+    # Per-object slice size = 5
+    # Max objects encoded   = 18
+
+    # TIPS
+    # When modifying data features or feature engineering: annotate tensor size as comments after 
+    # each tensor operation to reduce dimension mismatches.
+
+    # <LLM: Write code to preprocess the data>    
+    def __init__(self):
+        # <LLM: Define and initialize any stateful components here>
+        pass
+
+    def fit(self, X, y=None):
+        # <LLM: Extract statistics or fit transformers>
+        return self
+
+    def transform(self, X):
+        # <LLM: Apply preprocessing logic, return torch.Tensor>
+        return X 
+
+    def fit_transform(self, X, y=None):
+        self.fit(X, y)
+        return self.transform(X)
+
+def make_preprocessor():
+    return MyPreprocessor()
+
+# 2. ---------- MODEL DEFINITION ----------
+def make_model(input_dim):
+    # PARAMETERS
+    # inplut_dim
+
+    # RETURNS
+    # model : torch.nn.Module : Untrained binary-classifier network.
+
+    # <LLM: Write code to define a binary-classifier network>
+    return model
+
+# 3. ---------- MODEL TRAINING ----------
+EPOCHS = # <LLM: define the amount of training epochs>    
+def train_model(model, train_loader, val_loader, epochs):
+    # PARAMETERS
+    # model : torch.nn.Module   
+    # train_loader: torch.utils.data.DataLoader
+    # val_loader  : torch.utils.data.DataLoader
+    # epochs: int
+
+    # RETURNS
+    # trained_model : nn.Module          (same instance, trained in-place)
+    # train_loss    : list[float]        (length == epochs)
+    # val_loss      : list[float]
+    # train_acc     : list[float]
+    # val_acc       : list[float]
+    
+    # REQUIREMENTS 
+    # Define training loop clearly including number of epochs
+    # Do NOT pass "verbose=" to any PyTorch scheduler (not supported in this image).
+
+    # <LLM: Write code to define training loop>
+    # <LLM: Implement early stopping if possible>
+    return trained_model, train_loss, val_loss, train_acc, val_acc
+
+# IMPORTANT: DO NOT write code to run the functions defined above (this is done for you),
+# i.e. write code to prepare training data, process-data, traing model, evaluate model performance, etc.
+
+ ** IMPORTANT: Your Challenge **
+Write Python code for a binary classification model focussing on maximizing the AUC using the code template above. 
+You may freely choose any pre-processing methods and techniques as well as model architecture and training conventions.                 
+
+
+** Response Format **
+Your reponse must be in a valid JSON dictionary format with the following structure:
+        {
+        'code': <Your complete Python code here>,
+        'explanation': <A detailed explanation of the code>
+        }
+Strictly adhere to this structure and follow these rules:
+
+1. Do not include any text or explanations outside the JSON object.
+2. Do not add any formatting, such as markdown, to the response. 
+3. Properly escape all special characters, especially new lines.
+4. After generating the JSON, internally validate its structure before outputting.
+5. Replace each "# <LLM: ...>" comment, in the code template, with the required code. 
+No placeholder should remain.
+6. Before finalizing your answer, double-check that your code runs without errors and
+meets all requirements (all functions implemented, correct tensor shapes, etc.).
+7. Justify your decisions. Either include them as comments in the code or in the explanation.
+
+```
+2025-05-30 15:25:02,880 - generate_and_dryrun.py - INFO - Querying model openai/gpt-4o-mini: Attempt 1
+2025-05-30 15:25:19,559 - generate_and_dryrun.py - INFO - Successfully parsed raw response as JSON.
+2025-05-30 15:25:19,563 - generate_and_dryrun.py - INFO - Saved script \u2192 ./outputs/30-05/FOURTOPS/Q1/script_openai_gpt-4o-mini_1525_1.py  and JSON \u2192 ./outputs/30-05/FOURTOPS/Q1/response_openai_gpt-4o-mini_1525_1.json
+2025-05-30 15:25:19,563 - static_checks.py - INFO - Running Pylint on ./outputs/30-05/FOURTOPS/Q1/script_openai_gpt-4o-mini_1525_1.py
+2025-05-30 15:25:37,863 - static_checks.py - INFO - Pylint OK (no fatal/error messages).
+2025-05-30 15:25:37,863 - static_checks.py - INFO - Running Bandit on ./outputs/30-05/FOURTOPS/Q1/script_openai_gpt-4o-mini_1525_1.py
+2025-05-30 15:25:38,455 - static_checks.py - INFO - Bandit OK (issues=0).
+2025-05-30 15:25:38,458 - run_scripts.py - INFO - Dry-run start: ./outputs/30-05/FOURTOPS/Q1/script_openai_gpt-4o-mini_1525_1.py
+2025-05-30 15:25:38,458 - run_scripts.py - INFO - Successfully passed naive safety check.
+2025-05-30 15:26:11,575 - run_scripts.py - INFO - Dry-run ./outputs/30-05/FOURTOPS/Q1/script_openai_gpt-4o-mini_1525_1.py \u2192 code=0 time=33.12s mem=100KB
+2025-05-30 15:26:11,577 - generate_and_dryrun.py - INFO - Model openai/gpt-4o-mini passed dry-run on attempt 1
+2025-05-30 15:26:11,580 - generate_and_dryrun.py - INFO - Moved file ./outputs/30-05/FOURTOPS/Q1/script_openai_gpt-4o-mini_1525_1.py to ./outputs/30-05/FOURTOPS/Q1/openai_gpt-4o-mini
+2025-05-30 15:26:11,582 - generate_and_dryrun.py - INFO - Moved file ./outputs/30-05/FOURTOPS/Q1/response_openai_gpt-4o-mini_1525_1.json to ./outputs/30-05/FOURTOPS/Q1/openai_gpt-4o-mini
+2025-05-30 15:26:11,582 - main.py - INFO - Using auto-generated directory for script execution & evaluation: ./outputs/30-05/FOURTOPS/Q1/
+2025-05-30 15:26:11,583 - main.py - INFO - Start script execution.
+2025-05-30 15:26:11,588 - run_scripts.py - INFO - Collected valid scripts for execution: ['./outputs/30-05/FOURTOPS/Q1/openai_gpt-4o-mini\\script_openai_gpt-4o-mini_1525_1.py', './outputs/30-05/FOURTOPS/Q1/StaticFail\\openai_gpt-4o-mini\\script_openai_gpt-4o-mini_1307_3.py']
+2025-05-30 15:26:11,588 - run_scripts.py - INFO - Found 2 scripts to run under ./outputs/30-05/FOURTOPS/Q1/
+2025-05-30 15:26:11,590 - run_scripts.py - INFO - Run start: ./outputs/30-05/FOURTOPS/Q1/openai_gpt-4o-mini\script_openai_gpt-4o-mini_1525_1.py
+2025-05-30 15:26:11,590 - run_scripts.py - INFO - Successfully passed naive safety check.
+2025-05-30 15:39:50,480 - run_scripts.py - INFO - Run ./outputs/30-05/FOURTOPS/Q1/openai_gpt-4o-mini\script_openai_gpt-4o-mini_1525_1.py \u2192 code=0 time=818.89s mem=60KB
+2025-05-30 15:39:50,481 - run_scripts.py - INFO - Run start: ./outputs/30-05/FOURTOPS/Q1/StaticFail\openai_gpt-4o-mini\script_openai_gpt-4o-mini_1307_3.py
+2025-05-30 15:39:50,481 - run_scripts.py - INFO - Successfully passed naive safety check.
+2025-05-30 15:50:52,952 - run_scripts.py - INFO - Run ./outputs/30-05/FOURTOPS/Q1/StaticFail\openai_gpt-4o-mini\script_openai_gpt-4o-mini_1307_3.py \u2192 code=0 time=662.46s mem=0KB
+2025-05-30 15:50:52,968 - run_scripts.py - INFO - Wrote summary to ./outputs/30-05/FOURTOPS/Q1/summary.csv
+2025-05-30 15:50:52,968 - main.py - INFO - Start model evaluation.
+2025-05-30 15:50:53,339 - evaluate_scripts.py - INFO - Found FOURTOP model candidates: [('Q1', 'openai_gpt-4o-mini', 'outputs\\30-05\\FOURTOPS\\Q1\\openai_gpt-4o-mini\\openai_gpt-4o-mini_1525_1_model.pkl')]
+2025-05-30 15:50:53,339 - evaluate_scripts.py - INFO - Evaluating outputs\30-05\FOURTOPS\Q1\openai_gpt-4o-mini\openai_gpt-4o-mini_1525_1_model.pkl on cpu
+2025-05-30 15:50:53,387 - evaluate_scripts.py - INFO - Output mode: prob; activation chosen.
+2025-05-30 15:50:54,095 - evaluate_scripts.py - INFO - Evaluation finished: AUC 0.8140  ACC 0.7372
+2025-05-30 15:50:54,098 - evaluate_scripts.py - INFO - Evaluated Q1/openai_gpt-4o-mini \u2192 acc=0.737 auc=0.814
+2025-05-30 15:50:54,104 - evaluate_scripts.py - WARNING - Date 30-05 - Q1 - Model openai_gpt-4o-mini - MISSING: *_ROC.png
+2025-05-30 15:50:54,931 - evaluate_scripts.py - INFO - Summary written to outputs\30-05\FOURTOPS\summary.csv
+2025-05-30 15:50:54,933 - main.py - INFO - Completed LLM Challenge Pipeline.

@@ -86,7 +86,7 @@ class MyPreprocessor:
     # REQUIREMENTS
     # IMPORTANT: All state must be picklable with the std-lib pickle module.
     # May allocate NumPy arrays or Torch tensors internally, but:
-    # transform() must be deterministic & output a torch.Tensor of shape (N, features).
+    # transform() must be deterministic.
     # Store only derived parameters needed for transform i.e. do not store the raw data
     # itself in the preprocessor object.
 
@@ -127,9 +127,9 @@ def make_preprocessor():
     return MyPreprocessor()
 
 # 2. ---------- MODEL DEFINITION ----------
-def make_model(input_dim: int):
+def make_model(input_dim):
     # PARAMETERS
-    # inplut_dim : int : Number of features per event after preprocessing.
+    # inplut_dim
 
     # RETURNS
     # model : torch.nn.Module : Untrained binary-classifier network.
@@ -158,26 +158,28 @@ def train_model(model, train_loader, val_loader, epochs):
     # Do NOT pass "verbose=" to any PyTorch scheduler (not supported in this image).
 
     # <LLM: Write code to define training loop>
+    # <LLM: Implement early stopping if possible>
     return trained_model, train_loss, val_loss, train_acc, val_acc
 
-# IMPORTANT: DO NOT write code to run the functions defined above,
+# IMPORTANT: DO NOT write code to run the functions defined above (this is done for you),
 # i.e. write code to prepare training data, process-data, traing model, evaluate model performance, etc.
 """,
 
     questions = [
         Question("Q1", r""" ** IMPORTANT: Your Challenge **
-Write Python code for a binary classification model focussing on maximizing the AUC using the code template above.
+Write Python code for a binary classification model focussing on maximizing the AUC using the code template above. 
 You may freely choose any pre-processing methods and techniques as well as model architecture and training conventions.                 
-"""),
-
-       Question("Q2", r"""** IMPORTANT: Your Challenge **
-Write Python code for a binary classification model which both explicitly encodes Lorentz symmetry via tensor products and equivariant message passing. 
-You may freely choose model architecture and training conventions. Focus on maximizing the AUC using the code template above.
-"""),
-
-       Question("Q3", r"""** IMPORTANT: Your Challenge **
-Write Python code for a Transformer based binary classifier which utilizes a "Slot-Attention" mechanism that explicitly groups particles corresponding to top quark decays.
-Inform the model of known physics by creating augmented particle features which complement model architecture. You may freely choose training conventions. Focus on maximizing the AUC using the code template above.
 """)
+#,
+
+#       Question("Q2", r"""** IMPORTANT: Your Challenge **
+#Write Python code for a binary classification model which both explicitly encodes Lorentz symmetry via tensor products and equivariant message passing. 
+#You may freely choose model architecture and training conventions. Focus on maximizing the AUC using the code template above.
+#"""),
+
+#       Question("Q3", r"""** IMPORTANT: Your Challenge **
+#Write Python code for a Transformer based binary classifier which utilizes a "Slot-Attention" mechanism that explicitly groups particles corresponding to top quark decays.
+#Inform the model of known physics by creating augmented particle features which complement model architecture. You may freely choose training conventions. Focus on maximizing the AUC using the code template above.
+#""")
 ]
 )

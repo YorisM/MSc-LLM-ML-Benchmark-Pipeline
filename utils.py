@@ -1,6 +1,5 @@
 # utils.py
 
-# Imports
 import os, pathlib, platform, json, datetime, logging
 
 def WSL_path(host_path: str) -> str:
@@ -23,24 +22,30 @@ def rename_file_with_suffix(old_file, suffix):
     os.rename(old_file, new_file)
     return new_file
 
-def append_to_response_json(json_path: str, section: str, payload: dict) -> None:
-    """
-    Append (or overwrite) a top-level section inside the *.json file that lives
-    next to each script.  Automatically time-stamps the entry.
+def _tail(text: str, max_chars: int = 4000) -> str:
+    """Return the last *max_chars* of text."""
+    return text[-max_chars:] if len(text) > max_chars else text
 
-        >>> append_to_response_json("…/response_gpt4o_1745_1.json",
-                                    "DryRun",
-                                    {"success": True, "runtime_s": 1.32})
-    """
-    with open(json_path, encoding="utf-8") as fh:
-        blob = json.load(fh)
+def append_to_response_json(json_path: str, section: str, payload: dict, *, trim_output: bool = True,
+                            ts: bool = True) -> None:
 
-    # include an ISO-timestamp so you can see *when* the section was produced
-    blob[section] = {
-        "__timestamp": datetime.datetime.utcnow().isoformat(timespec="seconds")+'Z',
-        **payload
-    }
+    p = pathlib.Path(json_path)
+    blob = {}
 
-    with open(json_path, "w", encoding="utf-8") as fh:
-        json.dump(blob, fh, ensure_ascii=False, indent=2)
-    logging.debug("Appended %s section to %s", section, json_path)
+    if p.exists():
+        blob = json.loads(p.read_text(encoding="utf-8"))
+
+    if trim_output:
+        for k in ("stdout", "stderr", "stdout_tail", "stderr_tail"):
+            if k in payload and isinstance(payload[k], str):
+                payload[k] = _tail(payload[k])
+
+    if ts:
+        payload = {"__timestamp": datetime.datetime.utcnow()
+                                      .isoformat(timespec="seconds")+'Z',
+                   **payload}
+
+    blob[section] = payload
+    p.write_text(json.dumps(blob, ensure_ascii=False, indent=2),
+                 encoding="utf-8")
+    logging.debug("Updated %s -> %s", p.name, section)
