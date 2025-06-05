@@ -90,8 +90,34 @@ def execute_script(
     logging.debug("Relative script path: %s", rel_script)
     mount_src = os.path.abspath(os.getcwd()).replace("\\", "/")
     logging.debug("Docker mount_src: %s", mount_src)
+
     
     cmd = []
+    if use_docker:
+
+        cmd = ["docker", "run", "--rm"]
+
+        # Only add constraints if not 0
+        if config.CPU_LIMIT != 0:
+            cmd.append(f"--cpus={config.CPU_LIMIT}")
+        if config.MEMORY_LIMIT_GB != 0:
+            cmd.append(f"--memory={config.MEMORY_LIMIT_GB}g")
+        if config.PIDS_LIMIT != 0:
+            cmd.append(f"--pids-limit={config.PIDS_LIMIT}")    
+
+        cmd += [
+            "--network", "none",
+            "--security-opt", f"seccomp=docker/seccomp_profile.json",
+            "-v", f"{mount_src}:/workspace:rw",
+            "-v", f"{mount_src}/challenges/FOURTOPS/data:/data:ro",
+            "-w", "/workspace",
+            "llm-training-sandbox:latest",
+            rel_script,
+            "--dryrun" if dryrun else ""
+        ]
+
+        """
+            cmd = []
     if use_docker:
         cmd = [
             "docker", "run", "--rm",
@@ -113,8 +139,11 @@ def execute_script(
             rel_script,
             "--dryrun" if dryrun else ""
         ]
-        if dryrun:
-            cmd.append("--dryrun")
+    
+        """
+        
+        # if dryrun:
+        #    cmd.append("--dryrun")
         
         logging.debug("DOCKER CMD: %s", " ".join(cmd))
 
@@ -169,23 +198,23 @@ def execute_script(
     }
 
     if metrics_json:
-        # derive companion JSON path: script_X.py → response_X.json
+        # derive companion JSON path: script_X.py -> response_X.json
         base = os.path.basename(script_path).replace("script_", "response_")
         json_file = os.path.join(os.path.dirname(script_path),
                                     os.path.splitext(base)[0] + ".json")
     
-    STD = {
-        "stdout": out, 
-        "stderr": err
-    }
-    
-    append_to_response_json(json_file, "Training",
-        {
-            "passed": bool(success),
-            "resources": resources,
-            "metrics": metrics_json,
-            "STD": STD
-        })
+        STD = {
+            "stdout": out, 
+            "stderr": err
+        }
+        
+        append_to_response_json(json_file, "Training",
+            {
+                "passed": bool(success),
+                "resources": resources,
+                "metrics": metrics_json,
+                "STD": STD
+            })
 
     logging.info("%s %s → code=%s time=%.2fs mem=%dKB", "Dry-run" if dryrun else "Run", script_path, ret, duration, max_rss)
     return (script_path, success, ret, out, err, duration, max_rss)

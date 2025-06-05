@@ -1,0 +1,43 @@
+script,success,return_code,stdout,stderr,duration_s,max_rss_kb
+outputs\02-06\FOURTOPS\Q1\anthropic_claude-3.7-sonnet\script_anthropic_claude-3.7-sonnet_1715_1.py,False,1,"argv0=/usr/local/bin/train.sh
+argv1=outputs/02-06/FOURTOPS/Q1/anthropic_claude-3.7-sonnet/script_anthropic_claude-3.7-sonnet_1715_1.py
+argv2=
+","Traceback (most recent call last):
+  File ""/workspace/outputs/02-06/FOURTOPS/Q1/anthropic_claude-3.7-sonnet/script_anthropic_claude-3.7-sonnet_1715_1.py"", line 582, in <module>
+    _run(dryrun=""--dryrun"" in sys.argv)
+    ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/workspace/outputs/02-06/FOURTOPS/Q1/anthropic_claude-3.7-sonnet/script_anthropic_claude-3.7-sonnet_1715_1.py"", line 505, in _run
+    X_train = pre.transform(X_train)
+  File ""/workspace/outputs/02-06/FOURTOPS/Q1/anthropic_claude-3.7-sonnet/script_anthropic_claude-3.7-sonnet_1715_1.py"", line 216, in transform
+    global_features[:, 6:15] = object_counts
+    ~~~~~~~~~~~~~~~^^^^^^^^^
+RuntimeError: The expanded size of the tensor (9) must match the existing size (10) at non-singleton dimension 1.  Target sizes: [241657, 9].  Tensor sizes: [241657, 10]
+",55.32141010000487,76
+outputs\02-06\FOURTOPS\Q1\anthropic_claude-3.7-sonnet\script_anthropic_claude-3.7-sonnet_1720_2.py,False,1,"argv0=/usr/local/bin/train.sh
+argv1=outputs/02-06/FOURTOPS/Q1/anthropic_claude-3.7-sonnet/script_anthropic_claude-3.7-sonnet_1720_2.py
+argv2=
+","Traceback (most recent call last):
+  File ""/workspace/outputs/02-06/FOURTOPS/Q1/anthropic_claude-3.7-sonnet/script_anthropic_claude-3.7-sonnet_1720_2.py"", line 563, in <module>
+    _run(dryrun=""--dryrun"" in sys.argv)
+    ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/workspace/outputs/02-06/FOURTOPS/Q1/anthropic_claude-3.7-sonnet/script_anthropic_claude-3.7-sonnet_1720_2.py"", line 498, in _run
+    model = make_model(input_shape, use_mask=use_mask)
+  File ""/workspace/outputs/02-06/FOURTOPS/Q1/anthropic_claude-3.7-sonnet/script_anthropic_claude-3.7-sonnet_1720_2.py"", line 333, in make_model
+    model = HEPModel(input_shape, use_mask=use_mask)
+  File ""/workspace/outputs/02-06/FOURTOPS/Q1/anthropic_claude-3.7-sonnet/script_anthropic_claude-3.7-sonnet_1720_2.py"", line 225, in __init__
+    self.global_features = input_shape[2]
+                           ~~~~~~~~~~~^^^
+IndexError: tuple index out of range
+",13.812998599998537,0
+outputs\02-06\FOURTOPS\Q1\openai_gpt-4o-mini\script_openai_gpt-4o-mini_1710_1.py,False,1,"argv0=/usr/local/bin/train.sh
+argv1=outputs/02-06/FOURTOPS/Q1/openai_gpt-4o-mini/script_openai_gpt-4o-mini_1710_1.py
+argv2=
+","Traceback (most recent call last):
+  File ""/workspace/outputs/02-06/FOURTOPS/Q1/openai_gpt-4o-mini/script_openai_gpt-4o-mini_1710_1.py"", line 243, in <module>
+    _run(dryrun=""--dryrun"" in sys.argv)
+    ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/workspace/outputs/02-06/FOURTOPS/Q1/openai_gpt-4o-mini/script_openai_gpt-4o-mini_1710_1.py"", line 230, in _run
+    ""best_train_acc"":  max(tr_acc),
+                       ~~~^^^^^^^^
+ValueError: max() iterable argument is empty
+",186.5147591999994,-44

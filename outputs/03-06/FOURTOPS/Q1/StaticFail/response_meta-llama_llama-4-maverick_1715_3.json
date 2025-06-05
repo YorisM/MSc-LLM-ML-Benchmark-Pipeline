@@ -1,0 +1,100 @@
+{
+  "LLMGeneration": {
+    "model": "meta-llama/llama-4-maverick",
+    "prompt_tokens": 3694,
+    "prompt_chars": 14954,
+    "response_tokens": 2315,
+    "response_chars": 9229,
+    "cost_usd": 0.00252185,
+    "generation_ms": 16785,
+    "code": "import torch\nimport torch.nn as nn\nimport torch.nn.functional as F\nfrom torch.utils.data import Dataset, DataLoader\nimport numpy as np\nfrom sklearn.metrics import roc_auc_score, accuracy_score\n\n# 0. ---------- IMPORTS ----------\nimport os, sys, pickle, json\nimport pandas as pd\nimport matplotlib.pyplot as plt\n\ntorch.manual_seed(42)                        \nos.environ[\"PYTHONHASHSEED\"] = \"42\"\nSCRIPT_DIR = os.path.dirname(os.path.abspath(sys.argv[0]))\n\ndef load_data():\n    X_train = torch.from_numpy(pd.read_csv('./challenges/FOURTOPS/data/X_train.csv', dtype=np.float32).to_numpy(copy=False))\n    Y_train = torch.from_numpy(pd.read_csv('./challenges/FOURTOPS/data/Y_train.csv', dtype=np.int64).to_numpy(copy=False).ravel())\n    X_val   = torch.from_numpy(pd.read_csv('./challenges/FOURTOPS/data/X_val.csv', dtype=np.float32).to_numpy(copy=False))\n    Y_val   = torch.from_numpy(pd.read_csv('./challenges/FOURTOPS/data/Y_val.csv', dtype=np.int64).to_numpy(copy=False).ravel())\n\n    return X_train, Y_train, X_val, Y_val\n\nclass PairDataset(torch.utils.data.Dataset):\n    def __init__(self, x, y):\n        self.x = x\n        self.y = y\n    def __len__(self):\n        return len(self.y)\n    def __getitem__(self, idx):\n        if isinstance(self.x, (tuple, list)):\n            return (tuple(t[idx] for t in self.x), self.y[idx])\n        else:\n            return (self.x[idx], self.y[idx])      \n\ndef make_loaders(X_train, Y_train, X_val, Y_val, batch=512):\n    train_ds = PairDataset(X_train, Y_train)\n    val_ds   = PairDataset(X_val , Y_val)\n    return (DataLoader(train_ds, batch_size=batch, shuffle=True,  num_workers=0),\n            DataLoader(val_ds,   batch_size=batch, shuffle=False, num_workers=0))\n\n# 1. ---------- PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.per_object_features = 5\n        self.max_objects = 18\n\n    def fit(self, X, y=None):\n        return self\n\n    def transform(self, X):\n        # Reshape X to (B, L, F) where L is the sequence length (max_objects) and F is the feature size (per_object_features)\n        X = X.view(-1, self.max_objects, self.per_object_features)  # (B, 18, 5)\n        X = X[:, :, 1:]  # Remove obj_n identifier, (B, 18, 4)\n        mask = (X[:, :, 0] != 0).float()  # (B, 18), mask based on p_T\n        return X, mask\n\n    def fit_transform(self, X, y=None):\n        self.fit(X, y)\n        return self.transform(X)\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# 2. ---------- MODEL DEFINITION ----------\nclass BinaryClassifier(nn.Module):\n    def __init__(self, input_shape: tuple[int, ...], *, use_mask: bool):\n        super().__init__()\n        self.use_mask = use_mask\n        self.feature_dim = input_shape[-1]\n        self.hidden_dim = 128\n        self.output_dim = 1\n\n        self.embedding = nn.Linear(self.feature_dim, self.hidden_dim)\n        self.encoder = nn.TransformerEncoderLayer(d_model=self.hidden_dim, nhead=8, dim_feedforward=self.hidden_dim, dropout=0.1)\n        self.encoder = nn.TransformerEncoder(self.encoder, num_layers=3)\n        self.classifier = nn.Sequential(\n            nn.Linear(self.hidden_dim, self.hidden_dim),\n            nn.ReLU(),\n            nn.Linear(self.hidden_dim, self.output_dim)\n        )\n\n    def forward(self, data: torch.Tensor, mask: torch.Tensor | None = None):\n        # data: (B, L, F), mask: (B, L)\n        embedded = F.relu(self.embedding(data))  # (B, L, H)\n        if mask is not None:\n            mask = mask == 0  # Invert mask for TransformerEncoder\n        encoded = self.encoder(embedded.transpose(0, 1), src_key_padding_mask=mask)  # (L, B, H)\n        encoded = encoded.transpose(0, 1)[:, 0, :]  # Take the first token's representation, (B, H)\n        output = self.classifier(encoded)  # (B, 1)\n        return output.squeeze(-1)\n\ndef make_model(input_shape, *, use_mask=False):\n    return BinaryClassifier(input_shape, use_mask=use_mask)\n\n# 3. ---------- MODEL TRAINING ----------\nEPOCHS = 10\ndef train_model(model, train_loader, val_loader, epochs):\n    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')\n    model.to(device)\n    criterion = nn.BCEWithLogitsLoss()\n    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)\n\n    train_loss, val_loss, train_acc, val_acc, train_auc, val_auc = [], [], [], [], [], []\n    best_val_auc = 0.0\n    patience = 3\n    counter = 0\n\n    for epoch in range(epochs):\n        model.train()\n        epoch_train_loss, epoch_train_correct = 0.0, 0\n        predictions, labels = [], []\n        for data, label in train_loader:\n            if isinstance(data, (tuple, list)):\n                data, mask = data\n                data, mask, label = data.to(device), mask.to(device), label.to(device).float()\n            else:\n                data, label = data.to(device), label.to(device).float()\n                mask = None\n\n            optimizer.zero_grad()\n            output = model(data, mask)\n            loss = criterion(output, label)\n            loss.backward()\n            optimizer.step()\n\n            epoch_train_loss += loss.item() * data.size(0)\n            predictions.extend(torch.sigmoid(output).detach().cpu().numpy())\n            labels.extend(label.detach().cpu().numpy())\n\n        epoch_train_loss /= len(train_loader.dataset)\n        train_loss.append(epoch_train_loss)\n        train_auc.append(roc_auc_score(labels, predictions))\n\n        model.eval()\n        epoch_val_loss, val_predictions, val_labels = 0.0, [], []\n        with torch.no_grad():\n            for data, label in val_loader:\n                if isinstance(data, (tuple, list)):\n                    data, mask = data\n                    data, mask, label = data.to(device), mask.to(device), label.to(device).float()\n                else:\n                    data, label = data.to(device), label.to(device).float()\n                    mask = None\n\n                output = model(data, mask)\n                loss = criterion(output, label)\n                epoch_val_loss += loss.item() * data.size(0)\n                val_predictions.extend(torch.sigmoid(output).cpu().numpy())\n                val_labels.extend(label.cpu().numpy())\n\n        epoch_val_loss /= len(val_loader.dataset)\n        val_loss.append(epoch_val_loss)\n        val_auc.append(roc_auc_score(val_labels, val_predictions))\n\n        if val_auc[-1] > best_val_auc:\n            best_val_auc = val_auc[-1]\n            counter = 0\n        else:\n            counter += 1\n\n        if counter >= patience:\n            break\n\n    return model, train_loss, val_loss, train_auc, val_auc\n\ndef _plot(series_train, series_val, name, out_path):\n    plt.figure()\n    plt.plot(series_train, label=f\"Train {name}\")\n    plt.plot(series_val,   label=f\"Val {name}\")\n    plt.title(name); plt.xlabel(\"Epoch\"); plt.legend()\n    plt.savefig(out_path); plt.close()\n\ndef _run(dryrun=False):\n    X_train, Y_train, X_val, Y_val = load_data()\n    pre = make_preprocessor().fit(X_train, Y_train)\n    X_train, mask_train = pre.transform(X_train)\n    X_val, mask_val = pre.transform(X_val)\n    train_loader, val_loader = make_loaders((X_train, mask_train), Y_train, (X_val, mask_val), Y_val)\n\n    input_shape = X_train.shape[1:]\n    use_mask = True\n    model = make_model(input_shape, use_mask=use_mask)\n\n    n_epochs = 1 if dryrun else globals().get(\"EPOCHS\", 10)\n    try:\n        trained_model, tr_loss, va_loss, tr_auc, va_auc = train_model(\n            model, train_loader, val_loader, epochs=n_epochs)\n    except Exception as e:\n        print(\"ERROR during training:\", e)\n        raise\n\n    if dryrun:\n        toy_data = torch.zeros(8, *input_shape)\n        toy_mask = torch.zeros(8, input_shape[0])\n        toy_batch = (toy_data, toy_mask)\n        toy_transformed = pre.transform(toy_batch)\n        try:\n            _ = trained_model(*toy_transformed)\n        except Exception as e:\n            raise RuntimeError(\"Sanity-check forward pass failed\") from e\n        return\n\n    base = os.path.splitext(os.path.basename(sys.argv[0]))[0].removeprefix(\"script_\")\n\n    pth_state   = os.path.join(SCRIPT_DIR, f\"{base}_state.pt\")\n    pth_model   = os.path.join(SCRIPT_DIR, f\"{base}_model.pkl\")\n    pth_preproc = os.path.join(SCRIPT_DIR, f\"{base}_preproc.pkl\")\n\n    torch.save(trained_model.state_dict(), pth_state)\n    with open(pth_model,   \"wb\") as f: pickle.dump(trained_model, f)\n    with open(pth_preproc, \"wb\") as f: pickle.dump(pre,           f)\n\n    _plot(tr_loss, va_loss, \"Loss\",     os.path.join(SCRIPT_DIR, f\"{base}_loss.png\"))\n    _plot(tr_auc,  va_auc,  \"AUC\", os.path.join(SCRIPT_DIR, f\"{base}_auc.png\"))\n\n    summary = {\n        \"epochs\": n_epochs,\n        \"train_loss\": tr_loss,\n        \"val_loss\": va_loss,\n        \"train_auc\": tr_auc,\n        \"val_auc\": va_auc,\n    }\n    print(\"#TRAIN_METRICS#\" + json.dumps(summary))\n\nif __name__ == \"__main__\":\n    _run(dryrun=\"--dryrun\" in sys.argv)",
+    "reasoning": "",
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "Outer_attempt": 3
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-06-03T15:15:57Z",
+    "PyLint": {
+      "passed": false,
+      "messages": [
+        {
+          "type": "error",
+          "module": "script_meta-llama_llama-4-maverick_1715_3",
+          "obj": "load_data",
+          "line": 74,
+          "column": 0,
+          "endLine": 74,
+          "endColumn": 13,
+          "path": "outputs\\03-06\\FOURTOPS\\Q1\\script_meta-llama_llama-4-maverick_1715_3.py",
+          "symbol": "function-redefined",
+          "message": "function already defined line 21",
+          "message-id": "E0102"
+        },
+        {
+          "type": "error",
+          "module": "script_meta-llama_llama-4-maverick_1715_3",
+          "obj": "PairDataset",
+          "line": 82,
+          "column": 0,
+          "endLine": 82,
+          "endColumn": 17,
+          "path": "outputs\\03-06\\FOURTOPS\\Q1\\script_meta-llama_llama-4-maverick_1715_3.py",
+          "symbol": "function-redefined",
+          "message": "class already defined line 38",
+          "message-id": "E0102"
+        },
+        {
+          "type": "error",
+          "module": "script_meta-llama_llama-4-maverick_1715_3",
+          "obj": "make_loaders",
+          "line": 94,
+          "column": 0,
+          "endLine": 94,
+          "endColumn": 16,
+          "path": "outputs\\03-06\\FOURTOPS\\Q1\\script_meta-llama_llama-4-maverick_1715_3.py",
+          "symbol": "function-redefined",
+          "message": "function already defined line 50",
+          "message-id": "E0102"
+        }
+      ]
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-06-03T15:15:57Z",
+        "metrics": {
+          ".\\./outputs/03-06/FOURTOPS/Q1/script_meta-llama_llama-4-maverick_1715_3.py": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 294,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 294,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  }
+}

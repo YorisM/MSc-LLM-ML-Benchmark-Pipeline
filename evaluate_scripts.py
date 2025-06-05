@@ -112,35 +112,34 @@ def evaluate_FOURTOPS(model_path: str, test_loader) \
     model, preproc = _initialize_artefacts(model_path)
     model = model.to(device)
 
+    # Helper to move arbitrarily nested tensors
+    def _to(t, dev):
+        if isinstance(t, torch.Tensor):
+            return t.to(dev)
+        elif isinstance(t, (tuple, list)):
+            return tuple(_to(x, dev) for x in t)
+        else:
+            raise TypeError("Unexpected type in batch:", type(t))
+
     # Determine output mode
     it  = iter(test_loader)
     xb0, yb0 = next(it)
-    xb0, yb0 = xb0.to(device), yb0.to(device)
+    xb0, yb0 = _to(xb0, device), yb0.to(device)
     xb0      = _apply_preproc(preproc, xb0)      # ← fixed: xb0 not xb
-    out0     = model(xb0).detach()
+    out0 = model(*xb0) if isinstance(xb0, (tuple, list)) else model(xb0)
+    out0 = out0.detach()
 
     mn, mx = out0.min().item(), out0.max().item()
-    if 0.0 <= mn <= mx <= 1.0:
-        mode = "prob"
-    else:
-        mode = "logit"
+    mode   = "prob" if 0.0 <= mn <= mx <= 1.0 else "logit"
 
     if mode == "prob":
-        if out0.ndim == 2 and out0.size(1) == 2:          # p(bg), p(sig)
-            act = lambda o: o[:, 1]
-        else:                                             # already (N,)
-            act = lambda o: o.squeeze()
-    else:  # raw logits
-        if out0.ndim == 2 and out0.size(1) == 1:
-            act = lambda o: torch.sigmoid(o).squeeze(1)
-        elif out0.ndim == 2 and out0.size(1) == 2:
-            act = lambda o: torch.softmax(o, 1)[:, 1]
-        elif out0.ndim == 1:
-            act = lambda o: torch.sigmoid(o)
-        else:
-            raise RuntimeError(f"Unexpected output shape {tuple(out0.shape)}")
-
-    logging.info("Output mode: %s; activation chosen.", mode)
+        act = (lambda o: o[:, 1])                          if out0.ndim == 2 and out0.size(1) == 2 else \
+              (lambda o: o.squeeze())
+    else:  # logits
+        act = (lambda o: torch.sigmoid(o).squeeze(1))      if out0.ndim == 2 and out0.size(1) == 1 else \
+              (lambda o: torch.softmax(o, 1)[:, 1])        if out0.ndim == 2 and out0.size(1) == 2 else \
+              (lambda o: torch.sigmoid(o))
+    logging.info("Output mode: %s", mode)
 
     # Collect Predictions
     all_probs  = act(out0).cpu().numpy().tolist()
@@ -148,10 +147,10 @@ def evaluate_FOURTOPS(model_path: str, test_loader) \
 
     with torch.no_grad():
         for xb, yb in it:
-            xb, yb = xb.to(device), yb.to(device)
+            xb, yb = _to(xb, device), yb.to(device)
             xb = _apply_preproc(preproc, xb)
-            probs = act(model(xb))
-            all_probs.extend(probs.cpu().numpy().tolist())
+            logits = model(*xb) if isinstance(xb,(tuple,list)) else model(xb)
+            all_probs.extend(act(logits).cpu().numpy().tolist())
             all_labels.extend(yb.cpu().numpy().tolist())
 
     # Metrics

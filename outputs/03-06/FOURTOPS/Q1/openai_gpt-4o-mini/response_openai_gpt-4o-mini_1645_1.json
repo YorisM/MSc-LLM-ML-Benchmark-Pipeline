@@ -1,0 +1,69 @@
+{
+  "LLMGeneration": {
+    "model": "openai/gpt-4o-mini",
+    "prompt_tokens": 3746,
+    "prompt_chars": 14954,
+    "response_tokens": 1071,
+    "response_chars": 4660,
+    "cost_usd": 6.0225e-05,
+    "generation_ms": 20678,
+    "code": "# 0. ---------- IMPORTS ----------\nimport os, sys, pickle, torch, gc, json\nimport pandas as pd\nimport numpy as np\nimport matplotlib.pyplot as plt\nfrom torch import nn\nfrom torch.utils.data import Dataset, DataLoader\nfrom sklearn.metrics import roc_auc_score, accuracy_score\nfrom sklearn.preprocessing import StandardScaler\n\n# 1. ---------- PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.scaler = StandardScaler() # To standardize features\n\n    def fit(self, X, y=None):\n        self.scaler.fit(X.numpy())  # Fit scaler on the data\n        return self\n\n    def transform(self, X):\n        X_normalized = self.scaler.transform(X.numpy())  # Transform the data\n        return torch.tensor(X_normalized, dtype=torch.float32)  # (N, features)\n\n    def fit_transform(self, X, y=None):\n        self.fit(X, y)\n        return self.transform(X)\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# 2. ---------- MODEL DEFINITION ----------\nclass BinaryClassifier(nn.Module):\n    def __init__(self, input_shape: tuple[int, ...], *, use_mask: bool):\n        super().__init__()\n        self.use_mask = use_mask\n        self.fc1 = nn.Linear(input_shape[0], 128)  # (F,) -> 128\n        self.fc2 = nn.Linear(128, 64)               # 128 -> 64\n        self.fc3 = nn.Linear(64, 32)                 # 64 -> 32\n        self.output = nn.Linear(32, 1)              # 32 -> 1 (Logits)\n        self.dropout = nn.Dropout(0.3)              # Dropout for regularization\n\n    def forward(self, data: torch.Tensor, mask: torch.Tensor | None = None):\n        x = torch.relu(self.fc1(data))  # apply first layer\n        x = self.dropout(x)              # apply dropout\n        x = torch.relu(self.fc2(x))      # apply second layer\n        x = self.dropout(x)              # apply dropout\n        x = torch.relu(self.fc3(x))      # apply third layer\n        x = self.output(x)                # logits\n        return torch.sigmoid(x)          # output probabilities\n\ndef make_model(input_shape, *, use_mask=False):\n    return BinaryClassifier(input_shape, use_mask=use_mask)\n\n# 3. ---------- MODEL TRAINING ----------\nEPOCHS = 50  # Set for enough training\n\ndef train_model(model, train_loader, val_loader, epochs):\n    criterion = nn.BCELoss()  # Binary Cross-Entropy Loss\n    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)\n\n    train_loss, val_loss = [], []\n    train_acc, val_acc = [], []\n    best_auc = 0\n    early_stopping_counter = 0\n    early_stopping_limit = 5  # Early stopping patience\n\n    for epoch in range(epochs):\n        model.train()\n        epoch_loss = 0\n        correct = 0\n        total = 0\n\n        for data, labels in train_loader:\n            optimizer.zero_grad()\n            outputs = model(data).squeeze()  # Get model output\n            loss = criterion(outputs, labels.float())  # Calculate loss\n            loss.backward()  # Backpropagate\n            optimizer.step()  # Update weights\n\n            epoch_loss += loss.item()\n            preds = (outputs > 0.5).int()  # Binary prediction\n            correct += (preds == labels).sum().item()\n            total += labels.size(0)\n\n        train_loss.append(epoch_loss / len(train_loader))\n        train_acc.append(correct / total)\n\n        # Validation phase\n        model.eval()\n        val_predictions = []\n        val_labels = []\n        val_epoch_loss = 0\n\n        with torch.no_grad():\n            for data, labels in val_loader:\n                outputs = model(data).squeeze()\n                val_loss_value = criterion(outputs, labels.float())\n                val_epoch_loss += val_loss_value.item()\n                val_predictions.extend(outputs.cpu().numpy())\n                val_labels.extend(labels.cpu().numpy())\n\n        val_loss.append(val_epoch_loss / len(val_loader))\n        val_auc = roc_auc_score(val_labels, val_predictions)  # Calculate AUC\n\n        val_acc.append(accuracy_score(val_labels, np.array(val_predictions) > 0.5))\n\n        # Early stopping check\n        if val_auc > best_auc:\n            best_auc = val_auc\n            early_stopping_counter = 0  # Reset counter if AUC improves\n        else:\n            early_stopping_counter += 1  # Increment counter if AUC does not improve\n\n        if early_stopping_counter >= early_stopping_limit:\n            print(\"Early stopping at epoch:\", epoch + 1)\n            break\n\n    return model, train_loss, val_loss, train_acc, val_acc\n\n# IMPORTANT: DO NOT execute the pipeline here – the harness will do that.\n# IMPORTANT: Strictly follow this code template, and do not deviate from it.",
+    "reasoning": "",
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "Outer_attempt": 1
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-06-03T14:45:54Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-06-03T14:45:54Z",
+        "metrics": {
+          ".\\./outputs/03-06/FOURTOPS/Q1/script_openai_gpt-4o-mini_1645_1.py": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 200,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 200,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2025-06-03T14:46:12Z",
+    "passed": true,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/03-06/FOURTOPS/Q1/script_openai_gpt-4o-mini_1645_1.py\nargv2=--dryrun\nDry-run: skipping artefact manifest\n",
+      "stderr": ""
+    },
+    "return_code": 0
+  }
+}

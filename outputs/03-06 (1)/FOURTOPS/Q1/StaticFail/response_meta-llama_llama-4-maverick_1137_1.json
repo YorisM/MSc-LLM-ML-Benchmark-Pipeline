@@ -1,0 +1,71 @@
+{
+  "LLMGeneration": {
+    "model": "meta-llama/llama-4-maverick",
+    "prompt_tokens": 2011,
+    "prompt_chars": 8428,
+    "response_tokens": 1505,
+    "response_chars": 6135,
+    "cost_usd": 0.0015809,
+    "generation_ms": 11323,
+    "code": "python\n# 0. ---------- IMPORTS ----------\nimport torch\nimport numpy as np\nfrom torch import nn\nfrom torch.utils.data import Dataset, DataLoader\nfrom sklearn.metrics import roc_auc_score\n\n# 1. ---------- PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        # Define and initialize any stateful components here\n        self.max_objects = 18  # Maximum number of objects encoded\n        self.per_object_slice_size = 5  # Size of each object's slice\n\n    def fit(self, X, y=None):\n        # Extract statistics or fit transformers\n        return self\n\n    def transform(self, X):\n        # Apply preprocessing logic, return torch.Tensor\n        # Reshape X to separate objects and their features\n        X = X.view(-1, self.max_objects, self.per_object_slice_size)\n\n        # Extract relevant features: E, p_T, eta, phi for each object\n        obj_features = X[:, :, 1:]  # Shape: (batch_size, max_objects, 4)\n\n        # Mask for valid objects (obj_n != 0)\n        mask = X[:, :, 0] != 0  # Shape: (batch_size, max_objects)\n\n        # Return the features and the mask\n        return obj_features, mask\n\n    def fit_transform(self, X, y=None):\n        self.fit(X, y)\n        return self.transform(X)\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# 2. ---------- MODEL DEFINITION ----------\nclass ParticleTransformer(nn.Module):\n    def __init__(self, input_dim, hidden_dim, output_dim, n_heads, dropout):\n        super(ParticleTransformer, self).__init__()\n        self.embedding = nn.Linear(input_dim, hidden_dim)\n        encoder_layer = nn.TransformerEncoderLayer(d_model=hidden_dim, nhead=n_heads, dropout=dropout)\n        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=2)\n        self.fc = nn.Linear(hidden_dim, output_dim)\n\n    def forward(self, x, mask):\n        # x shape: (batch_size, max_objects, 4)\n        # mask shape: (batch_size, max_objects)\n        x = self.embedding(x)  # Shape: (batch_size, max_objects, hidden_dim)\n        x = x.permute(1, 0, 2)  # Shape: (max_objects, batch_size, hidden_dim)\n        mask = mask.permute(1, 0)  # Shape: (max_objects, batch_size)\n        x = self.transformer_encoder(x, src_key_padding_mask=~mask)  # Shape: (max_objects, batch_size, hidden_dim)\n        x = x.permute(1, 0, 2)  # Shape: (batch_size, max_objects, hidden_dim)\n        x = x[:, 0, :]  # Take the first token (or any aggregation method)  # Shape: (batch_size, hidden_dim)\n        x = self.fc(x)  # Shape: (batch_size, output_dim)\n        return x\n\ndef make_model(input_shape, *, use_mask=False):\n    # Define a binary-classifier network\n    input_dim = 4  # E, p_T, eta, phi\n    hidden_dim = 128\n    output_dim = 2  # Binary classification\n    n_heads = 8\n    dropout = 0.1\n\n    model = ParticleTransformer(input_dim, hidden_dim, output_dim, n_heads, dropout)\n    return model\n\n# 3. ---------- MODEL TRAINING ----------\nEPOCHS = 10\nBATCH_SIZE = 128\n\nclass ParticleDataset(Dataset):\n    def __init__(self, X, y, preprocessor):\n        self.X = X\n        self.y = y\n        self.preprocessor = preprocessor\n\n    def __len__(self):\n        return len(self.X)\n\n    def __getitem__(self, idx):\n        X = self.X[idx]\n        y = self.y[idx]\n        X, mask = self.preprocessor.transform(X.unsqueeze(0))\n        return (X.squeeze(0), mask.squeeze(0)), y\n\ndef train_model(model, train_loader, val_loader, epochs):\n    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')\n    model.to(device)\n    criterion = nn.CrossEntropyLoss()\n    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)\n    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.1)\n\n    train_loss = []\n    val_loss = []\n    train_acc = []\n    val_acc = []\n    train_auc = []\n    val_auc = []\n\n    best_val_auc = 0\n\n    for epoch in range(epochs):\n        model.train()\n        epoch_train_loss = 0\n        train_preds = []\n        train_labels = []\n\n        for (data, mask), labels in train_loader:\n            data, mask, labels = data.to(device), mask.to(device), labels.to(device)\n            optimizer.zero_grad()\n            outputs = model(data, mask)\n            loss = criterion(outputs, labels)\n            loss.backward()\n            optimizer.step()\n            epoch_train_loss += loss.item()\n            train_preds.extend(torch.softmax(outputs, dim=1)[:, 1].detach().cpu().numpy())\n            train_labels.extend(labels.detach().cpu().numpy())\n\n        epoch_train_loss /= len(train_loader)\n        train_loss.append(epoch_train_loss)\n        train_acc.append(np.mean(np.argmax(torch.softmax(torch.tensor(train_preds), dim=0).numpy()) == np.array(train_labels)))\n        train_auc.append(roc_auc_score(train_labels, train_preds))\n\n        model.eval()\n        epoch_val_loss = 0\n        val_preds = []\n        val_labels = []\n\n        with torch.no_grad():\n            for (data, mask), labels in val_loader:\n                data, mask, labels = data.to(device), mask.to(device), labels.to(device)\n                outputs = model(data, mask)\n                loss = criterion(outputs, labels)\n                epoch_val_loss += loss.item()\n                val_preds.extend(torch.softmax(outputs, dim=1)[:, 1].detach().cpu().numpy())\n                val_labels.extend(labels.detach().cpu().numpy())\n\n        epoch_val_loss /= len(val_loader)\n        val_loss.append(epoch_val_loss)\n        val_acc.append(np.mean(np.argmax(torch.softmax(torch.tensor(val_preds), dim=0).numpy()) == np.array(val_labels)))\n        val_auc.append(roc_auc_score(val_labels, val_preds))\n\n        print(f'Epoch {epoch+1}, Train Loss: {epoch_train_loss:.4f}, Val Loss: {epoch_val_loss:.4f}, Train AUC: {train_auc[-1]:.4f}, Val AUC: {val_auc[-1]:.4f}')\n\n        if val_auc[-1] > best_val_auc:\n            best_val_auc = val_auc[-1]\n            torch.save(model.state_dict(), 'best_model.pth')\n\n        scheduler.step()\n\n    model.load_state_dict(torch.load('best_model.pth'))\n    return model, train_loss, val_loss, train_acc, val_acc\n```",
+    "reasoning": "",
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "Outer_attempt": 1
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-06-03T09:37:18Z",
+    "PyLint": {
+      "passed": false,
+      "messages": [
+        {
+          "type": "error",
+          "module": "script_meta-llama_llama-4-maverick_1137_1",
+          "obj": "",
+          "line": 216,
+          "column": 1,
+          "endLine": null,
+          "endColumn": null,
+          "path": "outputs\\03-06\\FOURTOPS\\Q1\\script_meta-llama_llama-4-maverick_1137_1.py",
+          "symbol": "syntax-error",
+          "message": "Parsing failed: 'invalid syntax (script_meta-llama_llama-4-maverick_1137_1, line 216)'",
+          "message-id": "E0001"
+        }
+      ]
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [
+          {
+            "filename": ".\\./outputs/03-06/FOURTOPS/Q1/script_meta-llama_llama-4-maverick_1137_1.py",
+            "reason": "syntax error while parsing AST from file"
+          }
+        ],
+        "generated_at": "2025-06-03T09:37:18Z",
+        "metrics": {
+          ".\\./outputs/03-06/FOURTOPS/Q1/script_meta-llama_llama-4-maverick_1137_1.py": {
+            "loc": 226,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 226,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  }
+}

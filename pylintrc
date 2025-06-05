@@ -439,6 +439,7 @@ disable=raw-checker-failed,
         use-symbolic-message-instead,
         use-implicit-booleaness-not-comparison-to-string,
         use-implicit-booleaness-not-comparison-to-zero,
+        no-member, # keeps crashing tensor - tuple logic
         C0114,  ; missing-module-docstring
         C0115,  ; missing-class-docstring
         C0116   ; missing-function-docstring

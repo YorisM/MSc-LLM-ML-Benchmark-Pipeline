@@ -1,10 +1,10 @@
 # generate_and_dryrun.py
 
 # Imports
-import os, requests, json, logging, shutil, time, re
+import os, requests, json, logging, shutil, time, re, textwrap
 from pathlib import Path
 
-from config import MAX_TOKENS, OPENROUTER_API_KEY, OPENROUTER_API_COMPLETIONS, models, num_attempts, challenges
+from config import MAX_TOKENS, REASONING_MAX_TOKENS, OPENROUTER_API_KEY, OPENROUTER_API_COMPLETIONS, models, num_attempts, challenges
 from static_checks import run_pylint, run_bandit
 from run_scripts import run_single_script
 from utils import append_to_response_json
@@ -34,7 +34,7 @@ def query_openrouter(model: str, prompt: str, *, max_retries = 3):
     Portal to OpenRouter API.
 
     RETURNS
-    The parsed JSON LLM response or raises on final failure.
+    The parsed LLM response or raises on final failure.
     """
         
     headers = {
@@ -46,8 +46,12 @@ def query_openrouter(model: str, prompt: str, *, max_retries = 3):
         "model": model,
         "prompt": prompt,
         "usage": {"include": True},
-        "response_format": {"type": "json_object"}, 
         "max_tokens": (MAX_TOKENS),
+        "reasoning": {
+            "exclude": False, 
+            "effort": "high",
+            # "max_tokens": REASONING_MAX_TOKENS, 
+            }
     }
 
     # Request Timer (since Gemini is slow... and other connectivity issues wwere risen)
@@ -89,20 +93,16 @@ def query_openrouter(model: str, prompt: str, *, max_retries = 3):
             continue
 
         # SUCCESSFUL RESPONSE - Still need to parse
-        raw_text = result["choices"][0]["text"]
-        try:    
-            parsed   = robust_parse(raw_text)
-        except (ValueError, json.JSONDecodeError) as e:
-            logging.warning("Parse failure on inner_attempt %d: %s", inner_attempt+1, e)
-            if inner_attempt == max_retries - 1:
-                return None
-            continue
+        choice    = result["choices"][0]
+        content   = choice.get("text", "")
+        reasoning = (choice.get("reasoning") or "") 
+        usage     = result.get("usage", {})
 
-        code        = parsed.get("code", "").strip()
-        explanation = parsed.get("explanation", "").strip()
-        usage       = result.get("usage", {})
-        if not code or not explanation:
-            logging.warning("Parsed JSON lacks code/explanation")
+        code = extract_code(content)
+
+        if not code:
+            logging.warning("No code found in LLM response")
+            logging.info("LLM response: %s", content)
             if inner_attempt == max_retries - 1:
                 return None
             continue
@@ -112,19 +112,19 @@ def query_openrouter(model: str, prompt: str, *, max_retries = 3):
             "prompt_tokens": usage.get("prompt_tokens"),
             "prompt_chars": len(prompt),
             "response_tokens": usage.get("completion_tokens"),
-            "response_chars": len(raw_text),
-            "cost": usage.get("cost"),
+            "response_chars": len(content),
+            "cost_usd": usage.get("cost"),
             "generation_ms": duration_ms,
-            "cached": bool(parsed.get("cached", False)),  
             "code":  code,
-            "explanation": explanation,
-            "reasoning": parsed.get("reasoning"),
+            "reasoning": reasoning,
+            "reasoning_tokens": usage.get("reasoning_tokens"),
+            "reasoning_chars": len(reasoning),
             "Inner attempt": inner_attempt + 1,
         }
 
         return llm_block
 
-def robust_parse(raw: str) -> dict:
+def robust_parse_JSON(raw: str) -> dict:
     """
     Return a dictionary parsed from an LLM response.
     Accepts plain JSON or Markdown-wrapped JSON, and tolerates
@@ -136,7 +136,7 @@ def robust_parse(raw: str) -> dict:
         parsed = json.loads(raw)
     except json.JSONDecodeError as e:
         logging.warning("Initial JSON decoding failed: %s", e)
-        cleaned = parse_response(raw)
+        cleaned = parse_response_JSON(raw)
         try:
             parsed = json.loads(cleaned)
         except json.JSONDecodeError as e2:
@@ -154,8 +154,7 @@ def robust_parse(raw: str) -> dict:
         
     logging.info("Successfully parsed raw response as JSON.")
     return parsed
-
-def parse_response(raw: str) -> str:
+def parse_response_JSON(raw: str) -> str:
     """
     Extracts a JSON-like block from the raw LLM output (i.e. deletes everything before
     the first '{' and after the last '}'). Then, if a 'code' field is present, it cleans
@@ -208,7 +207,7 @@ def save_response(output_dir: str,
     """
     Writes two files:
       - script_...py        : runnable script
-      - response_...json    : full LLM JSON incl. explanation / usage
+      - response_...json    : full LLM JSON incl. code / usage
     """
 
     ts   = time.strftime("%H%M")
@@ -225,6 +224,26 @@ def save_response(output_dir: str,
 
     logging.info("Saved script → %s  and JSON → %s", py_path, json_path)
     return py_path, json_path
+
+def extract_code(raw: str) -> str:
+    """
+    Return runnable Python code extracted from raw LLM output.
+    """
+
+    patterns = [
+        # 1) ```python … ```
+        r"```(?:python|py)?\s*(.*?)\s*```",
+        # 2) python … ```
+        r"^\s*python\s*(.*?)\s*```$",
+    ]
+
+    for pat in patterns:
+        match = re.search(pat, raw, flags=re.DOTALL | re.IGNORECASE)
+        if match:
+            return textwrap.dedent(match.group(1)).strip()
+
+    # 3) Fallback: entire text is code
+    return textwrap.dedent(raw).strip()
 
 def move_file(file_path, destination_dir):
     """Move a single file to the destination directory."""
@@ -256,7 +275,7 @@ def generate_and_dryrun():
             logging.info("Set-Up Output Directory: %s", output_dir)
 
             prompt = challenge.build_prompt(question)
-            prompt = f"```markdown\n{prompt}\n```"
+            prompt = f"{prompt}"
             logging.info("Prompt: %s", prompt)
 
             for model in models:
@@ -272,13 +291,11 @@ def generate_and_dryrun():
                         continue
                     
                     response["Outer_attempt"] = attempt
-
                     code         = response["code"]
-                    explanation  = response["explanation"]
                     response_blob = {"LLMGeneration": response}
 
-                    if not code or not explanation:
-                        logging.error("Model %s: Missing code/explanation on attempt %d", model, attempt)
+                    if not code:
+                        logging.error("Model %s: Missing code on attempt %d", model, attempt)
                         continue
 
                     # Concatenate LLM response with our own code and save to runnable .py

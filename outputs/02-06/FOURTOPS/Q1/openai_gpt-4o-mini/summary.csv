@@ -1,0 +1,13 @@
+script,success,return_code,stdout,stderr,duration_s,max_rss_kb
+outputs\02-06\FOURTOPS\Q1\openai_gpt-4o-mini\script_openai_gpt-4o-mini_1710_1.py,False,1,"argv0=/usr/local/bin/train.sh
+argv1=outputs/02-06/FOURTOPS/Q1/openai_gpt-4o-mini/script_openai_gpt-4o-mini_1710_1.py
+argv2=
+","Traceback (most recent call last):
+  File ""/workspace/outputs/02-06/FOURTOPS/Q1/openai_gpt-4o-mini/script_openai_gpt-4o-mini_1710_1.py"", line 243, in <module>
+    _run(dryrun=""--dryrun"" in sys.argv)
+    ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/workspace/outputs/02-06/FOURTOPS/Q1/openai_gpt-4o-mini/script_openai_gpt-4o-mini_1710_1.py"", line 230, in _run
+    ""best_train_acc"":  max(tr_acc),
+                       ~~~^^^^^^^^
+ValueError: max() iterable argument is empty
+",183.37033419999352,108

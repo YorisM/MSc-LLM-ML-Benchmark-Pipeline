@@ -1,0 +1,69 @@
+{
+  "LLMGeneration": {
+    "model": "deepseek/deepseek-r1",
+    "prompt_tokens": 2090,
+    "prompt_chars": 8428,
+    "response_tokens": 14599,
+    "response_chars": 58173,
+    "cost_usd": 0.0367096,
+    "generation_ms": 750243,
+    "code": "import torch\nimport numpy as np\nfrom torch import nn\nfrom torch.nn import functional as F\nfrom torch.utils.data import Dataset, DataLoader, TensorDataset\nfrom sklearn.metrics import roc_auc_score\n\nclass MyPreprocessor:\n    def __init__(self):\n        self.obj_id_list = None\n        self.obj_id_to_idx = {}\n        self.feature_means = None\n        self.feature_stds = None\n\n    def fit(self, X, y=None):\n        # Collect object IDs and create mapping\n        objects = X[:, 2:].view(-1, 18, 5)  # (N, 18, 5)\n        obj_ids = objects[:, :, 0].flatten()\n        # Filter out padding (0) and collect unique obj_ids\n        valid_obj_ids = obj_ids[obj_ids != 0]\n        unique_obj_ids = torch.unique(valid_obj_ids).tolist()\n        self.obj_id_list = unique_obj_ids\n        # Create mapping from obj_id to index starting from 1 (0 is reserved for padding)\n        self.obj_id_to_idx = {oid: i+1 for i, oid in enumerate(unique_obj_ids)}\n\n        # Collect all features from real objects (for normalization)\n        all_features = []\n        batch_size = X.size(0)\n        for i in range(batch_size):\n            event_objects = objects[i]  # (18, 5)\n            event_valid_mask = event_objects[:, 0] != 0\n            event_valid = event_objects[event_valid_mask]\n            if event_valid.size(0) == 0:\n                continue\n            # Add missing ET features to each valid object\n            missing_et = X[i, :2].unsqueeze(0).expand(event_valid.size(0), 2)\n            event_features = torch.cat([event_valid, missing_et], dim=1)  # (n_objs, 7)\n            all_features.append(event_features)\n        all_features = torch.cat(all_features, dim=0).numpy()  # (M,7)\n\n        # Compute normalization parameters\n        self.feature_means = np.mean(all_features, axis=0)\n        self.feature_stds = np.std(all_features, axis=0, ddof=1) + 1e-8  # avoid division by zero\n        return self\n\n    def transform(self, X):\n        # Split missing ET and objects\n        missing_et = X[:, :2]\n        objects = X[:, 2:].view(-1, 18, 5)\n        batch_size = objects.size(0)\n\n        # Map obj_ids to indices\n        obj_ids = objects[:, :, 0].flatten().numpy().astype(int)\n        mapped_ids = np.array([self.obj_id_to_idx.get(oid, 0) for oid in obj_ids])\n        mapped_ids = torch.tensor(mapped_ids).view(batch_size, 18)\n\n        # Replace obj_ids with mapped indices\n        objects_mapped = torch.zeros_like(objects)\n        objects_mapped[:, :, 0] = mapped_ids\n        objects_mapped[:, :, 1:] = objects[:, :, 1:]\n\n        # Add missing ET features to each object\n        missing_et_expanded = missing_et.view(batch_size, 1, 2).expand(-1, 18, 2)\n        objects_with_et = torch.cat([objects_mapped, missing_et_expanded], dim=2)\n\n        # Normalize features\n        objects_with_et = objects_with_et.numpy()\n        objects_with_et = (objects_with_et - self.feature_means) / self.feature_stds\n        objects_normalized = torch.tensor(objects_with_et, dtype=torch.float32)\n\n        # Create mask (valid objects have mapped_id > 0)\n        mask = (mapped_ids > 0).float()  # (batch_size, 18)\n\n        return (objects_normalized, mask)\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\nclass ParticleTransformer(nn.Module):\n    def __init__(self, num_obj_ids, emb_dim=32, hidden_dim=128, nhead=8, num_layers=4):\n        super().__init__()\n        self.embedding = nn.Embedding(num_obj_ids+1, emb_dim, padding_idx=0)\n        self.linear = nn.Linear(emb_dim + 6, hidden_dim)\n        encoder_layer = nn.TransformerEncoderLayer(\n            d_model=hidden_dim, nhead=nhead, batch_first=True\n        )\n        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers)\n        self.pool = nn.AdaptiveAvgPool1d(1)\n        self.classifier = nn.Sequential(\n            nn.Linear(hidden_dim, hidden_dim//2),\n            nn.ReLU(),\n            nn.Linear(hidden_dim//2, 1)\n        )\n\n    def forward(self, x, mask=None):\n        # Extract obj_ids and other features\n        obj_ids = x[:, :, 0].long()  # (B, 18)\n        other_feats = x[:, :, 1:]     # (B, 18, 6)\n\n        # Embed obj_ids and combine\n        emb = self.embedding(obj_ids)  # (B, 18, emb_dim)\n        combined = torch.cat([emb, other_feats], dim=2)  # (B,18, emb_dim+6)\n        projected = self.linear(combined)  # (B,18, hidden_dim)\n\n        # Transformer with padding mask (mask is 1 for valid)\n        src_key_padding_mask = (~mask.bool()) if mask is not None else None\n        transformed = self.transformer(\n            projected, \n            src_key_padding_mask=src_key_padding_mask\n        )\n\n        # Pool valid elements\n        if mask is not None:\n            lengths = mask.sum(dim=1, keepdim=True)  # (B,1)\n            sum_emb = (transformed * mask.unsqueeze(-1)).sum(dim=1)  # (B, hidden_dim)\n            mean_emb = sum_emb / (lengths + 1e-8)\n        else:\n            mean_emb = torch.mean(transformed, dim=1)\n\n        return torch.sigmoid(self.classifier(mean_emb).squeeze(-1))\n\ndef make_model(input_shape, *, use_mask=False):\n    num_obj_ids = 30  # Should be inferred, but set based on observed data\n    return ParticleTransformer(num_obj_ids)\n\nEPOCHS = 30\nBATCH_SIZE = 512\n\ndef train_model(model, train_loader, val_loader, epochs):\n    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')\n    model.to(device)\n\n    criterion = nn.BCELoss()\n    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)\n    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', patience=3, factor=0.5)\n\n    best_auc = 0\n    train_loss = []\n    val_loss = []\n    train_auc = []\n    val_auc = []\n\n    for epoch in range(epochs):\n        model.train()\n        epoch_train_loss = []\n        epoch_preds = []\n        epoch_labels = []\n\n        for data in train_loader:\n            if len(data) == 3:  # with sample weights\n                (seq, mask), labels, weights = data\n                weights = weights.to(device)\n            else:\n                (seq, mask), labels = data\n                weights = None\n\n            seq, mask, labels = seq.to(device), mask.to(device), labels.to(device).float()\n\n            optimizer.zero_grad()\n            outputs = model(seq, mask)\n            loss = criterion(outputs, labels)\n            if weights is not None:\n                loss = (loss * weights).mean()\n            loss.backward()\n            optimizer.step()\n\n            epoch_train_loss.append(loss.item())\n            epoch_preds.append(outputs.detach().cpu())\n            epoch_labels.append(labels.detach().cpu())\n\n        train_loss_epoch = np.mean(epoch_train_loss)\n        train_auc_epoch = roc_auc_score(\n            torch.cat(epoch_labels).numpy(), \n            torch.cat(epoch_preds).numpy()\n        )\n        train_loss.append(train_loss_epoch)\n        train_auc.append(train_auc_epoch)\n\n        # Validation\n        model.eval()\n        epoch_val_loss = []\n        epoch_val_preds = []\n        epoch_val_labels = []\n        with torch.no_grad():\n            for data in val_loader:\n                (seq, mask), labels = data\n                seq, mask, labels = seq.to(device), mask.to(device), labels.to(device).float()\n\n                outputs = model(seq, mask)\n                loss = criterion(outputs, labels)\n\n                epoch_val_loss.append(loss.item())\n                epoch_val_preds.append(outputs.cpu())\n                epoch_val_labels.append(labels.cpu())\n\n        val_loss_epoch = np.mean(epoch_val_loss)\n        val_auc_epoch = roc_auc_score(\n            torch.cat(epoch_val_labels).numpy(),\n            torch.cat(epoch_val_preds).numpy()\n        )\n        val_loss.append(val_loss_epoch)\n        val_auc.append(val_auc_epoch)\n\n        scheduler.step(val_auc_epoch)\n\n        # Early stopping\n        if val_auc_epoch > best_auc:\n            best_auc = val_auc_epoch\n            torch.save(model.state_dict(), 'best_model.pth')\n\n        print(f'Epoch {epoch+1}/{epochs} | Train Loss: {train_loss_epoch:.4f} | Val Loss: {val_loss_epoch:.4f} | Train AUC: {train_auc_epoch:.4f} | Val AUC: {val_auc_epoch:.4f}')\n\n    # Load best model\n    model.load_state_dict(torch.load('best_model.pth', map_location=device))\n    return model, train_loss, val_loss, train_auc, val_auc",
+    "reasoning": "",
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 2,
+    "Outer_attempt": 3
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-06-03T09:59:58Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-06-03T09:59:58Z",
+        "metrics": {
+          ".\\./outputs/03-06/FOURTOPS/Q1/script_deepseek_deepseek-r1_1159_3.py": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 269,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 269,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2025-06-03T10:00:33Z",
+    "passed": false,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/03-06/FOURTOPS/Q1/script_deepseek_deepseek-r1_1159_3.py\nargv2=--dryrun\nERROR during training: index out of range in self\n",
+      "stderr": "Traceback (most recent call last):\n  File \"/workspace/outputs/03-06/FOURTOPS/Q1/script_deepseek_deepseek-r1_1159_3.py\", line 358, in <module>\n    _run(dryrun=\"--dryrun\" in sys.argv)\n    ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/outputs/03-06/FOURTOPS/Q1/script_deepseek_deepseek-r1_1159_3.py\", line 305, in _run\n    trained_model, tr_loss, va_loss, tr_acc, va_acc = train_model(\n                                                      ~~~~~~~~~~~^\n        model, train_loader, val_loader, epochs=n_epochs)\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/outputs/03-06/FOURTOPS/Q1/script_deepseek_deepseek-r1_1159_3.py\", line 217, in train_model\n    outputs = model(seq, mask)\n  File \"/usr/local/lib/python3.13/site-packages/torch/nn/modules/module.py\", line 1751, in _wrapped_call_impl\n    return self._call_impl(*args, **kwargs)\n           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.13/site-packages/torch/nn/modules/module.py\", line 1762, in _call_impl\n    return forward_call(*args, **kwargs)\n  File \"/workspace/outputs/03-06/FOURTOPS/Q1/script_deepseek_deepseek-r1_1159_3.py\", line 158, in forward\n    emb = self.embedding(obj_ids)  # (B, 18, emb_dim)\n  File \"/usr/local/lib/python3.13/site-packages/torch/nn/modules/module.py\", line 1751, in _wrapped_call_impl\n    return self._call_impl(*args, **kwargs)\n           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.13/site-packages/torch/nn/modules/module.py\", line 1762, in _call_impl\n    return forward_call(*args, **kwargs)\n  File \"/usr/local/lib/python3.13/site-packages/torch/nn/modules/sparse.py\", line 190, in forward\n    return F.embedding(\n           ~~~~~~~~~~~^\n        input,\n        ^^^^^^\n    ...<5 lines>...\n        self.sparse,\n        ^^^^^^^^^^^^\n    )\n    ^\n  File \"/usr/local/lib/python3.13/site-packages/torch/nn/functional.py\", line 2551, in embedding\n    return torch.embedding(weight, input, padding_idx, scale_grad_by_freq, sparse)\n           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nIndexError: index out of range in self\n"
+    },
+    "return_code": 1
+  }
+}

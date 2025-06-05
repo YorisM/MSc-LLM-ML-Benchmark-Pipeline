@@ -1,0 +1,69 @@
+{
+  "LLMGeneration": {
+    "model": "openai/gpt-4o-mini",
+    "prompt_tokens": 2046,
+    "prompt_chars": 8428,
+    "response_tokens": 963,
+    "response_chars": 4090,
+    "cost_usd": 3.7035e-05,
+    "generation_ms": 18886,
+    "code": "# 0. ---------- IMPORTS ----------\nimport torch\nimport numpy as np\nfrom torch import nn\nfrom torch.utils.data import Dataset, DataLoader\nfrom sklearn.metrics import roc_auc_score\nimport torch.optim as optim\n\n# 1. ---------- PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        # No stateful components are needed for this preprocessor\n        pass\n\n    def fit(self, X, y=None):\n        # No fitting parameters are required in this case\n        return self\n\n    def transform(self, X):\n        # Normalize the first two features (E_T_miss and phi_Et_miss)\n        X_new = X.clone()\n        X_new[:, 0] = (X[:, 0] - X[:, 0].mean()) / X[:, 0].std()  # E_T_miss normalization\n        X_new[:, 1] = (X[:, 1] - X[:, 1].mean()) / X[:, 1].std()  # phi_Et_miss normalization\n        return X_new \n\n    def fit_transform(self, X, y=None):\n        self.fit(X, y)\n        return self.transform(X)\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# 2. ---------- MODEL DEFINITION ----------\nclass SimpleFeedForwardModel(nn.Module):\n    def __init__(self, input_shape):\n        super(SimpleFeedForwardModel, self).__init__()\n        self.fc1 = nn.Linear(input_shape[0], 128)\n        self.fc2 = nn.Linear(128, 64)\n        self.fc3 = nn.Linear(64, 1)\n        self.dropout = nn.Dropout(0.5)\n        self.activation = nn.ReLU()\n\n    def forward(self, x):\n        x = self.activation(self.fc1(x))\n        x = self.dropout(x)\n        x = self.activation(self.fc2(x))\n        x = self.dropout(x)\n        x = torch.sigmoid(self.fc3(x))  # Output layer\n        return x\n\ndef make_model(input_shape, *, use_mask=False):\n    model = SimpleFeedForwardModel(input_shape)\n    return model\n\n# 3. ---------- MODEL TRAINING ----------\nEPOCHS = 50  # Defined amount of training epochs\n\ndef train_model(model, train_loader, val_loader, epochs):\n    criterion = nn.BCELoss()\n    optimizer = optim.Adam(model.parameters(), lr=0.001)\n\n    train_loss_history = []\n    val_loss_history = []\n    train_acc_history = []\n    val_acc_history = []\n\n    best_val_auc = 0  # Variable to store the best AUC\n    patience = 5  # Early stopping patience\n    trigger_times = 0  # To count the number of times validation AUC does not improve\n\n    for epoch in range(epochs):\n        model.train()\n        running_loss = 0.0\n        total = 0\n        correct = 0\n\n        for data, labels in train_loader:\n            optimizer.zero_grad()\n            outputs = model(data).squeeze()\n            loss = criterion(outputs, labels.float())\n            loss.backward()\n            optimizer.step()\n\n            running_loss += loss.item()\n            predicted = (outputs > 0.5).int()\n            total += labels.size(0)\n            correct += (predicted == labels).sum().item()\n\n        train_loss = running_loss / len(train_loader)\n        train_acc = correct / total\n        train_loss_history.append(train_loss)\n        train_acc_history.append(train_acc)\n\n        # Validation step\n        model.eval()\n        val_loss = 0.0\n        val_outputs = []\n        val_labels = []\n\n        with torch.no_grad():\n            for val_data, val_labels_batch in val_loader:\n                val_output = model(val_data).squeeze()\n                val_loss += criterion(val_output, val_labels_batch.float()).item()\n                val_outputs.append(val_output)\n                val_labels.append(val_labels_batch)\n\n        val_loss /= len(val_loader)\n        val_outputs = torch.cat(val_outputs).cpu().numpy()\n        val_labels = torch.cat(val_labels).cpu().numpy()\n\n        val_auc = roc_auc_score(val_labels, val_outputs)\n        val_loss_history.append(val_loss)\n\n        # Early stopping check\n        if val_auc > best_val_auc:\n            best_val_auc = val_auc\n            trigger_times = 0  # Reset trigger times if the model improved\n        else:\n            trigger_times += 1\n\n        if trigger_times >= patience:\n            print(f'Early stopping on epoch {epoch+1}')\n            break\n\n    return model, train_loss_history, val_loss_history, train_acc_history, val_acc_history",
+    "reasoning": "",
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "Outer_attempt": 3
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-06-02T14:55:12Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-06-02T14:55:12Z",
+        "metrics": {
+          ".\\./outputs/02-06/FOURTOPS/Q1/script_openai_gpt-4o-mini_1654_3.py": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 209,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 209,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2025-06-02T14:55:12Z",
+    "passed": false,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/02-06/FOURTOPS/Q1/script_openai_gpt-4o-mini_1654_3.py\nargv2=--dryrun\n",
+      "stderr": "/usr/local/bin/train.sh: line 32:     7 Segmentation fault      timeout --signal=KILL \"${TIMEOUT}s\" python \"$PY\" $DRY\n"
+    },
+    "return_code": 1
+  }
+}

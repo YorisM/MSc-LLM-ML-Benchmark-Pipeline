@@ -1,0 +1,71 @@
+{
+  "LLMGeneration": {
+    "model": "meta-llama/llama-4-maverick",
+    "prompt_tokens": 2011,
+    "prompt_chars": 8428,
+    "response_tokens": 1534,
+    "response_chars": 5928,
+    "cost_usd": 0.00160555,
+    "generation_ms": 18654,
+    "code": "python\n# 0. ---------- IMPORTS ----------\nimport torch\nimport numpy as np\nfrom torch import nn\nfrom torch.utils.data import Dataset, DataLoader\nfrom sklearn.metrics import roc_auc_score\nfrom torch.optim import Adam\nfrom torch.optim.lr_scheduler import ReduceLROnPlateau\n\n# 1. ---------- PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        # Initialize stateful components\n        self.max_objects = 18  # Maximum number of objects encoded\n        self.per_object_slice_size = 5  # Size of each object's slice\n\n    def fit(self, X, y=None):\n        # Extract statistics or fit transformers if needed\n        return self\n\n    def transform(self, X):\n        # Reshape X to separate objects and their features\n        # X shape: (batch_size, 92)\n        batch_size = X.shape[0]\n        X = X.view(batch_size, -1, self.per_object_slice_size)  # (N, 18, 5)\n\n        # Extract object presence mask (obj_n != 0)\n        mask = X[:, :, 0] != 0  # (N, 18)\n\n        # Remove obj_n identifier from the features\n        X = X[:, :, 1:]  # (N, 18, 4)\n\n        return (X, mask)\n\n    def fit_transform(self, X, y=None):\n        self.fit(X, y)\n        return self.transform(X)\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# 2. ---------- MODEL DEFINITION ----------\nclass BinaryClassifier(nn.Module):\n    def __init__(self, input_shape, use_mask=False):\n        super(BinaryClassifier, self).__init__()\n        self.use_mask = use_mask\n        self.object_embedding = nn.Linear(4, 128)  # Embedding for each object's features\n        self.encoder = nn.TransformerEncoderLayer(d_model=128, nhead=8, dim_feedforward=256, dropout=0.1)\n        self.encoder = nn.TransformerEncoder(self.encoder, num_layers=3)\n        self.classifier = nn.Sequential(\n            nn.Linear(128, 64),\n            nn.ReLU(),\n            nn.Dropout(0.1),\n            nn.Linear(64, 1),\n            nn.Sigmoid()\n        )\n\n    def forward(self, x, mask=None):\n        # x shape: (N, L, F) where L is the sequence length and F is the feature size\n        x = torch.relu(self.object_embedding(x))  # (N, L, 128)\n        if self.use_mask:\n            mask = ~mask  # Invert mask for TransformerEncoder\n            x = x.permute(1, 0, 2)  # (L, N, 128)\n            x = self.encoder(x, src_key_padding_mask=mask)  # (L, N, 128)\n            x = x.permute(1, 0, 2)  # (N, L, 128)\n        else:\n            x = x.permute(1, 0, 2)  # (L, N, 128)\n            x = self.encoder(x)  # (L, N, 128)\n            x = x.permute(1, 0, 2)  # (N, L, 128)\n\n        # Global average pooling over the sequence length\n        x = x.mean(dim=1)  # (N, 128)\n        x = self.classifier(x)  # (N, 1)\n        return x.squeeze(-1)  # (N)\n\ndef make_model(input_shape, *, use_mask=False):\n    return BinaryClassifier(input_shape, use_mask)\n\n# 3. ---------- MODEL TRAINING ----------\nEPOCHS = 20\nBATCH_SIZE = 128\n\nclass MyDataset(Dataset):\n    def __init__(self, X, y, preprocessor):\n        self.X = X\n        self.y = y\n        self.preprocessor = preprocessor\n\n    def __len__(self):\n        return len(self.X)\n\n    def __getitem__(self, idx):\n        X = self.X[idx]\n        y = self.y[idx]\n        X, mask = self.preprocessor.transform(X.unsqueeze(0))\n        return (X.squeeze(0), mask.squeeze(0)), y\n\ndef train_model(model, train_loader, val_loader, epochs):\n    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')\n    model.to(device)\n    criterion = nn.BCELoss()\n    optimizer = Adam(model.parameters(), lr=1e-4)\n    scheduler = ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=3, verbose=True)\n\n    train_loss = []\n    val_loss = []\n    train_acc = []\n    val_acc = []\n    val_auc = []\n\n    best_val_auc = 0.0\n    best_model_state = None\n\n    for epoch in range(epochs):\n        model.train()\n        epoch_train_loss = 0.0\n        train_preds = []\n        train_labels = []\n        for (X, mask), y in train_loader:\n            X, mask, y = X.to(device), mask.to(device), y.to(device).float()\n            optimizer.zero_grad()\n            outputs = model(X, mask)\n            loss = criterion(outputs, y)\n            loss.backward()\n            optimizer.step()\n            epoch_train_loss += loss.item()\n            train_preds.extend(outputs.detach().cpu().numpy())\n            train_labels.extend(y.cpu().numpy())\n\n        epoch_train_loss /= len(train_loader)\n        train_loss.append(epoch_train_loss)\n        train_preds = np.array(train_preds)\n        train_labels = np.array(train_labels)\n        train_auc = roc_auc_score(train_labels, train_preds)\n        train_acc.append(np.mean((train_preds > 0.5) == train_labels))\n\n        model.eval()\n        epoch_val_loss = 0.0\n        val_preds = []\n        val_labels = []\n        with torch.no_grad():\n            for (X, mask), y in val_loader:\n                X, mask, y = X.to(device), mask.to(device), y.to(device).float()\n                outputs = model(X, mask)\n                loss = criterion(outputs, y)\n                epoch_val_loss += loss.item()\n                val_preds.extend(outputs.cpu().numpy())\n                val_labels.extend(y.cpu().numpy())\n\n        epoch_val_loss /= len(val_loader)\n        val_loss.append(epoch_val_loss)\n        val_preds = np.array(val_preds)\n        val_labels = np.array(val_labels)\n        epoch_val_auc = roc_auc_score(val_labels, val_preds)\n        val_auc.append(epoch_val_auc)\n        val_acc.append(np.mean((val_preds > 0.5) == val_labels))\n\n        scheduler.step(epoch_val_auc)\n\n        print(f'Epoch {epoch+1}, Train Loss: {epoch_train_loss:.4f}, Val Loss: {epoch_val_loss:.4f}, Train AUC: {train_auc:.4f}, Val AUC: {epoch_val_auc:.4f}')\n\n        if epoch_val_auc > best_val_auc:\n            best_val_auc = epoch_val_auc\n            best_model_state = model.state_dict()\n\n    model.load_state_dict(best_model_state)\n    return model, train_loss, val_loss, train_acc, val_acc\n```",
+    "reasoning": "",
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "Outer_attempt": 2
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-06-03T09:37:40Z",
+    "PyLint": {
+      "passed": false,
+      "messages": [
+        {
+          "type": "error",
+          "module": "script_meta-llama_llama-4-maverick_1137_2",
+          "obj": "",
+          "line": 226,
+          "column": 1,
+          "endLine": null,
+          "endColumn": null,
+          "path": "outputs\\03-06\\FOURTOPS\\Q1\\script_meta-llama_llama-4-maverick_1137_2.py",
+          "symbol": "syntax-error",
+          "message": "Parsing failed: 'invalid syntax (script_meta-llama_llama-4-maverick_1137_2, line 226)'",
+          "message-id": "E0001"
+        }
+      ]
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [
+          {
+            "filename": ".\\./outputs/03-06/FOURTOPS/Q1/script_meta-llama_llama-4-maverick_1137_2.py",
+            "reason": "syntax error while parsing AST from file"
+          }
+        ],
+        "generated_at": "2025-06-03T09:37:40Z",
+        "metrics": {
+          ".\\./outputs/03-06/FOURTOPS/Q1/script_meta-llama_llama-4-maverick_1137_2.py": {
+            "loc": 240,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 240,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  }
+}

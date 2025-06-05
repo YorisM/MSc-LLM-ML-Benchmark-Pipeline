@@ -1,59 +1,4 @@
-# ./challenges/challenges.py
 
-import json
-
-# General Prompting Structure
-# - - - - - - - - - - - - - - - - - - - - 
-# Instructions
-#   Problem Description
-#   Evaluation Metric
-#   Dataset Description
-#   Runtime Constraints
-#   Code Template
-#       Question
-#       Context
-# Response Format
-
-
-# General Script Structure
-# - - - - - - - - - - - - - - - - - - - - 
-# Prefix = Config, data loading
-# LLM Response = data pre-processing, model definition, training
-# Suffix = preparing outputs, main function and running the model
-
-
-DEFAULT_INSTRUCTIONS = r"""** Instructions **
-You are an expert at programming in python, machine learning,
-particle and high energy physics. You will help me answer a question
-in a machine learning challenge format where you strive to maximise
-a scalar metric in order to learn more about your scientific creativity
-and scientific understanding. You will follow all of the instructions 
-to your best capabilities. Your first priority is to produce a correct 
-solution in terms of runnable python code. Your second priority is to 
-do everything you can to maximise the metric defined below.
-""" 
-
-DEFAULT_RUNTIME_CONSTRAINTS = r"""** Runtime Constraints **	
-/
-"""
-
-DEFAULT_RESPONSE_FORMAT = r"""** Response Format **
-Your response must strictly be python code. 
-If you must wrap it, put it in a ```python fenced block and nothing else.
-Your response must follow these rules:
-
-1. Do not add any formatting, such as markdown, to the response. 
-2. Replace each "# <LLM: ...>" comment, in the code template, with the required code. 
-No placeholder should remain.
-3. Before finalizing your answer, double-check that your code runs without errors and
-meets all requirements (all functions implemented, correct tensor shapes, etc.).
-4. To prevent dimensional mismatches make sure to annotate tensor sizes as comments.
-5. IMPORTANT: Remember, your first, and most important priority is to produce 
-(syntactically) correct code. Prioritise what you can implement reliably above all else. 
-Then prioritise maximising the metric.
-"""
-
-DEFAULT_PREFIX = r"""
 import os, sys, pickle, torch, gc, json
 import pandas as pd
 import numpy as np
@@ -66,7 +11,12 @@ torch.manual_seed(42)
 os.environ["PYTHONHASHSEED"] = "42"
 SCRIPT_DIR = os.path.dirname(os.path.abspath(sys.argv[0]))
 
-DATASET = {dataset_dict}
+DATASET = {
+    "X_train": "./challenges/FOURTOPS/data/X_train.csv",
+    "Y_train": "./challenges/FOURTOPS/data/Y_train.csv",
+    "X_val": "./challenges/FOURTOPS/data/X_val.csv",
+    "Y_val": "./challenges/FOURTOPS/data/Y_val.csv"
+}
                        
 def load_data():
     X_train = pd.read_csv('./challenges/FOURTOPS/data/X_train.csv',
@@ -104,16 +54,136 @@ def make_loaders(X_train, Y_train, X_val, Y_val, batch=512):
             DataLoader(val_ds,   batch_size=batch, shuffle=False, num_workers=0))
                         
 # ----------------  START OF LLM BLOCK  ----------------
-"""
 
-DEFAULT_SUFFIX = r"""
-# ----------------  END OF LLM BLOCK ----------------
+# 0. ---------- IMPORTS ----------
+import os, sys, pickle, torch, gc, json
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from torch import nn
+from torch.utils.data import Dataset, DataLoader
+from sklearn.metrics import roc_auc_score, accuracy_score
+from sklearn.preprocessing import StandardScaler
+
+# 1. ---------- PRE-PROCESSING ----------
+class MyPreprocessor:
+    def __init__(self):
+        self.scaler = StandardScaler() # To standardize features
+
+    def fit(self, X, y=None):
+        self.scaler.fit(X.numpy())  # Fit scaler on the data
+        return self
+
+    def transform(self, X):
+        X_normalized = self.scaler.transform(X.numpy())  # Transform the data
+        return torch.tensor(X_normalized, dtype=torch.float32)  # (N, features)
+
+    def fit_transform(self, X, y=None):
+        self.fit(X, y)
+        return self.transform(X)
+
+def make_preprocessor():
+    return MyPreprocessor()
+
+# 2. ---------- MODEL DEFINITION ----------
+class BinaryClassifier(nn.Module):
+    def __init__(self, input_shape: tuple[int, ...], *, use_mask: bool):
+        super().__init__()
+        self.use_mask = use_mask
+        self.fc1 = nn.Linear(input_shape[0], 128)  # (F,) -> 128
+        self.fc2 = nn.Linear(128, 64)               # 128 -> 64
+        self.fc3 = nn.Linear(64, 32)                 # 64 -> 32
+        self.output = nn.Linear(32, 1)              # 32 -> 1 (Logits)
+        self.dropout = nn.Dropout(0.3)              # Dropout for regularization
+
+    def forward(self, data: torch.Tensor, mask: torch.Tensor | None = None):
+        x = torch.relu(self.fc1(data))  # apply first layer
+        x = self.dropout(x)              # apply dropout
+        x = torch.relu(self.fc2(x))      # apply second layer
+        x = self.dropout(x)              # apply dropout
+        x = torch.relu(self.fc3(x))      # apply third layer
+        x = self.output(x)                # logits
+        return torch.sigmoid(x)          # output probabilities
+
+def make_model(input_shape, *, use_mask=False):
+    return BinaryClassifier(input_shape, use_mask=use_mask)
+
+# 3. ---------- MODEL TRAINING ----------
+EPOCHS = 50  # Set for enough training
+
+def train_model(model, train_loader, val_loader, epochs):
+    criterion = nn.BCELoss()  # Binary Cross-Entropy Loss
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+
+    train_loss, val_loss = [], []
+    train_acc, val_acc = [], []
+    best_auc = 0
+    early_stopping_counter = 0
+    early_stopping_limit = 5  # Early stopping patience
+
+    for epoch in range(epochs):
+        model.train()
+        epoch_loss = 0
+        correct = 0
+        total = 0
+
+        for data, labels in train_loader:
+            optimizer.zero_grad()
+            outputs = model(data).squeeze()  # Get model output
+            loss = criterion(outputs, labels.float())  # Calculate loss
+            loss.backward()  # Backpropagate
+            optimizer.step()  # Update weights
+
+            epoch_loss += loss.item()
+            preds = (outputs > 0.5).int()  # Binary prediction
+            correct += (preds == labels).sum().item()
+            total += labels.size(0)
+
+        train_loss.append(epoch_loss / len(train_loader))
+        train_acc.append(correct / total)
+
+        # Validation phase
+        model.eval()
+        val_predictions = []
+        val_labels = []
+        val_epoch_loss = 0
+
+        with torch.no_grad():
+            for data, labels in val_loader:
+                outputs = model(data).squeeze()
+                val_loss_value = criterion(outputs, labels.float())
+                val_epoch_loss += val_loss_value.item()
+                val_predictions.extend(outputs.cpu().numpy())
+                val_labels.extend(labels.cpu().numpy())
+
+        val_loss.append(val_epoch_loss / len(val_loader))
+        val_auc = roc_auc_score(val_labels, val_predictions)  # Calculate AUC
+
+        val_acc.append(accuracy_score(val_labels, np.array(val_predictions) > 0.5))
+
+        # Early stopping check
+        if val_auc > best_auc:
+            best_auc = val_auc
+            early_stopping_counter = 0  # Reset counter if AUC improves
+        else:
+            early_stopping_counter += 1  # Increment counter if AUC does not improve
+
+        if early_stopping_counter >= early_stopping_limit:
+            print("Early stopping at epoch:", epoch + 1)
+            break
+
+    return model, train_loss, val_loss, train_acc, val_acc
+
+# IMPORTANT: DO NOT execute the pipeline here – the harness will do that.
+# IMPORTANT: Strictly follow this code template, and do not deviate from it.
+
+# ----------------  END OF LLM-CODE BLOCK ----------------
                          
 def _plot(series_train, series_val, name, out_path):
     plt.figure()
     plt.plot(series_train, label=f"Train {name}")
     plt.plot(series_val,   label=f"Val {name}")
-    plt.title(name); plt.xlabel("epoch"); plt.legend()
+    plt.title(name); plt.xlabel("Epoch"); plt.legend()
     plt.savefig(out_path); plt.close()
 
 def _run(dryrun=False):
@@ -144,7 +214,7 @@ def _run(dryrun=False):
         print("ERROR during training:", e)
         raise
 
-    # 4. *Dry-run safety check* – run a single toy forward pass
+    # 4. *Dry-run safety check* - run a single toy forward pass
     if dryrun:
         toy_data = torch.zeros(8, *input_shape, dtype=torch.float32)
         if use_mask:
@@ -192,57 +262,4 @@ if "__main__" not in sys.modules:
 
 if __name__ == "__main__":
     _run(dryrun="--dryrun" in sys.argv)
-"""
 
-
-class Question:
-    def __init__(self, question_id, text, context=""):
-        self.question_id = question_id
-        self.text = text
-        self.context = context
-
-class Challenge:
-    def __init__(self, name, dataset, problem_description, dataset_description, 
-                 evaluation_metric, questions, code_template,
-                 instructions = DEFAULT_INSTRUCTIONS,
-                 runtime_constraints = DEFAULT_RUNTIME_CONSTRAINTS, 
-                 response_format = DEFAULT_RESPONSE_FORMAT,
-                 prefix = DEFAULT_PREFIX, suffix = DEFAULT_SUFFIX):
-        
-        self.name = name
-        self.dataset = dataset
-        self.problem_description = problem_description
-        self.dataset_description = dataset_description
-        self.evaluation_metric = evaluation_metric
-        self.runtime_constraints = runtime_constraints
-        self.code_template = code_template
-        self.questions = questions
-        self.instructions = instructions
-        self.response_format = response_format
-        self.prefix = prefix
-        self.suffix = suffix
-
-    def build_prompt(self, question: Question):
-        prompt = (
-            f"{self.instructions}\n"
-            f"{self.problem_description}\n"
-            f"{self.evaluation_metric}\n"
-            f"{self.dataset_description}\n"
-            # f"{self.runtime_constraints}\n"
-            f"{self.prefix}\n"
-            f"{self.code_template}\n"
-            f"{self.suffix}"
-            f"{question.text}\n"
-            f"{question.context}\n"
-            f"{self.response_format}"
-        )
-        return prompt
-    
-    def build_script(self, llm_code: str):
-        prefix = self.prefix.format(dataset_dict=json.dumps(self.dataset, indent=4))
-        script = "\n".join([
-            f"{prefix.rstrip()}\n",
-            f"{llm_code.rstrip()}\n",
-            f"{self.suffix.lstrip()}\n",
-        ])
-        return script

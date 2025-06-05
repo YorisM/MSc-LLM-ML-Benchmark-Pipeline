@@ -1,6 +1,6 @@
 # main.py
 
-# Imports
+
 import argparse
 import logging
 from generate_and_dryrun import generate_and_dryrun
@@ -8,24 +8,6 @@ from run_scripts import execute_scripts_in_batch
 from evaluate_scripts import evaluate_results
 from datetime import datetime
 from config import challenges
-
-
-# - - - - - TODO: - - - - - 
-#   Generate & Dryrun:
-#       - make sure that we have dimensional agnostic model inputs
-#   Run
-#       - ...
-#   Evaluate
-#       - ...
-#   FOURTOPS:
-#       - Spellchecker
-#       - Download option data from drive + instructions on saving convention
-#   TRACKRECON
-#        - Implement some kind of conditional: if Q1 failed -> do not do the rest (or go to Q_n)
-#   Misc:
-#       - Instructions for .env API key.
-#       - Colour code logging for each script
-# - - - - - - - - - - - - -
 
 
 # - - - - - Usage Examples  - - - - -

@@ -1,0 +1,74 @@
+{
+  "LLMGeneration": {
+    "model": "openai/gpt-4o-mini",
+    "prompt_tokens": 2046,
+    "prompt_chars": 8428,
+    "response_tokens": 925,
+    "response_chars": 4111,
+    "cost_usd": 3.5895e-05,
+    "generation_ms": 16263,
+    "code": "# 0. ---------- IMPORTS ----------\nimport torch\nimport numpy as np\nfrom torch import nn\nfrom torch.utils.data import Dataset, DataLoader\nfrom sklearn.preprocessing import StandardScaler\nfrom sklearn.metrics import roc_auc_score\n\n# 1. ---------- PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        # Initialize stateful components (e.g., scaler)\n        self.scaler = StandardScaler()\n\n    def fit(self, X, y=None):\n        # Fit the scaler on the training data excluding the first two features\n        self.scaler.fit(X[:, 2:])  # We don't scale E_T_miss and phi_Et_miss\n        return self\n\n    def transform(self, X):\n        # Scale the features\n        X_scaled = X.clone()\n        X_scaled[:, 2:] = torch.tensor(self.scaler.transform(X[:, 2:].numpy()), dtype=torch.float32)  # Scale X[:, 2:]\n        return X_scaled\n\n    def fit_transform(self, X, y=None):\n        self.fit(X, y)\n        return self.transform(X)\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# 2. ---------- MODEL DEFINITION ----------\nclass BinaryClassifier(nn.Module):\n    def __init__(self, input_shape):\n        super(BinaryClassifier, self).__init__()\n        self.fc1 = nn.Linear(input_shape[0], 64)  # Fully connected layer with 64 units\n        self.fc2 = nn.Linear(64, 32)               # Second layer with 32 units\n        self.fc3 = nn.Linear(32, 1)                # Output layer for binary classification\n        self.dropout = nn.Dropout(0.3)             # Dropout for regularization\n        self.relu = nn.ReLU()                       # ReLU activation\n\n    def forward(self, x):\n        x = self.relu(self.fc1(x))\n        x = self.dropout(x)\n        x = self.relu(self.fc2(x))\n        x = self.dropout(x)\n        x = torch.sigmoid(self.fc3(x))            # Output layer with sigmoid activation\n        return x\n\ndef make_model(input_shape, *, use_mask=False):\n    return BinaryClassifier(input_shape)\n\n# 3. ---------- MODEL TRAINING ----------\nEPOCHS = 50  # Setting epochs to 50 for sufficient training\n\ndef train_model(model, train_loader, val_loader, epochs):\n    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)  # Using Adam optimizer\n    criterion = nn.BCELoss()  # Binary Cross-Entropy Loss\n    train_loss = []\n    val_loss = []\n    train_acc = []\n    val_acc = []\n\n    best_val_auc = 0  # Variable to keep track of the best validation AUC\n\n    for epoch in range(epochs):\n        model.train()  # Set model to training mode\n        running_loss = 0.0\n\n        for data, labels in train_loader:\n            optimizer.zero_grad()              # Zero the gradients\n            outputs = model(data).squeeze()   # Forward pass\n            loss = criterion(outputs, labels.float())  # Calculate loss\n            loss.backward()                    # Backpropagation\n            optimizer.step()                   # Update weights\n            running_loss += loss.item()        # Accumulate loss\n\n        train_loss.append(running_loss / len(train_loader))\n\n        # Validation phase\n        model.eval()  # Set model to evaluation mode\n        running_val_loss = 0.0\n        all_outputs = []\n        all_labels = []\n\n        with torch.no_grad():  # Disable gradient computation during validation\n            for data, labels in val_loader:\n                outputs = model(data).squeeze()\n                loss = criterion(outputs, labels.float())\n                running_val_loss += loss.item()\n\n                all_outputs.append(outputs)\n                all_labels.append(labels)\n\n        val_loss.append(running_val_loss / len(val_loader))\n        val_auc = roc_auc_score(torch.cat(all_labels).numpy(), torch.cat(all_outputs).numpy())  # Calculate AUC\n        val_acc.append(val_auc)  # Store AUC for validation\n\n        # Early stopping check\n        if val_auc > best_val_auc:\n            best_val_auc = val_auc\n            best_model_state = model.state_dict()  # Save the best model state\n\n    model.load_state_dict(best_model_state)  # Load best model state\n    return model, train_loss, val_loss, train_acc, val_acc",
+    "reasoning": "",
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "Outer_attempt": 1
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-06-02T14:54:05Z",
+    "PyLint": {
+      "passed": false,
+      "messages": [
+        {
+          "type": "error",
+          "module": "script_openai_gpt-4o-mini_1653_1",
+          "obj": "train_model",
+          "line": 162,
+          "column": 26,
+          "endLine": 162,
+          "endColumn": 42,
+          "path": "outputs\\02-06\\FOURTOPS\\Q1\\script_openai_gpt-4o-mini_1653_1.py",
+          "symbol": "possibly-used-before-assignment",
+          "message": "Possibly using variable 'best_model_state' before assignment",
+          "message-id": "E0606"
+        }
+      ]
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-06-02T14:54:05Z",
+        "metrics": {
+          ".\\./outputs/02-06/FOURTOPS/Q1/script_openai_gpt-4o-mini_1653_1.py": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 193,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 193,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  }
+}

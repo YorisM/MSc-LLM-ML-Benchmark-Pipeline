@@ -1,0 +1,69 @@
+{
+  "LLMGeneration": {
+    "model": "meta-llama/llama-4-maverick",
+    "prompt_tokens": 3694,
+    "prompt_chars": 14954,
+    "response_tokens": 1884,
+    "response_chars": 7264,
+    "cost_usd": 0.00222938,
+    "generation_ms": 30031,
+    "code": "# 0. ---------- IMPORTS ----------\nimport torch.nn.functional as F\nfrom torch.optim import AdamW\nfrom torch.optim.lr_scheduler import ReduceLROnPlateau\nfrom sklearn.metrics import roc_auc_score\n\n# 1. ---------- PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.per_object_slice_size = 5\n        self.max_objects = 18\n\n    def fit(self, X, y=None):\n        return self\n\n    def transform(self, X):\n        # Reshape X into (N, L, F) where L is the max number of objects and F is the feature size per object\n        # (N, 92) -> (N, 18, 5) because 92 = 18*5 + 2 (for E_T_miss and phi_Et_miss)\n        N = X.shape[0]\n        X_new = torch.zeros((N, self.max_objects, self.per_object_slice_size), dtype=X.dtype)\n        for i in range(self.max_objects):\n            start_idx = 2 + i * self.per_object_slice_size\n            end_idx = start_idx + self.per_object_slice_size\n            X_new[:, i, :] = X[:, start_idx:end_idx]\n\n        # Extract E_T_miss and phi_Et_miss\n        E_T_miss = X[:, 0].unsqueeze(1)  # (N,) -> (N,1)\n        phi_Et_miss = X[:, 1].unsqueeze(1)  # (N,) -> (N,1)\n\n        # Concatenate E_T_miss and phi_Et_miss with the reshaped object features\n        # (N, 1) + (N, 1) + (N, 18, 5) -> (N, 20, 5) but we actually want (N, 18+2, 5)\n        # So, we concatenate E_T_miss and phi_Et_miss as two additional \"objects\"\n        X_new = torch.cat((E_T_miss.unsqueeze(1), phi_Et_miss.unsqueeze(1), X_new), dim=1)  # (N, 20, 5)\n\n        # Create a mask for the valid objects (including E_T_miss and phi_Et_miss)\n        mask = torch.ones((N, self.max_objects+2), dtype=torch.bool)  # (N, 20)\n\n        # Since the data is zero-padded, we need to mask out the padded objects\n        # The first two \"objects\" are always valid (E_T_miss and phi_Et_miss)\n        # For the rest, we check if the object ID is non-zero\n        obj_ids = X_new[:, 2:, 0]  # (N, 18)\n        mask[:, 2:] = (obj_ids != 0)  # (N, 18)\n\n        return (X_new, mask)\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# 2. ---------- MODEL DEFINITION ----------\nclass BinaryClassifier(nn.Module):\n    def __init__(self, input_shape: tuple[int, ...], *, use_mask: bool):\n        super().__init__()\n        self.use_mask = use_mask\n        self.feature_size = input_shape[-1]  # 5\n        self.hidden_size = 128\n        self.n_heads = 8\n        self.dropout = 0.1\n        self.encoder_layer = nn.TransformerEncoderLayer(d_model=self.hidden_size, nhead=self.n_heads, dropout=self.dropout, batch_first=True)\n        self.transformer_encoder = nn.TransformerEncoder(self.encoder_layer, num_layers=2)\n        self.embedding = nn.Linear(self.feature_size, self.hidden_size)\n        self.classifier = nn.Sequential(\n            nn.Linear(self.hidden_size, self.hidden_size//2),\n            nn.ReLU(),\n            nn.Dropout(self.dropout),\n            nn.Linear(self.hidden_size//2, 1)\n        )\n\n    def forward(self, data: torch.Tensor, mask: torch.Tensor | None = None):\n        # data: (N, L, F) = (N, 20, 5)\n        # mask: (N, L) = (N, 20)\n        x = self.embedding(data)  # (N, 20, 5) -> (N, 20, 128)\n        if mask is not None:\n            # Transformer expects mask to be (L, N) or (N, L) and bool or float\n            # Our mask is (N, L) and bool, so it's fine\n            x = x.masked_fill(~mask.unsqueeze(-1), 0)  # (N, 20, 128)\n        x = self.transformer_encoder(x, src_key_padding_mask=~mask)  # (N, 20, 128)\n        # Global average pooling\n        x = (x * mask.unsqueeze(-1)).sum(dim=1) / mask.sum(dim=1, keepdim=True)  # (N, 128)\n        x = self.classifier(x)  # (N, 128) -> (N, 1)\n        return x.squeeze(1)  # (N,)\n\ndef make_model(input_shape, *, use_mask=False):\n    return BinaryClassifier(input_shape, use_mask=use_mask)\n\n# 3. ---------- MODEL TRAINING ----------\nEPOCHS = 20\n\ndef train_model(model, train_loader, val_loader, epochs):\n    device = torch.device(\"cuda\" if torch.cuda.is_available() else \"cpu\")\n    model.to(device)\n    criterion = nn.BCEWithLogitsLoss()\n    optimizer = AdamW(model.parameters(), lr=1e-4)\n    scheduler = ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=5)\n\n    train_loss = []\n    val_loss = []\n    train_auc = []\n    val_auc = []\n\n    best_val_auc = 0\n\n    for epoch in range(epochs):\n        model.train()\n        total_loss = 0\n        predictions = []\n        labels = []\n        for batch in train_loader:\n            if isinstance(batch[0], (tuple, list)):\n                data, mask = batch[0]\n                data, mask = data.to(device), mask.to(device)\n                label = batch[1].to(device)\n                output = model(data, mask)\n            else:\n                data = batch[0].to(device)\n                label = batch[1].to(device)\n                output = model(data)\n\n            loss = criterion(output, label.float())\n            optimizer.zero_grad()\n            loss.backward()\n            optimizer.step()\n            total_loss += loss.item()\n            predictions.append(torch.sigmoid(output).detach().cpu().numpy())\n            labels.append(label.cpu().numpy())\n\n        predictions = np.concatenate(predictions)\n        labels = np.concatenate(labels)\n        epoch_loss = total_loss / len(train_loader)\n        epoch_auc = roc_auc_score(labels, predictions)\n        train_loss.append(epoch_loss)\n        train_auc.append(epoch_auc)\n\n        model.eval()\n        val_predictions = []\n        val_labels = []\n        total_val_loss = 0\n        with torch.no_grad():\n            for batch in val_loader:\n                if isinstance(batch[0], (tuple, list)):\n                    data, mask = batch[0]\n                    data, mask = data.to(device), mask.to(device)\n                    label = batch[1].to(device)\n                    output = model(data, mask)\n                else:\n                    data = batch[0].to(device)\n                    label = batch[1].to(device)\n                    output = model(data)\n                loss = criterion(output, label.float())\n                total_val_loss += loss.item()\n                val_predictions.append(torch.sigmoid(output).cpu().numpy())\n                val_labels.append(label.cpu().numpy())\n\n        val_predictions = np.concatenate(val_predictions)\n        val_labels = np.concatenate(val_labels)\n        epoch_val_loss = total_val_loss / len(val_loader)\n        epoch_val_auc = roc_auc_score(val_labels, val_predictions)\n        val_loss.append(epoch_val_loss)\n        val_auc.append(epoch_val_auc)\n\n        scheduler.step(epoch_val_auc)\n\n        print(f\"Epoch {epoch+1}/{epochs}, Train Loss: {epoch_loss:.4f}, Train AUC: {epoch_auc:.4f}, Val Loss: {epoch_val_loss:.4f}, Val AUC: {epoch_val_auc:.4f}\")\n\n        if epoch_val_auc > best_val_auc:\n            best_val_auc = epoch_val_auc\n            torch.save(model.state_dict(), 'best_model.pth')\n\n    model.load_state_dict(torch.load('best_model.pth'))\n    return model, train_loss, val_loss, train_auc, val_auc",
+    "reasoning": "",
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "Outer_attempt": 1
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-06-03T15:14:30Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-06-03T15:14:30Z",
+        "metrics": {
+          ".\\./outputs/03-06/FOURTOPS/Q1/script_meta-llama_llama-4-maverick_1714_1.py": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 235,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 235,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2025-06-03T15:14:46Z",
+    "passed": false,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/03-06/FOURTOPS/Q1/script_meta-llama_llama-4-maverick_1714_1.py\nargv2=--dryrun\n",
+      "stderr": "Traceback (most recent call last):\n  File \"/workspace/outputs/03-06/FOURTOPS/Q1/script_meta-llama_llama-4-maverick_1714_1.py\", line 312, in <module>\n    _run(dryrun=\"--dryrun\" in sys.argv)\n    ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/outputs/03-06/FOURTOPS/Q1/script_meta-llama_llama-4-maverick_1714_1.py\", line 241, in _run\n    X_train = pre.transform(X_train) # may be Tensor or Tuple\n  File \"/workspace/outputs/03-06/FOURTOPS/Q1/script_meta-llama_llama-4-maverick_1714_1.py\", line 90, in transform\n    X_new = torch.cat((E_T_miss.unsqueeze(1), phi_Et_miss.unsqueeze(1), X_new), dim=1)  # (N, 20, 5)\nRuntimeError: Sizes of tensors must match except in dimension 1. Expected size 1 but got size 5 for tensor number 2 in the list.\n"
+    },
+    "return_code": 1
+  }
+}

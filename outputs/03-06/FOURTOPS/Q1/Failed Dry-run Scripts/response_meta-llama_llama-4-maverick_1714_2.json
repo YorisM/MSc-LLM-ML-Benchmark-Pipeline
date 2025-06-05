@@ -1,0 +1,69 @@
+{
+  "LLMGeneration": {
+    "model": "meta-llama/llama-4-maverick",
+    "prompt_tokens": 3694,
+    "prompt_chars": 14954,
+    "response_tokens": 1365,
+    "response_chars": 5445,
+    "cost_usd": 0.00171435,
+    "generation_ms": 10345,
+    "code": "# 0. ---------- IMPORTS ----------\nimport torch\nfrom torch import nn\nfrom sklearn.metrics import roc_auc_score\n\n# 1. ---------- PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.per_object_features = 5\n        self.max_objects = 18\n\n    def fit(self, X, y=None):\n        return self\n\n    def transform(self, X):\n        # Reshape X to (N, max_objects, per_object_features) \n        # where N is the batch size, max_objects is 18, and per_object_features is 5\n        X = X.view(-1, self.max_objects, self.per_object_features)  # (N, 18, 5)\n\n        # Extract obj_id, E, p_T, eta, phi\n        obj_id = X[:, :, 0].long()  # (N, 18)\n        E = X[:, :, 1]  # (N, 18)\n        p_T = X[:, :, 2]  # (N, 18)\n        eta = X[:, :, 3]  # (N, 18)\n        phi = X[:, :, 4]  # (N, 18)\n\n        # Create a mask for valid objects (obj_id != 0)\n        mask = obj_id != 0  # (N, 18)\n\n        # Stack the features together\n        features = torch.stack([E, p_T, eta, phi], dim=-1)  # (N, 18, 4)\n\n        # Return the features and mask\n        return features, mask\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# 2. ---------- MODEL DEFINITION ----------\nclass BinaryClassifier(nn.Module):\n    def __init__(self, input_shape: tuple[int, ...], *, use_mask: bool):\n        super().__init__()\n        self.use_mask = use_mask\n        self.embedding = nn.Linear(input_shape[-1], 128)  # (4) -> 128\n        self.encoder = nn.TransformerEncoderLayer(d_model=128, nhead=8, dim_feedforward=256, dropout=0.1)\n        self.encoder = nn.TransformerEncoder(self.encoder, num_layers=2)\n        self.classifier = nn.Sequential(\n            nn.Linear(128, 64),\n            nn.ReLU(),\n            nn.Linear(64, 1)\n        )\n\n    def forward(self, data: torch.Tensor, mask: torch.Tensor | None = None):\n        # data: (N, 18, 4)\n        # mask: (N, 18)\n\n        # Embed the features\n        embedded = torch.relu(self.embedding(data))  # (N, 18, 128)\n\n        # Create a mask for the TransformerEncoder\n        if mask is not None:\n            mask = ~mask  # (N, 18)\n            mask = mask.unsqueeze(1).repeat(1, 18, 1)  # (N, 18, 18)\n            mask = mask.masked_fill(mask, float('-inf'))  # (N, 18, 18)\n\n        # Encode the sequence\n        encoded = self.encoder(embedded.transpose(0, 1), src_key_padding_mask=mask[:, 0, :])  # (18, N, 128)\n        encoded = encoded.mean(dim=0)  # (N, 128)\n\n        # Classify\n        output = self.classifier(encoded)  # (N, 1)\n\n        return output.squeeze(-1)\n\ndef make_model(input_shape, *, use_mask=False):\n    return BinaryClassifier(input_shape, use_mask=use_mask)\n\n# 3. ---------- MODEL TRAINING ----------\nEPOCHS = 10\n\ndef train_model(model, train_loader, val_loader, epochs):\n    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')\n    model.to(device)\n    criterion = nn.BCEWithLogitsLoss()\n    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)\n\n    train_loss = []\n    val_loss = []\n    train_auc = []\n    val_auc = []\n\n    for epoch in range(epochs):\n        model.train()\n        total_loss = 0\n        predictions = []\n        labels = []\n\n        for batch in train_loader:\n            if isinstance(batch[0], (tuple, list)):\n                data, mask = batch[0]\n                data = data.to(device)\n                mask = mask.to(device)\n                label = batch[1].to(device)\n                output = model(data, mask)\n            else:\n                data = batch[0].to(device)\n                label = batch[1].to(device)\n                output = model(data)\n\n            loss = criterion(output, label.float())\n            optimizer.zero_grad()\n            loss.backward()\n            optimizer.step()\n            total_loss += loss.item()\n            predictions.extend(torch.sigmoid(output).detach().cpu().numpy())\n            labels.extend(label.detach().cpu().numpy())\n\n        train_loss.append(total_loss / len(train_loader))\n        train_auc.append(roc_auc_score(labels, predictions))\n\n        model.eval()\n        total_loss = 0\n        predictions = []\n        labels = []\n\n        with torch.no_grad():\n            for batch in val_loader:\n                if isinstance(batch[0], (tuple, list)):\n                    data, mask = batch[0]\n                    data = data.to(device)\n                    mask = mask.to(device)\n                    label = batch[1].to(device)\n                    output = model(data, mask)\n                else:\n                    data = batch[0].to(device)\n                    label = batch[1].to(device)\n                    output = model(data)\n\n                loss = criterion(output, label.float())\n                total_loss += loss.item()\n                predictions.extend(torch.sigmoid(output).detach().cpu().numpy())\n                labels.extend(label.detach().cpu().numpy())\n\n        val_loss.append(total_loss / len(val_loader))\n        val_auc.append(roc_auc_score(labels, predictions))\n\n        print(f'Epoch {epoch+1}, Train Loss: {train_loss[-1]:.4f}, Train AUC: {train_auc[-1]:.4f}, Val Loss: {val_loss[-1]:.4f}, Val AUC: {val_auc[-1]:.4f}')\n\n    return model, train_loss, val_loss, train_auc, val_auc",
+    "reasoning": "",
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "Outer_attempt": 2
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-06-03T15:15:13Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-06-03T15:15:13Z",
+        "metrics": {
+          ".\\./outputs/03-06/FOURTOPS/Q1/script_meta-llama_llama-4-maverick_1714_2.py": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 214,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 214,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2025-06-03T15:15:26Z",
+    "passed": false,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/03-06/FOURTOPS/Q1/script_meta-llama_llama-4-maverick_1714_2.py\nargv2=--dryrun\n",
+      "stderr": "Traceback (most recent call last):\n  File \"/workspace/outputs/03-06/FOURTOPS/Q1/script_meta-llama_llama-4-maverick_1714_2.py\", line 292, in <module>\n    _run(dryrun=\"--dryrun\" in sys.argv)\n    ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/outputs/03-06/FOURTOPS/Q1/script_meta-llama_llama-4-maverick_1714_2.py\", line 221, in _run\n    X_train = pre.transform(X_train) # may be Tensor or Tuple\n  File \"/workspace/outputs/03-06/FOURTOPS/Q1/script_meta-llama_llama-4-maverick_1714_2.py\", line 75, in transform\n    X = X.view(-1, self.max_objects, self.per_object_features)  # (N, 18, 5)\nRuntimeError: shape '[-1, 18, 5]' is invalid for input of size 22232444\n"
+    },
+    "return_code": 1
+  }
+}

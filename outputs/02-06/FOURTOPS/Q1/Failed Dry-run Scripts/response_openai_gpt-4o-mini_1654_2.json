@@ -1,0 +1,69 @@
+{
+  "LLMGeneration": {
+    "model": "openai/gpt-4o-mini",
+    "prompt_tokens": 2046,
+    "prompt_chars": 8428,
+    "response_tokens": 957,
+    "response_chars": 4304,
+    "cost_usd": 3.6855e-05,
+    "generation_ms": 20420,
+    "code": "# 0. ---------- IMPORTS ----------\nimport torch\nimport numpy as np\nfrom torch import nn\nfrom torch.utils.data import Dataset, DataLoader\nfrom sklearn.metrics import roc_auc_score\nfrom sklearn.preprocessing import StandardScaler\n\n# 1. ---------- PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        # Initialize a StandardScaler for feature normalization\n        self.scaler = StandardScaler()\n\n    def fit(self, X, y=None):\n        # Fit the scaler on the training data\n        self.scaler.fit(X.numpy())\n        return self\n\n    def transform(self, X):\n        # Transform the data using the fitted scaler\n        X_scaled = self.scaler.transform(X.numpy())\n        return torch.tensor(X_scaled, dtype=torch.float32)  # Return a tensor\n\n    def fit_transform(self, X, y=None):\n        self.fit(X, y)\n        return self.transform(X)\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# 2. ---------- MODEL DEFINITION ----------\nclass SimpleNN(nn.Module):\n    def __init__(self, input_shape):\n        super(SimpleNN, self).__init__()\n        # A simple feedforward neural network with two hidden layers\n        self.layer1 = nn.Linear(input_shape[0], 64)  # First hidden layer\n        self.layer2 = nn.Linear(64, 32)               # Second hidden layer\n        self.output = nn.Linear(32, 1)                # Output layer\n\n    def forward(self, x):\n        x = torch.relu(self.layer1(x))    # Activation function\n        x = torch.relu(self.layer2(x))    # Activation function\n        return torch.sigmoid(self.output(x))  # Sigmoid for binary classification\n\ndef make_model(input_shape, *, use_mask=False):\n    model = SimpleNN(input_shape)  # Instantiate the model class\n    return model\n\n# 3. ---------- MODEL TRAINING ----------\nEPOCHS = 50  # Setting the number of epochs for training\ndef train_model(model, train_loader, val_loader, epochs):\n    criterion = nn.BCELoss()  # Using binary cross-entropy as the loss function\n    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)  # Adam optimizer\n\n    # Lists to store loss and accuracy values\n    train_losses, val_losses, train_acc, val_acc = [], [], [], []\n\n    best_auc = 0\n    patience = 5\n    trigger_times = 0\n\n    for epoch in range(epochs):\n        model.train()\n        train_loss = 0\n        correct = 0\n        total = 0\n\n        for data, labels in train_loader:\n            optimizer.zero_grad()  # Zero gradients\n            outputs = model(data)  # Forward pass\n            loss = criterion(outputs.squeeze(), labels.float())  # Compute loss\n            loss.backward()  # Backward pass\n            optimizer.step()  # Update weights\n\n            train_loss += loss.item()  # Accumulate loss\n            predictions = (outputs.squeeze() > 0.5).int()\n            correct += (predictions == labels).sum().item()\n            total += labels.size(0)\n\n        # Validation phase\n        model.eval()\n        val_loss = 0\n        val_outputs = []\n        val_labels = []\n\n        with torch.no_grad():\n            for data, labels in val_loader:\n                outputs = model(data)\n                loss = criterion(outputs.squeeze(), labels.float())\n                val_loss += loss.item()\n                val_outputs.append(outputs)\n                val_labels.append(labels)\n\n        # Calculate metrics\n        train_losses.append(train_loss / len(train_loader))\n        val_losses.append(val_loss / len(val_loader))\n        train_accuracy = correct / total\n        val_accuracy = (torch.cat(val_labels).int() == (torch.cat(val_outputs).squeeze() > 0.5).int()).float().mean().item()\n\n        train_acc.append(train_accuracy)\n        val_acc.append(val_accuracy)\n\n        # Compute AUC\n        val_auc = roc_auc_score(torch.cat(val_labels).cpu(), torch.cat(val_outputs).cpu().numpy())\n        if val_auc > best_auc:\n            best_auc = val_auc\n            trigger_times = 0  # Reset patience counter\n        else:\n            trigger_times += 1  # Increment patience counter\n\n        # Check for early stopping\n        if trigger_times >= patience:\n            print(\"Early stopping at epoch\", epoch + 1)\n            break\n\n    return model, train_losses, val_losses, train_acc, val_acc\n\n# IMPORTANT: DO NOT execute the pipeline here – the harness will do that.",
+    "reasoning": "",
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "Outer_attempt": 2
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-06-02T14:54:39Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-06-02T14:54:39Z",
+        "metrics": {
+          ".\\./outputs/02-06/FOURTOPS/Q1/script_openai_gpt-4o-mini_1654_2.py": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 199,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 199,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2025-06-02T14:54:39Z",
+    "passed": false,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/02-06/FOURTOPS/Q1/script_openai_gpt-4o-mini_1654_2.py\nargv2=--dryrun\n",
+      "stderr": "/usr/local/bin/train.sh: line 32:     7 Segmentation fault      timeout --signal=KILL \"${TIMEOUT}s\" python \"$PY\" $DRY\n"
+    },
+    "return_code": 1
+  }
+}

@@ -1,0 +1,113 @@
+{
+  "LLMGeneration": {
+    "model": "meta-llama/llama-4-maverick",
+    "prompt_tokens": 2020,
+    "prompt_chars": 8428,
+    "response_tokens": 1788,
+    "response_chars": 7131,
+    "cost_usd": 0.0014364,
+    "generation_ms": 14005,
+    "code": "# 0. ---------- IMPORTS ----------\nimport torch\nimport numpy as np\nfrom torch import nn\nfrom torch.utils.data import Dataset, DataLoader\nfrom sklearn.metrics import roc_auc_score\nimport torch.nn.functional as F\n\n# 1. ---------- PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.max_objects = 18\n        self.per_object_slice_size = 5\n\n    def fit(self, X, y=None):\n        return self\n\n    def transform(self, X):\n        # Reshape the data to separate objects\n        X = X.view(-1, self.max_objects + 2, self.per_object_slice_size)\n\n        # Extract E_T_miss and phi_Et_miss\n        E_T_miss = X[:, 0, 0].unsqueeze(1)  # (N, 1)\n        phi_Et_miss = X[:, 1, 0].unsqueeze(1)  # (N, 1)\n\n        # Extract object features\n        obj_features = X[:, 2:, :]  # (N, max_objects, per_object_slice_size)\n\n        # Create a mask to identify non-zero padded objects\n        obj_mask = obj_features[:, :, 0] != 0  # (N, max_objects)\n\n        # Set obj_id to zero where mask is False\n        obj_features[:, :, 0] = obj_features[:, :, 0] * obj_mask\n\n        # Return the reshaped data and mask\n        return (obj_features, obj_mask), E_T_miss, phi_Et_miss\n\n    def fit_transform(self, X, y=None):\n        self.fit(X, y)\n        return self.transform(X)\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# 2. ---------- MODEL DEFINITION ----------\nclass ObjectClassifier(nn.Module):\n    def __init__(self):\n        super(ObjectClassifier, self).__init__()\n        self.object_embedding = nn.Linear(5, 128)  # Embedding for each object\n        self.object_encoder = nn.TransformerEncoderLayer(d_model=128, nhead=8, dim_feedforward=256, dropout=0.1)\n        self.object_encoder = nn.TransformerEncoder(self.object_encoder, num_layers=2)\n        self.fc = nn.Sequential(\n            nn.Linear(128 + 2, 128),  # Concatenate with E_T_miss and phi_Et_miss\n            nn.ReLU(),\n            nn.Dropout(0.1),\n            nn.Linear(128, 1)\n        )\n\n    def forward(self, inputs):\n        (obj_features, obj_mask), E_T_miss, phi_Et_miss = inputs\n\n        # Embed objects\n        obj_embedded = F.relu(self.object_embedding(obj_features))  # (N, max_objects, 128)\n\n        # Encode objects using TransformerEncoder\n        obj_encoded = obj_embedded.permute(1, 0, 2)  # (max_objects, N, 128)\n        obj_mask = obj_mask.permute(1, 0)  # (max_objects, N)\n        obj_encoded = self.object_encoder(obj_encoded, src_key_padding_mask=~obj_mask)  # (max_objects, N, 128)\n        obj_encoded = obj_encoded.permute(1, 0, 2)  # (N, max_objects, 128)\n\n        # Global pooling\n        obj_pooled = obj_encoded.max(dim=1)[0]  # (N, 128)\n\n        # Concatenate with E_T_miss and phi_Et_miss\n        x = torch.cat([obj_pooled, E_T_miss, phi_Et_miss], dim=1)  # (N, 128 + 2)\n\n        # Classification\n        x = self.fc(x)  # (N, 1)\n        return x\n\ndef make_model(input_shape, *, use_mask=False):\n    model = ObjectClassifier()\n    return model\n\n# 3. ---------- MODEL TRAINING ----------\nEPOCHS = 10\n\ndef train_model(model, train_loader, val_loader, epochs):\n    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')\n    model.to(device)\n    criterion = nn.BCEWithLogitsLoss()\n    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)\n    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.1)\n\n    train_loss = []\n    val_loss = []\n    train_acc = []\n    val_acc = []\n    train_auc = []\n    val_auc = []\n    best_val_auc = 0\n\n    for epoch in range(epochs):\n        model.train()\n        total_loss = 0\n        total_correct = 0\n        total_labels = []\n        total_preds = []\n\n        for batch in train_loader:\n            inputs, labels = batch\n            inputs = (inputs[0].to(device), inputs[1].to(device)), inputs[2].to(device), inputs[3].to(device)\n            labels = labels.to(device).float().unsqueeze(1)\n            optimizer.zero_grad()\n            outputs = model(inputs)\n            loss = criterion(outputs, labels)\n            loss.backward()\n            optimizer.step()\n            total_loss += loss.item()\n            total_correct += ((outputs > 0).float() == labels).sum().item()\n            total_labels.extend(labels.cpu().numpy())\n            total_preds.extend(torch.sigmoid(outputs).detach().cpu().numpy())\n\n        epoch_loss = total_loss / len(train_loader)\n        epoch_acc = total_correct / len(train_loader.dataset)\n        epoch_auc = roc_auc_score(np.array(total_labels), np.array(total_preds))\n        train_loss.append(epoch_loss)\n        train_acc.append(epoch_acc)\n        train_auc.append(epoch_auc)\n\n        model.eval()\n        total_loss = 0\n        total_correct = 0\n        total_labels = []\n        total_preds = []\n\n        with torch.no_grad():\n            for batch in val_loader:\n                inputs, labels = batch\n                inputs = (inputs[0].to(device), inputs[1].to(device)), inputs[2].to(device), inputs[3].to(device)\n                labels = labels.to(device).float().unsqueeze(1)\n                outputs = model(inputs)\n                loss = criterion(outputs, labels)\n                total_loss += loss.item()\n                total_correct += ((outputs > 0).float() == labels).sum().item()\n                total_labels.extend(labels.cpu().numpy())\n                total_preds.extend(torch.sigmoid(outputs).detach().cpu().numpy())\n\n        epoch_loss = total_loss / len(val_loader)\n        epoch_acc = total_correct / len(val_loader.dataset)\n        epoch_auc = roc_auc_score(np.array(total_labels), np.array(total_preds))\n        val_loss.append(epoch_loss)\n        val_acc.append(epoch_acc)\n        val_auc.append(epoch_auc)\n\n        if epoch_auc > best_val_auc:\n            best_val_auc = epoch_auc\n            torch.save(model.state_dict(), 'best_model.pth')\n\n        print(f'Epoch {epoch+1}, Train Loss: {train_loss[-1]}, Train Acc: {train_acc[-1]}, Train AUC: {train_auc[-1]}, Val Loss: {val_loss[-1]}, Val Acc: {val_acc[-1]}, Val AUC: {val_auc[-1]}')\n\n        scheduler.step()\n\n    model.load_state_dict(torch.load('best_model.pth'))\n    return model, train_loss, val_loss, train_auc, val_auc\n\nclass MyDataset(Dataset):\n    def __init__(self, X, y, preprocessor):\n        self.X = X\n        self.y = y\n        self.preprocessor = preprocessor\n        self.data = self.preprocessor.fit_transform(X)\n\n    def __len__(self):\n        return len(self.X)\n\n    def __getitem__(self, idx):\n        return self.data, self.y[idx]\n\ndef main():\n    preprocessor = make_preprocessor()\n    train_dataset = MyDataset(X_train, Y_train, preprocessor)\n    val_dataset = MyDataset(X_val, Y_val, preprocessor)\n    train_loader = DataLoader(train_dataset, batch_size=128, shuffle=True)\n    val_loader = DataLoader(val_dataset, batch_size=128, shuffle=False)\n    model = make_model(None)\n    trained_model, train_loss, val_loss, train_auc, val_auc = train_model(model, train_loader, val_loader, EPOCHS)\n\nif __name__ == \"__main__\":\n    main()",
+    "reasoning": "",
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "Outer_attempt": 3
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-06-03T09:38:11Z",
+    "PyLint": {
+      "passed": false,
+      "messages": [
+        {
+          "type": "error",
+          "module": "script_meta-llama_llama-4-maverick_1137_3",
+          "obj": "main",
+          "line": 239,
+          "column": 30,
+          "endLine": 239,
+          "endColumn": 37,
+          "path": "outputs\\03-06\\FOURTOPS\\Q1\\script_meta-llama_llama-4-maverick_1137_3.py",
+          "symbol": "undefined-variable",
+          "message": "Undefined variable 'X_train'",
+          "message-id": "E0602"
+        },
+        {
+          "type": "error",
+          "module": "script_meta-llama_llama-4-maverick_1137_3",
+          "obj": "main",
+          "line": 239,
+          "column": 39,
+          "endLine": 239,
+          "endColumn": 46,
+          "path": "outputs\\03-06\\FOURTOPS\\Q1\\script_meta-llama_llama-4-maverick_1137_3.py",
+          "symbol": "undefined-variable",
+          "message": "Undefined variable 'Y_train'",
+          "message-id": "E0602"
+        },
+        {
+          "type": "error",
+          "module": "script_meta-llama_llama-4-maverick_1137_3",
+          "obj": "main",
+          "line": 240,
+          "column": 28,
+          "endLine": 240,
+          "endColumn": 33,
+          "path": "outputs\\03-06\\FOURTOPS\\Q1\\script_meta-llama_llama-4-maverick_1137_3.py",
+          "symbol": "undefined-variable",
+          "message": "Undefined variable 'X_val'",
+          "message-id": "E0602"
+        },
+        {
+          "type": "error",
+          "module": "script_meta-llama_llama-4-maverick_1137_3",
+          "obj": "main",
+          "line": 240,
+          "column": 35,
+          "endLine": 240,
+          "endColumn": 40,
+          "path": "outputs\\03-06\\FOURTOPS\\Q1\\script_meta-llama_llama-4-maverick_1137_3.py",
+          "symbol": "undefined-variable",
+          "message": "Undefined variable 'Y_val'",
+          "message-id": "E0602"
+        }
+      ]
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-06-03T09:38:11Z",
+        "metrics": {
+          ".\\./outputs/03-06/FOURTOPS/Q1/script_meta-llama_llama-4-maverick_1137_3.py": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 249,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 249,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  }
+}

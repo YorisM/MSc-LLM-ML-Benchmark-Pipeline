@@ -1,0 +1,74 @@
+{
+  "LLMGeneration": {
+    "model": "openai/o3",
+    "prompt_tokens": 2045,
+    "prompt_chars": 8428,
+    "response_tokens": 10532,
+    "response_chars": 10858,
+    "cost_usd": 0.44173,
+    "generation_ms": 252300,
+    "code": "# 0. ---------- IMPORTS ----------\nimport torch\nimport numpy as np\nfrom torch import nn\nfrom torch.utils.data import Dataset, DataLoader\nfrom sklearn.metrics import roc_auc_score\nimport copy\nimport math\n\n# 1. ---------- PRE-PROCESSING ----------\nclass MyPreprocessor:\n    \"\"\"\n    Simple numeric pre-processing:\n      1. Z-score standardisation for all continuous features\n         (global E_T^miss, phi_Et_miss  and all per-object kinematics).\n      2. Leave object-ID columns untouched (they will be embedded later).\n    Output:  torch.Tensor  (N, 92)  – batch-first.\n    \"\"\"\n    def __init__(self):\n        # feature index layout helpers ------------------------\n        self.global_idx   = [0, 1]              # 2 global features\n        self.id_idx       = list(range(2, 92, 5))\n        self.kin_idx_E    = list(range(3, 92, 5))\n        self.kin_idx_pT   = list(range(4, 92, 5))\n        self.kin_idx_eta  = list(range(5, 92, 5))\n        self.kin_idx_phi  = list(range(6, 92, 5))\n        self.kin_all_idx  = (self.kin_idx_E + self.kin_idx_pT +\n                             self.kin_idx_eta + self.kin_idx_phi)\n        self.scale_idx    = self.global_idx + self.kin_all_idx  # features to scale\n\n        # statistics containers -------------------------------\n        self.mean = None  # (92,) torch float32\n        self.std  = None  # (92,) torch float32\n\n    def fit(self, X, y=None):\n        \"\"\"\n        Derive per-feature mean / std  (ignoring zero-padded objects).\n        \"\"\"\n        X = X.float()\n        device = X.device\n\n        self.mean = torch.zeros(92, dtype=torch.float32, device=device)\n        self.std  = torch.ones(92, dtype=torch.float32, device=device)\n\n        # --------- global features ----------\n        g = X[:, self.global_idx]\n        self.mean[self.global_idx] = g.mean(dim=0)\n        self.std[self.global_idx]  = g.std(dim=0).clamp_min(1e-6)\n\n        # --------- kinematic features -------\n        # use only valid (non-padded) objects\n        obj_id_mat = X[:, self.id_idx]                      # (N, 18)\n        valid_mask = obj_id_mat != 0                       # (N, 18)\n\n        for idx_group in [self.kin_idx_E, self.kin_idx_pT,\n                          self.kin_idx_eta, self.kin_idx_phi]:\n            mat = X[:, idx_group]                          # (N, 18)\n            vals = mat[valid_mask]                         # 1-D tensor with valid entries\n            vals_mean = vals.mean()\n            vals_std  = vals.std().clamp_min(1e-6)\n            self.mean[idx_group] = vals_mean\n            self.std[idx_group]  = vals_std\n\n        # bring tensors to CPU for picklability\n        self.mean = self.mean.cpu()\n        self.std  = self.std.cpu()\n        return self\n\n    def transform(self, X):\n        X = X.float().clone()  # defensive copy\n        X = X.cpu()            # ensure same device as statistics\n\n        # z-score scaling for selected indices\n        X[:, self.scale_idx] = (X[:, self.scale_idx] - self.mean[self.scale_idx]) / self.std[self.scale_idx]\n        return X          # (N, 92)\n\n    def fit_transform(self, X, y=None):\n        self.fit(X, y)\n        return self.transform(X)\n\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n\n# 2. ---------- MODEL DEFINITION ----------\nclass DeepSetEventClassifier(nn.Module):\n    \"\"\"\n    DeepSets-style network with learnable object-type embeddings.\n    Forward signature:  logits = model(x)   where\n      x : torch.FloatTensor (B, 92)  – pre-processed flat feature vector.\n    \"\"\"\n    def __init__(self, input_shape):\n        super().__init__()\n        seq_len = 18                       # maximum number of objects\n        embed_dim = 16\n        obj_feature_dim = embed_dim + 4    # embed + (E, pT, eta, phi)\n        per_obj_hidden = 64\n        per_obj_out    = 32\n        event_hidden   = 64\n\n        # -------- object-ID embedding --------\n        # Determine vocabulary size from training tensor if available\n        vocab_size_default = 50000\n        try:\n            # X_train is expected to be in the global namespace\n            global X_train\n            vocab_size = int(X_train[:, 2::5].max().item()) + 1\n            vocab_size = max(vocab_size, 2)  # at least 2 to keep padding idx = 0 valid\n        except Exception:\n            vocab_size = vocab_size_default\n\n        self.id_emb = nn.Embedding(num_embeddings=vocab_size,\n                                   embedding_dim=embed_dim,\n                                   padding_idx=0)\n\n        # -------- per-object network ---------\n        self.obj_encoder = nn.Sequential(\n            nn.Linear(obj_feature_dim, per_obj_hidden),\n            nn.ReLU(),\n            nn.Linear(per_obj_hidden, per_obj_out),\n            nn.ReLU()\n        )\n\n        # -------- event-level network --------\n        # aggregated object representation (mean + max)  → 2 * per_obj_out\n        self.event_net = nn.Sequential(\n            nn.Linear(2 * per_obj_out + 2, event_hidden),  # +2 global features\n            nn.ReLU(),\n            nn.Dropout(0.20),\n            nn.Linear(event_hidden, event_hidden // 2),\n            nn.ReLU(),\n            nn.Dropout(0.10),\n            nn.Linear(event_hidden // 2, 1)               # logits\n        )\n\n    def forward(self, x):\n        \"\"\"\n        Parameters\n        ----------\n        x : torch.FloatTensor, shape (B, 92)\n             Pre-processed flat feature vector.\n\n        Returns\n        -------\n        logits : torch.FloatTensor, shape (B, 1)\n        \"\"\"\n        B = x.size(0)\n        device = x.device\n\n        # -------- extract pieces ------------\n        obj_ids  = x[:, 2::5].long()                                   # (B, 18)\n        obj_ids  = obj_ids.clamp_max(self.id_emb.num_embeddings - 1)   # safety\n        mask     = obj_ids != 0                                        # (B, 18)  – valid objects\n\n        kin_E    = x[:, 3::5]   # (B, 18)\n        kin_pT   = x[:, 4::5]\n        kin_eta  = x[:, 5::5]\n        kin_phi  = x[:, 6::5]\n\n        kinematics = torch.stack([kin_E, kin_pT, kin_eta, kin_phi], dim=2)  # (B, 18, 4)\n\n        # -------- embed & encode -----------\n        emb       = self.id_emb(obj_ids)                                # (B, 18, embed_dim)\n        per_obj   = torch.cat([emb, kinematics], dim=2)                 # (B, 18, embed+4)\n        per_obj   = self.obj_encoder(per_obj)                           # (B, 18, per_obj_out)\n\n        # zero-out padded objects for mean pooling\n        per_obj_masked = per_obj * mask.unsqueeze(-1)                   # (B, 18, per_obj_out)\n\n        # mean pool (avoid divide-by-zero)\n        valid_counts = mask.sum(dim=1, keepdim=True).clamp_min(1).float()\n        mean_pool = per_obj_masked.sum(dim=1) / valid_counts            # (B, per_obj_out)\n\n        # max pool (use large negative to ignore padded entries)\n        minus_inf = torch.full_like(per_obj, -1e9)\n        max_pool = torch.max(torch.where(mask.unsqueeze(-1), per_obj, minus_inf), dim=1)[0]  # (B, out)\n\n        # global features (first two columns already normalised)\n        global_feats = x[:, :2]                                         # (B, 2)\n\n        event_repr = torch.cat([mean_pool, max_pool, global_feats], dim=1)  # (B, 2*out + 2)\n        logits = self.event_net(event_repr).squeeze(1)                  # (B,)\n        return logits\n\n\ndef make_model(input_shape, *, use_mask=False):\n    # input_shape is (92,)  after preprocessing.\n    model = DeepSetEventClassifier(input_shape)\n    return model\n\n\n# 3. ---------- MODEL TRAINING ----------\nEPOCHS = 20     # can be tuned – early-stopping will take care of over-training\n\n\ndef train_model(model, train_loader, val_loader, epochs):\n    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')\n    model.to(device)\n\n    criterion = nn.BCEWithLogitsLoss()\n    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-4)\n    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer,\n                                                           mode='max',   # monitor AUC\n                                                           factor=0.5,\n                                                           patience=2)\n\n    train_loss, val_loss = [], []\n    train_acc,  val_acc  = [], []\n\n    best_auc = 0.0\n    best_state = copy.deepcopy(model.state_dict())\n    early_stop_patience = 6\n    no_improve_epochs = 0\n\n    for epoch in range(epochs):\n        # -------- TRAIN ----------\n        model.train()\n        running_loss = 0.0\n        y_pred_train, y_true_train = [], []\n\n        for xb, yb in train_loader:               # xb : (B, 92)\n            xb = xb.to(device, non_blocking=True)\n            yb = yb.to(device, non_blocking=True).float()\n\n            optimizer.zero_grad()\n            logits = model(xb)\n            loss = criterion(logits, yb)\n            loss.backward()\n            optimizer.step()\n\n            running_loss += loss.item() * xb.size(0)\n            y_pred_train.append(logits.detach().cpu())\n            y_true_train.append(yb.detach().cpu())\n\n        y_pred_train = torch.cat(y_pred_train).sigmoid().numpy()\n        y_true_train = torch.cat(y_true_train).numpy()\n\n        epoch_train_loss = running_loss / len(train_loader.dataset)\n        epoch_train_acc  = ((y_pred_train >= 0.5) == y_true_train).mean()\n\n        train_loss.append(epoch_train_loss)\n        train_acc.append(epoch_train_acc)\n\n        # -------- VALIDATION ----------\n        model.eval()\n        running_val_loss = 0.0\n        y_pred_val, y_true_val = [], []\n\n        with torch.no_grad():\n            for xb, yb in val_loader:\n                xb = xb.to(device, non_blocking=True)\n                yb = yb.to(device, non_blocking=True).float()\n\n                logits = model(xb)\n                loss = criterion(logits, yb)\n                running_val_loss += loss.item() * xb.size(0)\n\n                y_pred_val.append(logits.cpu())\n                y_true_val.append(yb.cpu())\n\n        y_pred_val = torch.cat(y_pred_val).sigmoid().numpy()\n        y_true_val = torch.cat(y_true_val).numpy()\n\n        epoch_val_loss = running_val_loss / len(val_loader.dataset)\n        epoch_val_acc  = ((y_pred_val >= 0.5) == y_true_val).mean()\n        epoch_val_auc  = roc_auc_score(y_true_val, y_pred_val)\n\n        val_loss.append(epoch_val_loss)\n        val_acc.append(epoch_val_acc)\n\n        # scheduler on AUC (higher is better)\n        scheduler.step(epoch_val_auc)\n\n        # ------- early stopping --------\n        if epoch_val_auc > best_auc + 1e-4:\n            best_auc = epoch_val_auc\n            best_state = copy.deepcopy(model.state_dict())\n            no_improve_epochs = 0\n        else:\n            no_improve_epochs += 1\n            if no_improve_epochs >= early_stop_patience:\n                break\n\n    # restore best model\n    model.load_state_dict(best_state)\n    return model, train_loss, val_loss, train_acc, val_acc",
+    "reasoning": "**Designing feature vectors**\n\nI'm checking my calculations: 18 x 5 = 90, and plus 2 gives me 92, which matches. For our design, we can create feature vectors based on object features, where we embed the object type ID into an 8-dimensional vector and combine it with 4 kinematic features. We have two options: concatenate these features for a 12-dimensional vector or use a per-event feature vector approach with a feed-forward network for aggregation. I want to standardize numeric features to simplify our preprocessor.**Developing preprocessing steps**\n\nFor object ID integers, I'm treating them separately without standardizing since they'll be embedded. I’ll calculate the mean and standard deviation for kinematic numeric features across the training set while leaving the ID features unchanged. For the preprocessor, I'll expand to (N, 92), create global scalar features, and extract both per-object ID and kinematic vectors. Also, I’ll keep track of valid objects with a mask to indicate whether the features are valid. Finally, I need to ensure compatibility with the model’s input shape and expectations for data processing.**Implementation planning**\n\nI’m outlining a plan for a preprocessor class. First, I’ll set up an initializer to provide scalers for global and kinematic features. In the fit method, I'll reshape the input tensor and calculate the global features like mean and standard deviation. For kinematic features, I’ll gather values using strides and compute means while ensuring to ignore zeros. I’ll implement masking for valid object IDs to avoid distortion from zero-padded entries. Finally, I intend to standardize all features during transformation, storing essential scalers for efficient processing.",
+    "reasoning_tokens": null,
+    "reasoning_chars": 1733,
+    "Inner attempt": 3,
+    "Outer_attempt": 2
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-06-03T09:21:27Z",
+    "PyLint": {
+      "passed": false,
+      "messages": [
+        {
+          "type": "error",
+          "module": "script_openai_o3_1120_2",
+          "obj": "DeepSetEventClassifier.__init__",
+          "line": 165,
+          "column": 29,
+          "endLine": 165,
+          "endColumn": 36,
+          "path": "outputs\\03-06\\FOURTOPS\\Q1\\script_openai_o3_1120_2.py",
+          "symbol": "undefined-variable",
+          "message": "Undefined variable 'X_train'",
+          "message-id": "E0602"
+        }
+      ]
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-06-03T09:21:26Z",
+        "metrics": {
+          ".\\./outputs/03-06/FOURTOPS/Q1/script_openai_o3_1120_2.py": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 312,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 312,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  }
+}

@@ -1,0 +1,69 @@
+{
+  "LLMGeneration": {
+    "model": "deepseek/deepseek-r1",
+    "prompt_tokens": 3873,
+    "prompt_chars": 14954,
+    "response_tokens": 2233,
+    "response_chars": 9292,
+    "cost_usd": 0.0084576,
+    "generation_ms": 109181,
+    "code": "# 0. ---------- IMPORTS ----------\nfrom torch.nn import TransformerEncoder, TransformerEncoderLayer\nfrom torch.optim.lr_scheduler import CosineAnnealingLR\nfrom sklearn.preprocessing import StandardScaler\nimport torch.nn.functional as F\nfrom collections import defaultdict\n\n# 1. ---------- PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.scalers = defaultdict(StandardScaler)\n        self.obj_cols = []\n\n    def fit(self, X, y=None):\n        obj_features = X[:, 2:].view(-1, 18, 5)    # (N, 18, 5)\n        valid_objects = obj_features[:, :, 0] != 0  # Object IDs\n\n        flat_features = obj_features[valid_objects].numpy()\n        self.scalers['objects'] = StandardScaler().fit(flat_features[:, 1:])  # Exclude obj_id\n\n        et_features = X[:, :2].numpy()\n        self.scalers['et'] = StandardScaler().fit(et_features)\n        return self\n\n    def transform(self, X):\n        et_tensor = X[:, :2].float()\n        obj_tensor = X[:, 2:].view(-1, 18, 5)  # (B, 18, 5)\n\n        et_scale = torch.from_numpy(self.scalers['et'].transform(et_tensor))\n        obj_features = obj_tensor.clone()\n        valid_mask = obj_features[:, :, 0] != 0\n\n        scaled_features = self.scalers['objects'].transform(\n            obj_features[valid_mask][:, 1:].numpy()\n        )\n        obj_features[valid_mask][:, 1:] = torch.from_numpy(scaled_features)\n\n        first_obj_idx = torch.argmax(valid_mask.float(), dim=1)\n        seq_mask = torch.arange(18).unsqueeze(0) < first_obj_idx.unsqueeze(1)\n        mask = valid_mask & ~seq_mask\n\n        combined = torch.cat([et_scale, obj_features.view(-1, 90)], dim=1)\n        return (combined, mask.bool())\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# 2. ---------- MODEL DEFINITION ----------\nclass BinaryClassifier(nn.Module):\n    def __init__(self, input_shape: tuple, *, use_mask: bool):\n        super().__init__()\n        self.use_mask = use_mask\n        self.emb_dim = 64\n\n        self.et_encoder = nn.Sequential(\n            nn.Linear(2, 32),\n            nn.GELU(),\n            nn.LayerNorm(32)\n        )\n\n        self.obj_encoder = nn.Sequential(\n            nn.Linear(5, self.emb_dim),\n            nn.GELU(),\n            nn.LayerNorm(self.emb_dim)\n        )\n\n        encoder_layer = TransformerEncoderLayer(\n            d_model=self.emb_dim,\n            nhead=8,\n            dim_feedforward=256,\n            dropout=0.1,\n            batch_first=True\n        )\n        self.transformer = TransformerEncoder(encoder_layer, num_layers=4)\n\n        self.classifier = nn.Sequential(\n            nn.Linear(32 + self.emb_dim, 128),\n            nn.GELU(),\n            nn.Dropout(0.3),\n            nn.Linear(128, 64),\n            nn.GELU(),\n            nn.LayerNorm(64),\n            nn.Linear(64, 1)\n        )\n\n    def forward(self, data, mask=None):\n        et_data, obj_data = data[:, :2], data[:, 2:].view(-1, 18, 5)\n        batch_size = et_data.size(0)\n\n        et_feat = self.et_encoder(et_data)  # (B, 32)\n\n        obj_features = self.obj_encoder(obj_data)  # (B, 18, 64)\n        if self.use_mask and mask is not None:\n            pad_mask = ~mask\n            obj_feat = self.transformer(obj_features, src_key_padding_mask=pad_mask)\n        else:\n            obj_feat = self.transformer(obj_features)\n\n        global_feat = obj_feat.max(dim=1)[0]  # (B, 64)\n        combined = torch.cat([et_feat, global_feat], dim=1)  # (B, 96)\n        return self.classifier(combined).squeeze(-1)\n\ndef make_model(input_shape, *, use_mask=False):\n    return BinaryClassifier(input_shape, use_mask=use_mask)\n\n# 3. ---------- MODEL TRAINING ----------\nEPOCHS = 35\n\ndef train_model(model, train_loader, val_loader, epochs):\n    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')\n    model = model.to(device)\n\n    optimizer = torch.optim.AdamW(model.parameters(), lr=2e-4, weight_decay=1e-5)\n    scheduler = CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)\n    criterion = nn.BCEWithLogitsLoss()\n\n    best_val = float('inf')\n    patience, wait = 5, 0\n    history = defaultdict(list)\n\n    for epoch in range(epochs):\n        model.train()\n        train_loss, train_pred, train_true = [], [], []\n\n        for batch in train_loader:\n            (data, mask), labels = (batch[0], batch[1]) if isinstance(batch[0], tuple) else (batch[0], None)\n            data, labels = data.to(device), labels.to(device).float()\n            if mask is not None: mask = mask.to(device)\n\n            optimizer.zero_grad()\n            outputs = model(data, mask)\n            loss = criterion(outputs, labels)\n            loss.backward()\n\n            nn.utils.clip_grad_norm_(model.parameters(), 1.0)\n            optimizer.step()\n\n            train_loss.append(loss.item())\n            train_pred.append(torch.sigmoid(outputs).detach().cpu())\n            train_true.append(labels.detach().cpu())\n\n        scheduler.step()\n        model.eval()\n        val_loss, val_pred, val_true = [], [], []\n        with torch.no_grad():\n            for batch in val_loader:\n                (data, mask), labels = (batch[0], batch[1]) if isinstance(batch[0], tuple) else (batch[0], None)\n                data, labels = data.to(device), labels.to(device).float()\n                if mask is not None: mask = mask.to(device)\n\n                outputs = model(data, mask)\n                loss = criterion(outputs, labels)\n                val_loss.append(loss.item())\n                val_pred.append(torch.sigmoid(outputs).detach().cpu())\n                val_true.append(labels.detach().cpu())\n\n        train_loss = np.mean(train_loss)\n        val_loss = np.mean(val_loss)\n        history['train_loss'].append(train_loss)\n        history['val_loss'].append(val_loss)\n\n        train_pred = torch.cat(train_pred).numpy()\n        train_true = torch.cat(train_true).numpy()\n        val_pred = torch.cat(val_pred).numpy()\n        val_true = torch.cat(val_true).numpy()\n\n        train_acc = ((train_pred > 0.5) == train_true).mean()\n        val_acc = ((val_pred > 0.5) == val_true).mean()\n        history['train_acc'].append(train_acc)\n        history['val_acc'].append(val_acc)\n\n        if val_loss < best_val:\n            best_val = val_loss\n            wait = 0\n        else:\n            wait += 1\n\n        if wait >= patience:\n            break\n\n    return (\n        model,\n        history['train_loss'],\n        history['val_loss'],\n        history['train_acc'],\n        history['val_acc']\n    )",
+    "reasoning": "",
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "Outer_attempt": 3
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-06-03T15:31:27Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-06-03T15:31:27Z",
+        "metrics": {
+          ".\\./outputs/03-06/FOURTOPS/Q1/script_deepseek_deepseek-r1_1731_3.py": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 256,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 256,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2025-06-03T15:31:46Z",
+    "passed": false,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/03-06/FOURTOPS/Q1/script_deepseek_deepseek-r1_1731_3.py\nargv2=--dryrun\nERROR during training: 'NoneType' object has no attribute 'to'\n",
+      "stderr": "Traceback (most recent call last):\n  File \"/workspace/outputs/03-06/FOURTOPS/Q1/script_deepseek_deepseek-r1_1731_3.py\", line 330, in <module>\n    _run(dryrun=\"--dryrun\" in sys.argv)\n    ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/outputs/03-06/FOURTOPS/Q1/script_deepseek_deepseek-r1_1731_3.py\", line 277, in _run\n    trained_model, tr_loss, va_loss, tr_acc, va_acc = train_model(\n                                                      ~~~~~~~~~~~^\n        model, train_loader, val_loader, epochs=n_epochs)\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/outputs/03-06/FOURTOPS/Q1/script_deepseek_deepseek-r1_1731_3.py\", line 184, in train_model\n    data, labels = data.to(device), labels.to(device).float()\n                                    ^^^^^^^^^\nAttributeError: 'NoneType' object has no attribute 'to'\n"
+    },
+    "return_code": 1
+  }
+}
