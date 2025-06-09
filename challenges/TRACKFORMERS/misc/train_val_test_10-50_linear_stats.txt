@@ -1,0 +1,5 @@
+=== Split Balance Report ===
+n_events     : {'train': 80000, 'val': 10000, 'test': 10000}
+hits_mean    : {'train': 348.29, 'val': 348.65, 'test': 347.48}
+tracks_mean  : {'train': 43.66, 'val': 43.73, 'test': 43.56}
+max layer-occ deviation : {'train': 0.0, 'val': 0.0003, 'test': 0.0001}

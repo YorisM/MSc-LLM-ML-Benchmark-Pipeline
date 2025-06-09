@@ -1,15 +1,3 @@
-"""
-inspect_trackformers_dataset.py
---------------------------------
-Quick EDA for TrackFormers REDVID-style CSV.
-
-Usage (PowerShell inside VS Code):
-> python inspect_trackformers_dataset.py `
-        --csv-path "challenges\\TRACKFORMERS\\data\\hits_and_tracks_3d_events_all.csv" `
-        --sample-event 0
-
-Adds three PNGs next to the script and prints a stats table.
-"""
 import argparse, os, textwrap, csv
 import pandas as pd
 import numpy as np

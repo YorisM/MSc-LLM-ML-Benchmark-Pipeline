@@ -23,7 +23,7 @@ import json
 
 
 DEFAULT_INSTRUCTIONS = r"""** Instructions **
-You are an expert at programming in python, machine learning,
+You are an expert at programming in Python, machine learning,
 particle and high energy physics. You will help me answer a question
 in a machine learning challenge format where you strive to maximise
 a scalar metric in order to learn more about your scientific creativity

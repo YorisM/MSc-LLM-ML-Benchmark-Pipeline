@@ -22,7 +22,12 @@ fourtop_challenge = Challenge(
 """,
 
     prefix = r"""
-# ----------------  START OF LLM BLOCK  ----------------
+# ----------------  START HARNESS WRAPPER PREFIX (FOR CONTEXT)  ---------------- 
+
+
+
+# ----------------  END HARNESS WRAPPER PREFIX (FOR CONTEXT)  ---------------- 
+# -------------------------- START OF LLM BLOCK ------------------------------
 
 """,
 
@@ -31,7 +36,10 @@ fourtop_challenge = Challenge(
 """,
 
     suffix = r"""
-# ----------------  END OF LLM BLOCK ----------------
+# ---------------------------  END OF LLM-CODE BLOCK ---------------------------
+# ----------------  START HARNESS WRAPPER SUFFIX (FOR CONTEXT)  ---------------- 
+
+
 
 """,
 
