@@ -2,12 +2,12 @@
 
 # Imports
 import os, requests, json, logging, shutil, time, re, textwrap
+import config
 from pathlib import Path
 
-from config import MAX_TOKENS, REASONING_MAX_TOKENS, OPENROUTER_API_KEY, OPENROUTER_API_COMPLETIONS, models, num_attempts, challenges
 from static_checks import run_pylint, run_bandit
 from run_scripts import run_single_script
-from utils import append_to_response_json
+from utils.utils import append_to_response_json
 
 from urllib3.util import Retry
 from requests.adapters import HTTPAdapter
@@ -36,22 +36,30 @@ def query_openrouter(model: str, prompt: str, *, max_retries = 3):
     RETURNS
     The parsed LLM response or raises on final failure.
     """
-        
-    headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-        "Content-Type": "application/json",        
-    }
+
+    if model.startswith("openai/o3"):                     # chat-only models
+        endpoint = config.OPENROUTER_API_CHAT
+        payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "usage": {"include": True},
+            "max_tokens": config.MAX_TOKENS,
+            "reasoning": {"exclude": False, "effort": "high"},
+        }    
     
-    payload = {
-        "model": model,
-        "prompt": prompt,
-        "usage": {"include": True},
-        "max_tokens": (MAX_TOKENS),
-        "reasoning": {
-            "exclude": False, 
-            "effort": "high",
-            # "max_tokens": REASONING_MAX_TOKENS, 
-            }
+    else: 
+        endpoint = config.OPENROUTER_API_COMPLETIONS
+        payload = {
+                "model": model,
+                "prompt": prompt,
+                "usage": {"include": True},
+                "max_tokens": (config.MAX_TOKENS),
+                "reasoning": {"exclude": False, "effort": "high"},
+        }
+
+    headers = {
+    "Authorization": f"Bearer {config.OPENROUTER_API_KEY}",
+    "Content-Type": "application/json",        
     }
 
     # Request Timer (since Gemini is slow... and other connectivity issues wwere risen)
@@ -61,7 +69,7 @@ def query_openrouter(model: str, prompt: str, *, max_retries = 3):
 
         try:
             r = _session.post(
-                    OPENROUTER_API_COMPLETIONS,
+                    endpoint,
                     headers = headers, 
                     json    = payload,
                     timeout = timeout,
@@ -85,16 +93,18 @@ def query_openrouter(model: str, prompt: str, *, max_retries = 3):
             if "choices" not in result or not result["choices"]:
                 logging.error(f"No 'choices' field in JSON on inner_attempt {inner_attempt+1}, retrying...")
                 raise requests.Timeout("No 'choices' field in JSON")
-
+            
         except (RequestException, ValueError) as e:
             logging.warning(f"LLM query inner_attempt {inner_attempt + 1}/{max_retries} for {model} failed: {e}")
+            if isinstance(e, requests.HTTPError) and e.response is not None:
+                logging.error("HTTP %s body: %s", e.response.status_code, e.response.text)
             if inner_attempt == max_retries - 1: return None
             time.sleep(BACKOFF[min(inner_attempt, len(BACKOFF)-1)])
             continue
 
         # SUCCESSFUL RESPONSE - Still need to parse
         choice    = result["choices"][0]
-        content   = choice.get("text", "")
+        content = (choice.get("text") or choice.get("message", {}).get("content", ""))
         reasoning = (choice.get("reasoning") or "") 
         usage     = result.get("usage", {})
 
@@ -109,17 +119,18 @@ def query_openrouter(model: str, prompt: str, *, max_retries = 3):
 
         llm_block = {
             "model": model,
+            "endpoint": endpoint,
             "prompt_tokens": usage.get("prompt_tokens"),
             "prompt_chars": len(prompt),
             "response_tokens": usage.get("completion_tokens"),
             "response_chars": len(content),
+            "reasoning_tokens": usage.get("reasoning_tokens"),
+            "reasoning_chars": len(reasoning),
+            "Inner attempt": inner_attempt + 1,
             "cost_usd": usage.get("cost"),
             "generation_ms": duration_ms,
             "code":  code,
             "reasoning": reasoning,
-            "reasoning_tokens": usage.get("reasoning_tokens"),
-            "reasoning_chars": len(reasoning),
-            "Inner attempt": inner_attempt + 1,
         }
 
         return llm_block
@@ -265,7 +276,7 @@ def script_dryrun(script_path):
     return success, stdout, stderr
     
 def generate_and_dryrun():
-    for challenge in challenges:
+    for challenge in config.challenges:
         logging.info(f"Executing challenge: {challenge.name}")
 
         for question in challenge.questions:
@@ -278,11 +289,11 @@ def generate_and_dryrun():
             prompt = f"{prompt}"
             logging.info("Prompt: %s", prompt)
 
-            for model in models:
+            for model in config.models:
                 safe_model = model.replace("/", "_")
                 
                 run_success = False
-                for attempt in range(1, num_attempts + 1):
+                for attempt in range(1, config.num_attempts + 1):
                     logging.info("Querying model %s: Attempt %d", model, attempt)
                     response = query_openrouter(model, prompt)
 
@@ -355,8 +366,8 @@ def generate_and_dryrun():
                         move_file(py_file, failed_folder)
                         move_file(json_file, failed_folder)
 
-                if attempt == num_attempts and not run_success:
-                    logging.error("Model %s failed to produce a runnable script after %d attempts", model, num_attempts)
+                if attempt == config.num_attempts and not run_success:
+                    logging.error("Model %s failed to produce a runnable script after %d attempts", model, config.num_attempts)
 
 if __name__ == "__main__":
     generate_and_dryrun()

@@ -7,7 +7,7 @@ import pandas as pd
 from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from utils import append_to_response_json
+from utils.utils import append_to_response_json
 
 # Execution Flow
 # (main.py)  ─▶ execute_scripts_in_batch(...)
@@ -91,7 +91,6 @@ def execute_script(
     mount_src = os.path.abspath(os.getcwd()).replace("\\", "/")
     logging.debug("Docker mount_src: %s", mount_src)
 
-    
     cmd = []
     if use_docker:
 
@@ -115,36 +114,7 @@ def execute_script(
             rel_script,
             "--dryrun" if dryrun else ""
         ]
-
-        """
-            cmd = []
-    if use_docker:
-        cmd = [
-            "docker", "run", "--rm",
-            f"--cpus={config.CPU_LIMIT}",
-            f"--memory={config.MEMORY_LIMIT_GB}g",    # becomes "8g"
-            f"--pids-limit={config.PIDS_LIMIT}",
-            "--network", "none",
-            "--security-opt", f"seccomp=docker/seccomp_profile.json",
-            "-v", f"{mount_src}:/workspace:rw",
-            "-v", f"{mount_src}/challenges/FOURTOPS/data:/data:ro",
-            "-w", "/workspace",
-            "-e", f"TRAIN_TIMEOUT_S={config.TRAIN_TIMEOUT_S}",
-            "-e", f"EVAL_TIMEOUT_S={config.EVAL_TIMEOUT_S}",
-            "-e", f"DRYRUN_TIMEOUT_S={config.DRYRUN_TIMEOUT_S}",
-            "-e", f"CPU_LIMIT={config.CPU_LIMIT}",
-            "-e", f"MEMORY_LIMIT_GB={config.MEMORY_LIMIT_GB}",
-            "-e", f"PIDS_LIMIT={config.PIDS_LIMIT}",
-            "llm-training-sandbox:latest",
-            rel_script,
-            "--dryrun" if dryrun else ""
-        ]
-    
-        """
-        
-        # if dryrun:
-        #    cmd.append("--dryrun")
-        
+     
         logging.debug("DOCKER CMD: %s", " ".join(cmd))
 
         proc = psutil.Process()
@@ -165,9 +135,12 @@ def execute_script(
         ret = result.returncode
         out, err = result.stdout, result.stderr
         success = (ret == 0)
-    except subprocess.TimeoutExpired:
+        
+    except subprocess.TimeoutExpired as e:
+        logging.error("Timeout (%.2fs) while running %s", e.timeout, cmd)
         success, ret, out, err = False, None, "", "TimeoutExpired"
     except Exception as e:
+        logging.exception("Exception while running %s", cmd)
         success, ret, out, err = False, None, "", f"Exception: {e}"
 
     # Pull metrics from output
@@ -186,6 +159,9 @@ def execute_script(
     max_rss = (mem_after - mem_before) // 1024
     cpu_user, cpu_sys = proc.cpu_times()[:2]
     io  = proc.io_counters()
+    logging.info("Subprocess finished (rc=%s, duration=%.2fs)", ret, duration)
+    logging.debug("STDOUT: %s", out)
+    logging.debug("STDERR: %s", err)
 
     resources = {
         "cpu_seconds_user": round(cpu_user, 2),

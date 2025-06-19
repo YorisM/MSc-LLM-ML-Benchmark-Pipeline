@@ -1,0 +1,7 @@
+script,success,return_code,stdout,stderr,duration_s,max_rss_kb
+outputs/16-06/TRACKFORMERS/Q1\anthropic_claude-3.7-sonnet\script_anthropic_claude-3.7-sonnet_1106_2_test copy.py,False,1,,"sha256sum: outputs/16-06/TRACKFORMERS/Q1/anthropic_claude-3.7-sonnet/anthropic_claude-3.7-sonnet_manifest.sha256: No such file or directory
+",0.7258346999988134,156
+outputs/16-06/TRACKFORMERS/Q1\anthropic_claude-3.7-sonnet\script_anthropic_claude-3.7-sonnet_1106_2_test.py,False,1,,"sha256sum: outputs/16-06/TRACKFORMERS/Q1/anthropic_claude-3.7-sonnet/anthropic_claude-3.7-sonnet_manifest.sha256: No such file or directory
+",0.6202969999994821,12
+outputs/16-06/TRACKFORMERS/Q1\openai_o3-pro\script_openai_o3-pro_1226_1.py,False,1,,"sha256sum: outputs/16-06/TRACKFORMERS/Q1/openai_o3-pro/openai_o3-pro_manifest.sha256: No such file or directory
+",0.5728237999992416,8

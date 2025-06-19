@@ -1,6 +1,8 @@
 pandas
 numpy
+scipy
 torch
+torch_geometric
 matplotlib
 scikit-learn
 

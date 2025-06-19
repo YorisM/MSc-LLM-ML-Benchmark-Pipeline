@@ -1,0 +1,113 @@
+{
+  "LLMGeneration": {
+    "model": "meta-llama/llama-4-maverick",
+    "prompt_tokens": 2856,
+    "prompt_chars": 12088,
+    "response_tokens": 1351,
+    "response_chars": 5526,
+    "cost_usd": 0.00157675,
+    "generation_ms": 10328,
+    "code": "# 0. ---------- IMPORTS ----------\nimport torch.nn.functional as F\nfrom torch import nn\nfrom sklearn.preprocessing import StandardScaler\nfrom torch_geometric.data import Data\nfrom torch_geometric.nn import GraphConv\nfrom torch_geometric.loader import DataLoader as GeoDataLoader\n\n# 1. ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.scaler = StandardScaler()\n\n    def fit(self, events):\n        X_all = np.concatenate([np.column_stack([evt[\"hit_r\"], evt[\"hit_theta\"], evt[\"hit_z\"]]) for evt in events])\n        self.scaler.fit(X_all)\n\n    def transform(self, evt):\n        X = np.column_stack([evt[\"hit_r\"], evt[\"hit_theta\"], evt[\"hit_z\"]])\n        X_scaled = self.scaler.transform(X)\n        lay_norm = evt[\"layer_id\"].astype(np.float32) / evt[\"layer_id\"].max()\n        X_scaled = np.column_stack([X_scaled, lay_norm])\n        return torch.from_numpy(X_scaled).float()\n\n    def fit_transform(self, events):\n        self.fit(events)\n        return [self.transform(evt) for evt in events]\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# 2. ---------- MODEL ARCHITECTURE ----------\nclass HitGraphClassifier(nn.Module):\n    def __init__(self, in_features):\n        super().__init__()\n        self.conv1 = GraphConv(in_features, 128)\n        self.conv2 = GraphConv(128, 64)\n        self.conv3 = GraphConv(64, 32)\n        self.fc = nn.Linear(32, 1)\n\n    def forward(self, batch):\n        x, edge_index = batch.x, batch.edge_index\n        x = F.relu(self.conv1(x, edge_index))  # (N_nodes, 128)\n        x = F.relu(self.conv2(x, edge_index))  # (N_nodes, 64)\n        x = F.relu(self.conv3(x, edge_index))  # (N_nodes, 32)\n        x = self.fc(x).squeeze(-1)             # (N_nodes,)\n        return x\n\ndef build_graph(X, track_id):\n    edge_index = torch.zeros((2, X.shape[0]*(X.shape[0]-1)//2), dtype=torch.long)\n    k = 0\n    for i in range(X.shape[0]):\n        for j in range(i+1, X.shape[0]):\n            edge_index[0, k] = i\n            edge_index[1, k] = j\n            k += 1\n    return Data(x=X, edge_index=edge_index, y=track_id)\n\ndef make_model(in_features):\n    return HitGraphClassifier(in_features)\n\n# 3. ---------- MODEL TRAINING ----------\nEPOCHS = 10\n\ndef train_model(model, train_loader, val_loader, epochs):\n    device = torch.device(\"cuda\" if torch.cuda.is_available() else \"cpu\")\n    model.to(device)\n    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)\n\n    train_loss, val_loss, train_acc, val_acc = [], [], [], []\n\n    for epoch in range(epochs):\n        model.train()\n        total_loss, total_correct = 0, 0\n        total_nodes = 0\n        for batch in train_loader:\n            X, track_id = batch\n            graphs = [build_graph(x, y) for x, y in zip(X, track_id)]\n            graph_loader = GeoDataLoader(graphs, batch_size=len(graphs), shuffle=False)\n            for graph_batch in graph_loader:\n                graph_batch = graph_batch.to(device)\n                optimizer.zero_grad()\n                out = model(graph_batch)\n                loss = F.binary_cross_entropy_with_logits(out, (graph_batch.y == graph_batch.y[None, :]).float().mean(dim=0))\n                loss.backward()\n                optimizer.step()\n                total_loss += loss.item() * graph_batch.num_nodes\n                total_nodes += graph_batch.num_nodes\n                pred = (out > 0).float()\n                total_correct += (pred == (graph_batch.y == graph_batch.y[None, :]).float().mean(dim=0)).sum().item()\n        train_loss.append(total_loss / total_nodes)\n        train_acc.append(total_correct / total_nodes)\n\n        model.eval()\n        total_loss, total_correct = 0, 0\n        total_nodes = 0\n        with torch.no_grad():\n            for batch in val_loader:\n                X, track_id = batch\n                graphs = [build_graph(x, y) for x, y in zip(X, track_id)]\n                graph_loader = GeoDataLoader(graphs, batch_size=len(graphs), shuffle=False)\n                for graph_batch in graph_loader:\n                    graph_batch = graph_batch.to(device)\n                    out = model(graph_batch)\n                    loss = F.binary_cross_entropy_with_logits(out, (graph_batch.y == graph_batch.y[None, :]).float().mean(dim=0))\n                    total_loss += loss.item() * graph_batch.num_nodes\n                    total_nodes += graph_batch.num_nodes\n                    pred = (out > 0).float()\n                    total_correct += (pred == (graph_batch.y == graph_batch.y[None, :]).float().mean(dim=0)).sum().item()\n        val_loss.append(total_loss / total_nodes)\n        val_acc.append(total_correct / total_nodes)\n\n        print(f\"Epoch {epoch+1}/{epochs}, Train Loss: {train_loss[-1]:.4f}, Val Loss: {val_loss[-1]:.4f}, Train Acc: {train_acc[-1]:.4f}, Val Acc: {val_acc[-1]:.4f}\")\n\n    return model, train_loss, val_loss, train_acc, val_acc",
+    "reasoning": "",
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "Outer_attempt": 1
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-06-16T09:14:00Z",
+    "PyLint": {
+      "passed": false,
+      "messages": [
+        {
+          "type": "error",
+          "module": "script_meta-llama_llama-4-maverick_1113_1",
+          "obj": "",
+          "line": 61,
+          "column": 0,
+          "endLine": 61,
+          "endColumn": 37,
+          "path": "outputs\\16-06\\TRACKFORMERS\\Q1\\script_meta-llama_llama-4-maverick_1113_1.py",
+          "symbol": "import-error",
+          "message": "Unable to import 'torch_geometric.data'",
+          "message-id": "E0401"
+        },
+        {
+          "type": "error",
+          "module": "script_meta-llama_llama-4-maverick_1113_1",
+          "obj": "",
+          "line": 62,
+          "column": 0,
+          "endLine": 62,
+          "endColumn": 40,
+          "path": "outputs\\16-06\\TRACKFORMERS\\Q1\\script_meta-llama_llama-4-maverick_1113_1.py",
+          "symbol": "import-error",
+          "message": "Unable to import 'torch_geometric.nn'",
+          "message-id": "E0401"
+        },
+        {
+          "type": "error",
+          "module": "script_meta-llama_llama-4-maverick_1113_1",
+          "obj": "",
+          "line": 63,
+          "column": 0,
+          "endLine": 63,
+          "endColumn": 62,
+          "path": "outputs\\16-06\\TRACKFORMERS\\Q1\\script_meta-llama_llama-4-maverick_1113_1.py",
+          "symbol": "import-error",
+          "message": "Unable to import 'torch_geometric.loader'",
+          "message-id": "E0401"
+        },
+        {
+          "type": "error",
+          "module": "script_meta-llama_llama-4-maverick_1113_1",
+          "obj": "_run",
+          "line": 188,
+          "column": 4,
+          "endLine": 188,
+          "endColumn": 44,
+          "path": "outputs\\16-06\\TRACKFORMERS\\Q1\\script_meta-llama_llama-4-maverick_1113_1.py",
+          "symbol": "assignment-from-no-return",
+          "message": "Assigning result of a function call, where the function has no return",
+          "message-id": "E1111"
+        }
+      ]
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-06-16T09:14:00Z",
+        "metrics": {
+          ".\\./outputs/16-06/TRACKFORMERS/Q1/script_meta-llama_llama-4-maverick_1113_1.py": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 194,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 194,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  }
+}

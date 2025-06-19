@@ -1,0 +1,72 @@
+script,success,return_code,stdout,stderr,duration_s,max_rss_kb
+outputs/16-06\TRACKFORMERS\Q1\anthropic_claude-3.7-sonnet\script_anthropic_claude-3.7-sonnet_1106_2_test copy.py,False,1,"argv0=/usr/local/bin/train.sh
+argv1=outputs/16-06/TRACKFORMERS/Q1/anthropic_claude-3.7-sonnet/script_anthropic_claude-3.7-sonnet_1106_2_test copy.py
+argv2=
+[INFO] loaded 4000 train events and 500 val events (pct=5%)
+[INFO] model built â€“ in_features=4, total params=332,800
+ERROR during training: [enforce fail at alloc_cpu.cpp:119] err == 0. DefaultCPUAllocator: can't allocate memory: you tried to allocate 423936 bytes. Error code 12 (Cannot allocate memory)
+","Traceback (most recent call last):
+  File ""/workspace/outputs/16-06/TRACKFORMERS/Q1/anthropic_claude-3.7-sonnet/script_anthropic_claude-3.7-sonnet_1106_2_test copy.py"", line 437, in <module>
+    _run(dryrun=""--dryrun"" in sys.argv)
+    ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/workspace/outputs/16-06/TRACKFORMERS/Q1/anthropic_claude-3.7-sonnet/script_anthropic_claude-3.7-sonnet_1106_2_test copy.py"", line 384, in _run
+    trained_model, tr_loss, va_loss, tr_acc, va_acc = train_model(
+                                                      ~~~~~~~~~~~^
+        model, train_ld, val_ld, epochs=n_epochs)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/workspace/outputs/16-06/TRACKFORMERS/Q1/anthropic_claude-3.7-sonnet/script_anthropic_claude-3.7-sonnet_1106_2_test copy.py"", line 192, in train_model
+    embeddings = model(hits_batch)
+  File ""/usr/local/lib/python3.13/site-packages/torch/nn/modules/module.py"", line 1751, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.13/site-packages/torch/nn/modules/module.py"", line 1762, in _call_impl
+    return forward_call(*args, **kwargs)
+  File ""/workspace/outputs/16-06/TRACKFORMERS/Q1/anthropic_claude-3.7-sonnet/script_anthropic_claude-3.7-sonnet_1106_2_test copy.py"", line 143, in forward
+    x = layer(x)
+  File ""/usr/local/lib/python3.13/site-packages/torch/nn/modules/module.py"", line 1751, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.13/site-packages/torch/nn/modules/module.py"", line 1762, in _call_impl
+    return forward_call(*args, **kwargs)
+  File ""/usr/local/lib/python3.13/site-packages/torch/nn/modules/container.py"", line 240, in forward
+    input = module(input)
+  File ""/usr/local/lib/python3.13/site-packages/torch/nn/modules/module.py"", line 1751, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.13/site-packages/torch/nn/modules/module.py"", line 1762, in _call_impl
+    return forward_call(*args, **kwargs)
+  File ""/usr/local/lib/python3.13/site-packages/torch/nn/modules/dropout.py"", line 70, in forward
+    return F.dropout(input, self.p, self.training, self.inplace)
+           ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.13/site-packages/torch/nn/functional.py"", line 1425, in dropout
+    _VF.dropout_(input, p, training) if inplace else _VF.dropout(input, p, training)
+                                                     ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^
+RuntimeError: [enforce fail at alloc_cpu.cpp:119] err == 0. DefaultCPUAllocator: can't allocate memory: you tried to allocate 423936 bytes. Error code 12 (Cannot allocate memory)
+",30.443947300000218,180
+outputs/16-06\TRACKFORMERS\Q1\anthropic_claude-3.7-sonnet\script_anthropic_claude-3.7-sonnet_1106_2_test.py,False,1,"argv0=/usr/local/bin/train.sh
+argv1=outputs/16-06/TRACKFORMERS/Q1/anthropic_claude-3.7-sonnet/script_anthropic_claude-3.7-sonnet_1106_2_test.py
+argv2=
+[INFO] loaded 4000 train events and 500 val events (pct=5%)
+[INFO] model built â€“ in_features=4, total params=332,800
+ERROR during training: [enforce fail at alloc_cpu.cpp:119] err == 0. DefaultCPUAllocator: can't allocate memory: you tried to allocate 395264 bytes. Error code 12 (Cannot allocate memory)
+","Traceback (most recent call last):
+  File ""/workspace/outputs/16-06/TRACKFORMERS/Q1/anthropic_claude-3.7-sonnet/script_anthropic_claude-3.7-sonnet_1106_2_test.py"", line 432, in <module>
+    _run(dryrun=""--dryrun"" in sys.argv)
+    ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/workspace/outputs/16-06/TRACKFORMERS/Q1/anthropic_claude-3.7-sonnet/script_anthropic_claude-3.7-sonnet_1106_2_test.py"", line 384, in _run
+    trained_model, tr_loss, va_loss, tr_acc, va_acc = train_model(
+                                                      ~~~~~~~~~~~^
+        model, train_ld, val_ld, epochs=n_epochs)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/workspace/outputs/16-06/TRACKFORMERS/Q1/anthropic_claude-3.7-sonnet/script_anthropic_claude-3.7-sonnet_1106_2_test.py"", line 192, in train_model
+    embeddings = model(hits_batch)
+  File ""/usr/local/lib/python3.13/site-packages/torch/nn/modules/module.py"", line 1751, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.13/site-packages/torch/nn/modules/module.py"", line 1762, in _call_impl
+    return forward_call(*args, **kwargs)
+  File ""/workspace/outputs/16-06/TRACKFORMERS/Q1/anthropic_claude-3.7-sonnet/script_anthropic_claude-3.7-sonnet_1106_2_test.py"", line 144, in forward
+    x = x + residual
+        ~~^~~~~~~~~~
+RuntimeError: [enforce fail at alloc_cpu.cpp:119] err == 0. DefaultCPUAllocator: can't allocate memory: you tried to allocate 395264 bytes. Error code 12 (Cannot allocate memory)
+",29.18126140000004,-56

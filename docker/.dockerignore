@@ -1,3 +1,17 @@
 # .dockerignore
-challenges/**/data/*
-outputs/**
+
+challenges/**/data/
+outputs/**  
+
+.env/
+.venv/
+__pycache__/
+pylintrc
+*.pt
+*.pkl
+*.png
+*.gz
+*.csv
+*.log
+*.ipynb
+*.pdf

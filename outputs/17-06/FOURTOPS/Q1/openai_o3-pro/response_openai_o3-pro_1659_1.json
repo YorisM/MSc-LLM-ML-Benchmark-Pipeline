@@ -1,0 +1,69 @@
+{
+  "LLMGeneration": {
+    "model": "openai/o3-pro",
+    "prompt_tokens": 3902,
+    "prompt_chars": 15585,
+    "response_tokens": 2480,
+    "response_chars": 6230,
+    "cost_usd": 0.013822,
+    "generation_ms": 453570,
+    "code": "# 0. ---------- IMPORTS ----------\nimport math\nimport pickle\nfrom typing import Tuple, List\n\nfrom sklearn.metrics import roc_auc_score\n\n# 1. ---------- PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        # feature-wise mean and std (Tensor of shape (92,))\n        self.mean = None\n        self.std = None\n\n    def fit(self, X: torch.Tensor, y=None):\n        # X : (N, 92)\n        with torch.no_grad():\n            self.mean = X.mean(dim=0)                       # (92,)\n            self.std  = X.std (dim=0)                       # (92,)\n            # guard against zero std to avoid division errors\n            self.std[self.std < 1e-6] = 1.0\n        return self\n\n    def transform(self, X: torch.Tensor):\n        # works for both CPU & CUDA tensors\n        return (X - self.mean) / self.std                   # (N, 92)\n\n    def fit_transform(self, X, y=None):\n        self.fit(X, y)\n        return self.transform(X)\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# 2. ---------- MODEL DEFINITION ----------\nclass BinaryClassifier(nn.Module):\n    def __init__(self, input_shape: tuple[int, ...], *, use_mask: bool):\n        super().__init__()\n        self.use_mask = use_mask\n        in_features = int(math.prod(input_shape))           # 92 for flat input\n        self.net = nn.Sequential(\n            nn.Linear(in_features, 256),\n            nn.BatchNorm1d(256),\n            nn.LeakyReLU(),\n            nn.Dropout(0.15),\n\n            nn.Linear(256, 128),\n            nn.BatchNorm1d(128),\n            nn.LeakyReLU(),\n            nn.Dropout(0.15),\n\n            nn.Linear(128, 64),\n            nn.BatchNorm1d(64),\n            nn.LeakyReLU(),\n            nn.Dropout(0.10),\n\n            nn.Linear(64, 32),\n            nn.LeakyReLU(),\n\n            nn.Linear(32, 1)                               # logits\n        )\n\n    def forward(self, data: torch.Tensor, mask: torch.Tensor | None = None):\n        # data: (B, F)\n        if self.use_mask:\n            # For flat model we ignore mask (not used)\n            data = data\n        logits = self.net(data).squeeze(-1)                 # (B,)\n        return logits\n\ndef make_model(input_shape, *, use_mask=False):\n    return BinaryClassifier(input_shape, use_mask=use_mask)\n\n# 3. ---------- MODEL TRAINING ----------\nEPOCHS = 20\ndef train_model(model: nn.Module,\n                train_loader: torch.utils.data.DataLoader,\n                val_loader  : torch.utils.data.DataLoader,\n                epochs      : int\n                ) -> Tuple[nn.Module, List[float], List[float], List[float], List[float]]:\n\n    device = torch.device(\"cuda\" if torch.cuda.is_available() else \"cpu\")\n    model.to(device)\n\n    criterion = nn.BCEWithLogitsLoss()\n    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-5)\n    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer,\n                                                           mode='min',\n                                                           factor=0.5,\n                                                           patience=2)\n\n    train_loss, val_loss = [], []\n    train_acc , val_acc  = [], []\n\n    best_auc = -float('inf')\n    patience, counter = 5, 0\n    best_state_dict = None\n\n    for epoch in range(epochs):\n        # --- training ---\n        model.train()\n        running_loss, correct, total = 0.0, 0, 0\n        for batch in train_loader:\n            if isinstance(batch[0], (tuple, list)):\n                data, lbl = batch[0][0], batch[1]\n            else:\n                data, lbl = batch[0], batch[1]\n\n            data = data.to(device, non_blocking=True)\n            lbl  = lbl.to(device, non_blocking=True).float()      # (B,)\n\n            optimizer.zero_grad()\n            logits = model(data)                                  # (B,)\n            loss = criterion(logits, lbl)\n            loss.backward()\n            optimizer.step()\n\n            running_loss += loss.item() * len(lbl)\n            preds = (torch.sigmoid(logits) > 0.5).long()\n            correct += (preds == lbl.long()).sum().item()\n            total   += len(lbl)\n\n        epoch_train_loss = running_loss / total\n        epoch_train_acc  = correct / total\n\n        # --- validation ---\n        model.eval()\n        running_loss, correct, total = 0.0, 0, 0\n        val_logits_all, val_lbl_all = [], []\n        with torch.no_grad():\n            for batch in val_loader:\n                if isinstance(batch[0], (tuple, list)):\n                    data, lbl = batch[0][0], batch[1]\n                else:\n                    data, lbl = batch[0], batch[1]\n\n                data = data.to(device, non_blocking=True)\n                lbl  = lbl.to(device, non_blocking=True).float()\n\n                logits = model(data)\n                loss = criterion(logits, lbl)\n                running_loss += loss.item() * len(lbl)\n\n                val_logits_all.append(logits.cpu())\n                val_lbl_all.append(lbl.cpu())\n\n                preds = (torch.sigmoid(logits) > 0.5).long()\n                correct += (preds == lbl.long()).sum().item()\n                total   += len(lbl)\n\n        epoch_val_loss = running_loss / total\n        epoch_val_acc  = correct / total\n\n        # Compute AUC for early stopping\n        val_logits_cat = torch.cat(val_logits_all)            # (N_val,)\n        val_lbl_cat    = torch.cat(val_lbl_all)               # (N_val,)\n        val_prob       = torch.sigmoid(val_logits_cat).numpy()\n        val_auc        = roc_auc_score(val_lbl_cat.numpy(), val_prob)\n\n        scheduler.step(epoch_val_loss)\n\n        train_loss.append(epoch_train_loss)\n        val_loss  .append(epoch_val_loss)\n        train_acc .append(epoch_train_acc)\n        val_acc   .append(epoch_val_acc)\n\n        # Early Stopping on AUC\n        if val_auc > best_auc + 1e-4:\n            best_auc = val_auc\n            counter = 0\n            best_state_dict = {k: v.cpu().clone() for k, v in model.state_dict().items()}\n        else:\n            counter += 1\n            if counter >= patience:\n                break\n\n    # restore best weights\n    if best_state_dict is not None:\n        model.load_state_dict(best_state_dict)\n\n    return model, train_loss, val_loss, train_acc, val_acc",
+    "reasoning": "",
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "Outer_attempt": 1
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-06-17T15:00:18Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-06-17T15:00:18Z",
+        "metrics": {
+          ".\\./outputs/17-06/FOURTOPS/Q1/script_openai_o3-pro_1659_1.py": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 244,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 244,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2025-06-17T15:00:19Z",
+    "passed": false,
+    "STD": {
+      "stdout": "",
+      "stderr": "sha256sum: outputs/17-06/FOURTOPS/Q1/Q1_manifest.sha256: No such file or directory\n"
+    },
+    "return_code": 1
+  }
+}

@@ -1,0 +1,87 @@
+{
+  "LLMGeneration": {
+    "model": "deepseek/deepseek-r1",
+    "prompt_tokens": 3059,
+    "prompt_chars": 12088,
+    "response_tokens": 11054,
+    "response_chars": 53067,
+    "cost_usd": 0.02514265,
+    "generation_ms": 114075,
+    "code": "# 0. ---------- IMPORTS ----------\nfrom sklearn.preprocessing import StandardScaler\nfrom sklearn.cluster import DBSCAN\nfrom scipy.optimize import linear_sum_assignment\nimport torch.nn.functional as F\n\n# 1. ----------- PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.scaler = StandardScaler()\n\n    def fit(self, events):\n        all_hits = []\n        for evt in events:\n            X, _ = split_X_y(evt)\n            all_hits.append(X.numpy())\n        self.scaler.fit(np.concatenate(all_hits))\n\n    def transform(self, X):\n        return torch.tensor(self.scaler.transform(X), dtype=torch.float32)\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# 2. ---------- MODEL ARCHITECTURE ----------\nclass HitClassifier(nn.Module):\n    def __init__(self, in_features):\n        super().__init__()\n        self.encoder = nn.Sequential(\n            nn.Linear(in_features, 256),\n            nn.ReLU(),\n            nn.LayerNorm(256),\n            nn.Linear(256, 128),\n            nn.ReLU(),\n            nn.LayerNorm(128),\n        )\n        self.transformer = nn.TransformerEncoder(\n            nn.TransformerEncoderLayer(\n                d_model=128,\n                nhead=4,\n                dim_feedforward=256,\n                dropout=0.1,\n                batch_first=True\n            ),\n            num_layers=3\n        )\n        self.projection = nn.Linear(128, 64)\n\n    def forward(self, batch):\n        outputs = []\n        for event in batch:\n            hits = event[0]\n            emb = self.encoder(hits)\n            trans_out = self.transformer(emb.unsqueeze(0)).squeeze(0)\n            proj_out = self.projection(trans_out)\n            outputs.append(proj_out)\n        return outputs\n\ndef make_model(in_features):\n    return HitClassifier(in_features)\n\n# 3. ---------- MODEL TRAINING ----------\nEPOCHS = 20\n\ndef nt_xent_loss(embeddings, track_ids, temperature=0.1):\n    sim_matrix = F.cosine_similarity(embeddings.unsqueeze(1), embeddings.unsqueeze(0), dim=-1)\n    sim_matrix = sim_matrix / temperature\n    mask = (track_ids.unsqueeze(1) == track_ids.unsqueeze(0)).float()\n    mask.fill_diagonal_(0)\n\n    pos_sum = (sim_matrix * mask).sum(dim=1)\n    neg_sum = torch.logsumexp(sim_matrix - 1e9 * mask, dim=1)\n    loss = - (pos_sum - neg_sum).mean()\n    return loss\n\ndef train_model(model, train_loader, val_loader, epochs):\n    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')\n    model.to(device)\n    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)\n    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, epochs)\n\n    best_acc = 0\n    train_loss, val_loss = [], []\n    train_acc, val_acc = [], []\n\n    for epoch in range(epochs):\n        model.train()\n        epoch_train_loss, epoch_train_acc = 0, 0\n\n        for batch in train_loader:\n            optimizer.zero_grad()\n            batch_loss = 0\n            batch_acc = 0\n\n            for event in batch:\n                X, y = event[0].to(device), event[1].to(device)\n                embeddings = model([(X, y)])[0]\n\n                # Calculate loss\n                loss = nt_xent_loss(embeddings, y)\n                batch_loss += loss\n\n            batch_loss /= len(batch)\n            batch_loss.backward()\n            optimizer.step()\n            epoch_train_loss += batch_loss.item()\n\n        # Validation\n        model.eval()\n        epoch_val_loss, epoch_val_acc = 0, 0\n        with torch.no_grad():\n            for batch in val_loader:\n                for event in batch:\n                    X, y = event[0].to(device), event[1].to(device)\n                    embeddings = model([(X, y)])[0]\n\n                    # Calculate validation loss\n                    loss = nt_xent_loss(embeddings, y)\n                    epoch_val_loss += loss.item()\n\n                    # Calculate clustering accuracy\n                    emb_np = embeddings.cpu().numpy()\n                    y_np = y.cpu().numpy()\n\n                    # DBSCAN clustering\n                    clustering = DBSCAN(eps=0.5, min_samples=2).fit(emb_np)\n                    pred_labels = clustering.labels_\n\n                    # Hungarian matching\n                    unique_pred = np.unique(pred_labels)\n                    unique_true = np.unique(y_np)\n                    cost_matrix = np.zeros((len(unique_pred), len(unique_true)), dtype=int)\n\n                    for i, u_p in enumerate(unique_pred):\n                        for j, u_t in enumerate(unique_true):\n                            cost_matrix[i,j] = -np.sum((pred_labels == u_p) & (y_np == u_t))\n\n                    row_ind, col_ind = linear_sum_assignment(cost_matrix)\n                    correct = -cost_matrix[row_ind, col_ind].sum()\n                    acc = correct / len(y_np)\n                    epoch_val_acc += acc\n\n        # Update metrics\n        train_loss.append(epoch_train_loss/len(train_loader))\n        val_loss.append(epoch_val_loss/len(val_loader))\n        val_acc.append(epoch_val_acc/len(val_loader.dataset))\n\n        # Update best model\n        if val_acc[-1] > best_acc:\n            best_acc = val_acc[-1]\n            torch.save(model.state_dict(), 'best_model.pt')\n\n        scheduler.step()\n\n    # Load best model\n    model.load_state_dict(torch.load('best_model.pt'))\n    return model, train_loss, val_loss, [], val_acc",
+    "reasoning": "",
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "Outer_attempt": 1
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-06-16T09:16:45Z",
+    "PyLint": {
+      "passed": false,
+      "messages": [
+        {
+          "type": "error",
+          "module": "script_deepseek_deepseek-r1_1116_1",
+          "obj": "nt_xent_loss",
+          "line": 122,
+          "column": 17,
+          "endLine": 122,
+          "endColumn": 94,
+          "path": "outputs\\16-06\\TRACKFORMERS\\Q1\\script_deepseek_deepseek-r1_1116_1.py",
+          "symbol": "not-callable",
+          "message": "F.cosine_similarity is not callable",
+          "message-id": "E1102"
+        },
+        {
+          "type": "error",
+          "module": "script_deepseek_deepseek-r1_1116_1",
+          "obj": "_run",
+          "line": 230,
+          "column": 4,
+          "endLine": 230,
+          "endColumn": 44,
+          "path": "outputs\\16-06\\TRACKFORMERS\\Q1\\script_deepseek_deepseek-r1_1116_1.py",
+          "symbol": "assignment-from-no-return",
+          "message": "Assigning result of a function call, where the function has no return",
+          "message-id": "E1111"
+        }
+      ]
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-06-16T09:16:45Z",
+        "metrics": {
+          ".\\./outputs/16-06/TRACKFORMERS/Q1/script_deepseek_deepseek-r1_1116_1.py": {
+            "CONFIDENCE.HIGH": 2,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 2,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 215,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 2,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 2,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 215,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  }
+}

@@ -1,0 +1,100 @@
+{
+  "LLMGeneration": {
+    "model": "deepseek/deepseek-r1",
+    "prompt_tokens": 3059,
+    "prompt_chars": 12088,
+    "response_tokens": 9339,
+    "response_chars": 43704,
+    "cost_usd": 0.0214554,
+    "generation_ms": 82125,
+    "code": "# 0. ---------- IMPORTS ----------\nfrom sklearn.cluster import KMeans\nfrom torch.optim import AdamW\nfrom torch.nn import TransformerEncoder, TransformerEncoderLayer\nimport torch.nn.functional as F\nimport numpy as np\n\n# 1. ----------- PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.r_mean = None\n        self.r_std = None\n        self.theta_mean = None\n        self.theta_std = None\n        self.z_mean = None\n        self.z_std = None\n        self.layer_mean = None\n        self.layer_std = None\n\n    def fit(self, events):\n        all_r = np.concatenate([evt['hit_r'] for evt in events])\n        all_theta = np.concatenate([evt['hit_theta'] for evt in events])\n        all_z = np.concatenate([evt['hit_z'] for evt in events])\n        all_layer = np.concatenate([evt['layer_id'] for evt in events])\n\n        self.r_mean = np.mean(all_r)\n        self.r_std = np.std(all_r)\n        self.theta_mean = np.mean(all_theta)\n        self.theta_std = np.std(all_theta)\n        self.z_mean = np.mean(all_z)\n        self.z_std = np.std(all_z)\n        self.layer_mean = np.mean(all_layer)\n        self.layer_std = np.std(all_layer)\n\n    def transform(self, X):\n        X_np = X.numpy()\n        X_np[:, 0] = (X_np[:, 0] - self.r_mean) / self.r_std\n        X_np[:, 1] = (X_np[:, 1] - self.theta_mean) / self.theta_std\n        X_np[:, 2] = (X_np[:, 2] - self.z_mean) / self.z_std\n        X_np[:, 3] = (X_np[:, 3] - self.layer_mean) / self.layer_std\n        return torch.from_numpy(X_np).float()\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# 2. ---------- MODEL ARCHITECTURE ----------\nclass HitClassifier(nn.Module):\n    def __init__(self, in_features):\n        super().__init__()\n        self.encoder_layer = TransformerEncoderLayer(\n            d_model=in_features, nhead=4, dim_feedforward=128, dropout=0.1, batch_first=True\n        )\n        self.transformer_encoder = TransformerEncoder(self.encoder_layer, num_layers=3)\n        self.projection = nn.Linear(in_features, 64)\n\n    def forward(self, batch):\n        embeddings = []\n        for event in batch:\n            event = event.unsqueeze(0)  # Add batch dimension\n            encoded = self.transformer_encoder(event)\n            projected = self.projection(encoded)\n            embeddings.append(projected.squeeze(0))\n        return embeddings\n\ndef make_model(in_features):\n    return HitClassifier(in_features)\n\n# 3. ---------- MODEL TRAINING ----------\ndef compute_accuracy(embeddings, track_ids):\n    correct = 0\n    total = 0\n    for emb, tid in zip(embeddings, track_ids):\n        if emb.shape[0] == 0:\n            continue\n        k = len(torch.unique(tid))\n        if k == 0:\n            continue\n        emb_np = emb.detach().cpu().numpy()\n        tid_np = tid.cpu().numpy()\n        kmeans = KMeans(n_clusters=k, n_init=10)\n        pred_labels = kmeans.fit_predict(emb_np)\n        # Hungarian algorithm to match clusters to true labels\n        from sklearn.utils.linear_assignment_ import linear_assignment\n        contingency_matrix = np.zeros((k, k), dtype=np.int64)\n        for i in range(len(pred_labels)):\n            contingency_matrix[pred_labels[i], tid_np[i]] += 1\n        row_ind, col_ind = linear_assignment(-contingency_matrix)\n        mapping = {row: col for row, col in zip(row_ind, col_ind)}\n        remapped_labels = np.array([mapping[p] for p in pred_labels])\n        correct += np.sum(remapped_labels == tid_np)\n        total += len(tid_np)\n    return correct / total if total > 0 else 0.0\n\ndef train_model(model, train_loader, val_loader, epochs):\n    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')\n    model.to(device)\n    optimizer = AdamW(model.parameters(), lr=1e-3)\n    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)\n\n    best_val_acc = 0.0\n    best_model = None\n    train_losses, val_losses = [], []\n    train_accs, val_accs = [], []\n\n    for epoch in range(epochs):\n        model.train()\n        epoch_train_loss = 0.0\n        all_train_embs, all_train_tids = [], []\n\n        for batch in train_loader:\n            optimizer.zero_grad()\n            events = [X.to(device) for X, _ in batch]\n            track_ids = [tid.to(device) for _, tid in batch]\n\n            embeddings = model(events)\n            loss = 0.0\n            for emb, tid in zip(embeddings, track_ids):\n                sim_matrix = torch.matmul(emb, emb.T)  # (N, N)\n                mask = (tid.unsqueeze(1) == tid.unsqueeze(0)).float()\n                pos_loss = -torch.log(torch.sigmoid(sim_matrix[mask == 1])).mean()\n                neg_loss = -torch.log(1 - torch.sigmoid(sim_matrix[mask == 0])).mean()\n                loss += (pos_loss + neg_loss) / 2\n            loss /= len(embeddings)\n            loss.backward()\n            optimizer.step()\n            epoch_train_loss += loss.item()\n\n            all_train_embs.extend([e.detach().cpu() for e in embeddings])\n            all_train_tids.extend([t.cpu() for t in track_ids])\n\n        train_acc = compute_accuracy(all_train_embs, all_train_tids)\n        train_losses.append(epoch_train_loss / len(train_loader))\n        train_accs.append(train_acc)\n\n        model.eval()\n        epoch_val_loss = 0.0\n        all_val_embs, all_val_tids = [], []\n        with torch.no_grad():\n            for batch in val_loader:\n                events = [X.to(device) for X, _ in batch]\n                track_ids = [tid.to(device) for _, tid in batch]\n\n                embeddings = model(events)\n                loss = 0.0\n                for emb, tid in zip(embeddings, track_ids):\n                    sim_matrix = torch.matmul(emb, emb.T)\n                    mask = (tid.unsqueeze(1) == tid.unsqueeze(0)).float()\n                    pos_loss = -torch.log(torch.sigmoid(sim_matrix[mask == 1])).mean()\n                    neg_loss = -torch.log(1 - torch.sigmoid(sim_matrix[mask == 0])).mean()\n                    loss += (pos_loss + neg_loss) / 2\n                loss /= len(embeddings)\n                epoch_val_loss += loss.item()\n\n                all_val_embs.extend([e.cpu() for e in embeddings])\n                all_val_tids.extend([t.cpu() for t in track_ids])\n\n        val_acc = compute_accuracy(all_val_embs, all_val_tids)\n        val_losses.append(epoch_val_loss / len(val_loader))\n        val_accs.append(val_acc)\n\n        scheduler.step()\n\n        if val_acc > best_val_acc:\n            best_val_acc = val_acc\n            best_model = model.state_dict()\n\n        print(f\"Epoch {epoch+1}/{epochs} | Train Loss: {train_losses[-1]:.4f} | Val Acc: {val_acc:.4f}\")\n\n    model.load_state_dict(best_model)\n    return model, train_losses, val_losses, train_accs, val_accs\n\nEPOCHS = 20",
+    "reasoning": "",
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "Outer_attempt": 2
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-06-16T09:18:34Z",
+    "PyLint": {
+      "passed": false,
+      "messages": [
+        {
+          "type": "error",
+          "module": "script_deepseek_deepseek-r1_1118_2",
+          "obj": "compute_accuracy",
+          "line": 139,
+          "column": 8,
+          "endLine": 139,
+          "endColumn": 70,
+          "path": "outputs\\16-06\\TRACKFORMERS\\Q1\\script_deepseek_deepseek-r1_1118_2.py",
+          "symbol": "import-error",
+          "message": "Unable to import 'sklearn.utils.linear_assignment_'",
+          "message-id": "E0401"
+        },
+        {
+          "type": "error",
+          "module": "script_deepseek_deepseek-r1_1118_2",
+          "obj": "compute_accuracy",
+          "line": 139,
+          "column": 8,
+          "endLine": 139,
+          "endColumn": 70,
+          "path": "outputs\\16-06\\TRACKFORMERS\\Q1\\script_deepseek_deepseek-r1_1118_2.py",
+          "symbol": "no-name-in-module",
+          "message": "No name 'linear_assignment_' in module 'sklearn.utils'",
+          "message-id": "E0611"
+        },
+        {
+          "type": "error",
+          "module": "script_deepseek_deepseek-r1_1118_2",
+          "obj": "_run",
+          "line": 245,
+          "column": 4,
+          "endLine": 245,
+          "endColumn": 44,
+          "path": "outputs\\16-06\\TRACKFORMERS\\Q1\\script_deepseek_deepseek-r1_1118_2.py",
+          "symbol": "assignment-from-no-return",
+          "message": "Assigning result of a function call, where the function has no return",
+          "message-id": "E1111"
+        }
+      ]
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-06-16T09:18:34Z",
+        "metrics": {
+          ".\\./outputs/16-06/TRACKFORMERS/Q1/script_deepseek_deepseek-r1_1118_2.py": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 241,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 241,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  }
+}

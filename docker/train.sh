@@ -6,8 +6,8 @@ echo "argv2=$2"
 
 set -euo pipefail
 
-PY="$1";  shift || true       #   first arg = user script
-DRY="${1:-}"                  #   second arg = --dryrun (optional)
+PY="$1";  shift || true                         #   first arg = user script
+DRY="$(echo "${1:-}" | tr -d '\r\n' | xargs)"   # second arg = --dryrun / --dry-run (trim CR/LF & spaces)
 
 # ─────────────────  safety guard  ───────────────────
 if [[ "$PY" == "$0" ]]; then
@@ -17,16 +17,26 @@ fi
 
 # ───────────────  resource limits  ────────────────
 if [[ "$DRY" =~ (--dryrun|--dry-run) ]]; then
-  TIMEOUT="${DRYRUN_TIMEOUT_S:-600}"
+    TIMEOUT="${DRYRUN_TIMEOUT_S}"
 else
-  TIMEOUT="${TRAIN_TIMEOUT_S:-7200}"
-fi   # seconds
-MEM_GB="${MEMORY_LIMIT_GB:-8}"
-PIDS_LIMIT="${PIDS_LIMIT:-512}"
+    TIMEOUT="${TRAIN_TIMEOUT_S}"
+fi
 
-ulimit -t  "$TIMEOUT"                  # CPU-seconds
-ulimit -v  $((MEM_GB * 1024 * 1024))   # address-space KB
-ulimit -n  "$PIDS_LIMIT"               # open files / pids
+# Default to 0 (= unlimited) if the env-var is missing
+: "${MEMORY_LIMIT_GB:=0}"
+: "${PIDS_LIMIT:=0}"
+
+ulimit -t "$TIMEOUT"                      # CPU-seconds
+
+# virtual-memory limit: only apply when > 0
+if (( MEMORY_LIMIT_GB > 0 )); then
+    ulimit -v $((MEMORY_LIMIT_GB * 1024 * 1024))
+fi
+
+# open-files / processes limit: only apply when > 0
+if (( PIDS_LIMIT > 0 )); then
+    ulimit -n "$PIDS_LIMIT"
+fi
 
 # ───────────────  run user script  ────────────────
 timeout --signal=KILL "${TIMEOUT}s" python "$PY" $DRY
@@ -39,7 +49,7 @@ if [[ $python_rc -ne 0 ]]; then
 fi
 
 # ───────────────  skip hashing during dry-run  ────────────────
-if [[ "$DRY" == "--dryrun" ]]; then
+if [[ "$DRY" =~ (--dryrun|--dry-run) ]]; then
   echo "Dry-run: skipping artefact manifest"
   exit 0
 fi

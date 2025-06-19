@@ -11,4 +11,5 @@ RUN chmod +x /usr/local/bin/predict.sh
 USER sandbox
 ENTRYPOINT ["/usr/local/bin/predict.sh"]
 
-# to build the image: docker build -f docker/Dockerfile.eval -t llm-evaluation-sandbox:latest .
+# to build the image      :   docker build -f docker/Dockerfile.eval -t llm-evaluation-sandbox:latest .
+# sanity check after build:   docker run --rm myimage du -h /app | sort -hr | head

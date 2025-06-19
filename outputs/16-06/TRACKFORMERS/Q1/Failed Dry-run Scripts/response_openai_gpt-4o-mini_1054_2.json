@@ -1,0 +1,69 @@
+{
+  "LLMGeneration": {
+    "model": "openai/gpt-4o-mini",
+    "prompt_tokens": 2876,
+    "prompt_chars": 12088,
+    "response_tokens": 953,
+    "response_chars": 3937,
+    "cost_usd": 3.96e-05,
+    "generation_ms": 20061,
+    "code": "# 0. ---------- IMPORTS ----------\nfrom sklearn.preprocessing import StandardScaler\n\n# 1. ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.scaler = StandardScaler()\n\n    def fit(self, events):\n        all_hits = np.vstack([split_X_y(event)[0].numpy() for event in events])\n        self.scaler.fit(all_hits)\n        return self\n\n    def transform(self, events):\n        all_hits = np.vstack([split_X_y(event)[0].numpy() for event in events])\n        scaled_hits = self.scaler.transform(all_hits)\n        return torch.from_numpy(scaled_hits)\n\n    def fit_transform(self, events):\n        self.fit(events)\n        return self.transform(events)\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# 2. ---------- MODEL ARCHITECTURE ----------\nclass HitClassifier(nn.Module):\n    def __init__(self, in_features):\n        super().__init__()\n        self.fc1 = nn.Linear(in_features, 128)  # Output: (N, 128)\n        self.fc2 = nn.Linear(128, 64)            # Output: (N, 64)\n        self.fc3 = nn.Linear(64, 32)             # Output: (N, 32)\n        self.fc4 = nn.Linear(32, 1)              # Binary classification, Output: (N, 1)\n        self.relu = nn.ReLU()\n        self.dropout = nn.Dropout(0.3)\n\n    def forward(self, batch):\n        hits, _ = batch\n        x = hits.view(-1, hits.size(-1))          # Flatten: (B, N, F) => (B*N, F)\n        x = self.relu(self.fc1(x))                # (B*N, 128)\n        x = self.dropout(x)\n        x = self.relu(self.fc2(x))                # (B*N, 64)\n        x = self.dropout(x)\n        x = self.relu(self.fc3(x))                # (B*N, 32)\n        x = self.fc4(x)                           # (B*N, 1)\n        return torch.sigmoid(x).view(hits.size(0), -1)  # Reshape back to (B, N)\n\ndef make_model(in_features):\n    return HitClassifier(in_features)\n\n# 3. ---------- MODEL TRAINING ----------\nEPOCHS = 20   # Increasing epochs for better accuracy   \ndef train_model(model, train_loader, val_loader, epochs):\n    device = torch.device(\"cuda\" if torch.cuda.is_available() else \"cpu\")\n    model.to(device)\n\n    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)\n    criterion = nn.BCELoss()\n\n    train_loss, val_loss = [], []\n    train_acc, val_acc = [], []\n\n    for epoch in range(epochs):\n        model.train()\n        epoch_loss = 0\n        correct = 0\n        total = 0\n\n        for hits, track_ids in train_loader:\n            hits = hits.to(device)\n            track_ids = track_ids.to(device).float().view(-1, 1)  # (B, N) => (B*N, 1)\n\n            optimizer.zero_grad()\n            outputs = model((hits, track_ids))\n            loss = criterion(outputs, track_ids)\n            loss.backward()\n            optimizer.step()\n\n            epoch_loss += loss.item()\n            preds = (outputs > 0.5).float()\n            correct += (preds == track_ids).sum().item()\n            total += track_ids.numel()\n\n        train_loss.append(epoch_loss / len(train_loader))\n        train_acc.append(correct / total)\n\n        model.eval()\n        with torch.no_grad():\n            val_epoch_loss = 0\n            val_correct = 0\n            val_total = 0\n\n            for hits, track_ids in val_loader:\n                hits = hits.to(device)\n                track_ids = track_ids.to(device).float().view(-1, 1)\n\n                val_outputs = model((hits, track_ids))\n                val_loss_value = criterion(val_outputs, track_ids)\n\n                val_epoch_loss += val_loss_value.item()\n                val_preds = (val_outputs > 0.5).float()\n                val_correct += (val_preds == track_ids).sum().item()\n                val_total += track_ids.numel()\n\n            val_loss.append(val_epoch_loss / len(val_loader))\n            val_acc.append(val_correct / val_total)\n\n    return model, train_loss, val_loss, train_acc, val_acc",
+    "reasoning": "",
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "Outer_attempt": 2
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-06-16T08:54:46Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-06-16T08:54:46Z",
+        "metrics": {
+          ".\\./outputs/16-06/TRACKFORMERS/Q1/script_openai_gpt-4o-mini_1054_2.py": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 181,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 181,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2025-06-16T08:55:14Z",
+    "passed": false,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/16-06/TRACKFORMERS/Q1/script_openai_gpt-4o-mini_1054_2.py\nargv2=--dryrun\n",
+      "stderr": "Traceback (most recent call last):\n  File \"/workspace/outputs/16-06/TRACKFORMERS/Q1/script_openai_gpt-4o-mini_1054_2.py\", line 244, in <module>\n    _run(dryrun=\"--dryrun\" in sys.argv)\n    ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/outputs/16-06/TRACKFORMERS/Q1/script_openai_gpt-4o-mini_1054_2.py\", line 190, in _run\n    in_features = train_ds[0][0].shape[-1]\n                  ~~~~~~~~^^^\n  File \"/workspace/outputs/16-06/TRACKFORMERS/Q1/script_openai_gpt-4o-mini_1054_2.py\", line 38, in __getitem__\n    X = self.pre.transform(X) if self.pre is not None else X\n        ~~~~~~~~~~~~~~~~~~^^^\n  File \"/workspace/outputs/16-06/TRACKFORMERS/Q1/script_openai_gpt-4o-mini_1054_2.py\", line 71, in transform\n    all_hits = np.vstack([split_X_y(event)[0].numpy() for event in events])\n                          ~~~~~~~~~^^^^^^^\n  File \"/workspace/outputs/16-06/TRACKFORMERS/Q1/script_openai_gpt-4o-mini_1054_2.py\", line 21, in split_X_y\n    lay = evt[\"layer_id\"].astype(np.float32)\n          ~~~^^^^^^^^^^^^\nIndexError: too many indices for tensor of dimension 1\n"
+    },
+    "return_code": 1
+  }
+}

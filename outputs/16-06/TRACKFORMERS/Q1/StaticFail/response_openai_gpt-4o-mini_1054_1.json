@@ -1,0 +1,74 @@
+{
+  "LLMGeneration": {
+    "model": "openai/gpt-4o-mini",
+    "prompt_tokens": 2876,
+    "prompt_chars": 12088,
+    "response_tokens": 899,
+    "response_chars": 3934,
+    "cost_usd": 4.854e-05,
+    "generation_ms": 14216,
+    "code": "# 0. ---------- IMPORTS ----------\nfrom sklearn.preprocessing import StandardScaler\nfrom torch import nn, optim\nimport torch.nn.functional as F\n\n# 1. ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.scaler = StandardScaler()\n\n    def fit(self, events):\n        # Fit the scaler to the features\n        X = np.vstack([np.column_stack([evt[\"hit_r\"],\n                                         evt[\"hit_theta\"],\n                                         evt[\"hit_z\"],\n                                         evt[\"layer_id\"]]) for evt in events])\n        self.scaler.fit(X)\n\n    def transform(self, events):\n        # Transform the features using the fitted scaler\n        X = np.vstack([np.column_stack([evt[\"hit_r\"],\n                                         evt[\"hit_theta\"],\n                                         evt[\"hit_z\"],\n                                         evt[\"layer_id\"]]) for evt in events])\n        X_scaled = self.scaler.transform(X)\n        return torch.from_numpy(X_scaled).float()\n\n    def fit_transform(self, events):\n        self.fit(events)\n        return self.transform(events)\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# 2. ---------- MODEL ARCHITECTURE ----------\nclass HitClassifier(nn.Module):\n    def __init__(self, in_features):\n        super().__init__()\n        self.layer1 = nn.Linear(in_features, 128)  # (N_hits, 128)\n        self.layer2 = nn.Linear(128, 64)           # (N_hits, 64)\n        self.layer3 = nn.Linear(64, 32)            # (N_hits, 32)\n        self.output_layer = nn.Linear(32, 1)       # (N_hits, 1)\n\n    def forward(self, batch):\n        # batch : list[torch.Tensor]  or  list[tuple[Tensor, Tensor]]\n        X = batch[0]  # Get the hits\n        x = F.relu(self.layer1(X))                # (N_hits, 128)\n        x = F.relu(self.layer2(x))                 # (N_hits, 64)\n        x = F.relu(self.layer3(x))                 # (N_hits, 32)\n        output = torch.sigmoid(self.output_layer(x)) # (N_hits, 1)\n        return output\n\ndef make_model(in_features):\n    return HitClassifier(in_features)\n\n# 3. ---------- MODEL TRAINING ----------\nEPOCHS = 20  # Increased epochs for better training\ndef train_model(model, train_loader, val_loader, epochs):\n    optimizer = optim.Adam(model.parameters(), lr=0.001)\n    criterion = nn.BCELoss()  # Binary Cross Entropy Loss\n\n    train_loss = []\n    val_loss = []\n    train_acc = []\n    val_acc = []\n\n    for epoch in range(epochs):\n        model.train()\n        total_loss = 0\n        correct = 0\n        total = 0\n\n        for hits, track_ids in train_loader:\n            optimizer.zero_grad()\n            outputs = model(hits)\n            loss = criterion(outputs, track_ids.type_as(outputs).view(-1, 1).float())\n            loss.backward()\n            optimizer.step()\n\n            total_loss += loss.item()\n            preds = (outputs > 0.5).float()\n            correct += (preds.view(-1) == track_ids).sum().item()  \n            total += track_ids.size(0)\n\n        train_loss.append(total_loss / len(train_loader))\n        train_acc.append(correct / total)\n\n        # Validation step\n        model.eval()\n        total_val_loss = 0\n        correct_val = 0\n        total_val = 0\n\n        with torch.no_grad():\n            for hits, track_ids in val_loader:\n                outputs = model(hits)\n                loss = criterion(outputs, track_ids.type_as(outputs).view(-1, 1).float())\n\n                total_val_loss += loss.item()\n                preds = (outputs > 0.5).float()\n                correct_val += (preds.view(-1) == track_ids).sum().item()\n                total_val += track_ids.size(0)\n\n        val_loss.append(total_val_loss / len(val_loader))\n        val_acc.append(correct_val / total_val)\n\n        # Early stopping criteria could be applied here \n\n    return model, train_loss, val_loss, train_acc, val_acc",
+    "reasoning": "",
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "Outer_attempt": 1
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-06-16T08:54:15Z",
+    "PyLint": {
+      "passed": false,
+      "messages": [
+        {
+          "type": "error",
+          "module": "script_openai_gpt-4o-mini_1054_1",
+          "obj": "_run",
+          "line": 182,
+          "column": 4,
+          "endLine": 182,
+          "endColumn": 44,
+          "path": "outputs\\16-06\\TRACKFORMERS\\Q1\\script_openai_gpt-4o-mini_1054_1.py",
+          "symbol": "assignment-from-no-return",
+          "message": "Assigning result of a function call, where the function has no return",
+          "message-id": "E1111"
+        }
+      ]
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-06-16T08:54:15Z",
+        "metrics": {
+          ".\\./outputs/16-06/TRACKFORMERS/Q1/script_openai_gpt-4o-mini_1054_1.py": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 179,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 179,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  }
+}

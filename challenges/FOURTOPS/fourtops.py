@@ -69,9 +69,9 @@ negative classes. The higher the score the better.
 """,
 
     prefix = r"""
-# ----------------  START HARNASS WRAPPER PREFIX (FOR CONTEXT)  ---------------- 
-
-import os, sys, pickle, torch, gc, json
+# ----------------  START HARNESS WRAPPER PREFIX (FOR CONTEXT)  ---------------- 
+# Environment: Python 3.12, PyTorch 2.6.0, Torch_Geometric 2.6.1, NumPy 2.2.3, SciPy v1.15.2, SciKit-Learn 1.6.1
+import os, sys, pickle, torch, torch_geometric, gc, json
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -120,7 +120,7 @@ def make_loaders(X_train, Y_train, X_val, Y_val, batch=512):
     return (DataLoader(train_ds, batch_size=batch, shuffle=True,  num_workers=0),
             DataLoader(val_ds,   batch_size=batch, shuffle=False, num_workers=0))
 
-# ----------------  END HARNASS WRAPPER PREFIX (FOR CONTEXT)  ----------------                        
+# ----------------  END HARNESS WRAPPER PREFIX (FOR CONTEXT)  ----------------                        
 # -------------------------- START OF LLM BLOCK ------------------------------
 """,
 
@@ -128,7 +128,7 @@ def make_loaders(X_train, Y_train, X_val, Y_val, batch=512):
 # <start code template>
 # 0. ---------- IMPORTS ----------
 # NOTE: Some imports (torch, nn, numpy, DataLoader) are already available (see prefix).
-# Only import extra std-lib modules, torch or sklearn (sub-)modules you actually use.
+# Only import extra std-lib modules, torch, scipy, sklearn (sub-)modules you actually use.
 # <LLM: Import modules>
 
 # 1. ---------- PRE-PROCESSING ----------
@@ -217,7 +217,7 @@ def make_model(input_shape, *, use_mask=False):
     return BinaryClassifier(input_shape, use_mask=use_mask)
 
 # 3. ---------- MODEL TRAINING ----------
-EPOCHS = # <LLM: define the amount of training epochs>    
+EPOCHS = 10   # <LLM: adjust if you wish>
 def train_model(model, train_loader, val_loader, epochs):
     # PARAMETERS
     # model : torch.nn.Module   
@@ -251,7 +251,7 @@ def train_model(model, train_loader, val_loader, epochs):
 
     suffix = r"""
 # ---------------------------  END OF LLM-CODE BLOCK ---------------------------
-# ----------------  START HARNASS WRAPPER SUFFIX (FOR CONTEXT)  ---------------- 
+# ----------------  START HARNESS WRAPPER SUFFIX (FOR CONTEXT)  ---------------- 
                          
 def _plot(series_train, series_val, name, out_path):
     plt.figure()
@@ -263,8 +263,10 @@ def _plot(series_train, series_val, name, out_path):
 def _run(dryrun=False):
     # 1. Load & preprocess
     X_train, Y_train, X_val, Y_val = load_data()
+    if dryrun:
+        X_train, Y_train, X_val, Y_val = X_train[:200], Y_train[:200], X_val[:20], Y_val[:20]
     pre = make_preprocessor().fit(X_train, Y_train)
-    X_train = pre.transform(X_train) # may be Tensor or Tuple
+    X_train = pre.transform(X_train)                    # may be Tensor or Tuple
     X_val   = pre.transform(X_val)
     train_loader, val_loader = make_loaders(X_train, Y_train, X_val, Y_val)
 
@@ -306,19 +308,20 @@ def _run(dryrun=False):
         return
 
     # 5. Persist artefacts
-    base = os.path.splitext(os.path.basename(sys.argv[0]))[0].removeprefix("script_")
+    if not dryrun:
+        base = os.path.splitext(os.path.basename(sys.argv[0]))[0].removeprefix("script_")
 
-    pth_state   = os.path.join(SCRIPT_DIR, f"{base}_state.pt")
-    pth_model   = os.path.join(SCRIPT_DIR, f"{base}_model.pkl")
-    pth_preproc = os.path.join(SCRIPT_DIR, f"{base}_preproc.pkl")
+        pth_state   = os.path.join(SCRIPT_DIR, f"{base}_state.pt")
+        pth_model   = os.path.join(SCRIPT_DIR, f"{base}_model.pkl")
+        pth_preproc = os.path.join(SCRIPT_DIR, f"{base}_preproc.pkl")
 
-    torch.save(trained_model.state_dict(), pth_state)
-    with open(pth_model,   "wb") as f: pickle.dump(trained_model, f)
-    with open(pth_preproc, "wb") as f: pickle.dump(pre,           f)
+        torch.save(trained_model.state_dict(), pth_state)
+        with open(pth_model,   "wb") as f: pickle.dump(trained_model, f)
+        with open(pth_preproc, "wb") as f: pickle.dump(pre,           f)
 
-    # 6. Save plots
-    _plot(tr_loss, va_loss, "Loss",     os.path.join(SCRIPT_DIR, f"{base}_loss.png"))
-    _plot(tr_acc,  va_acc,  "Accuracy", os.path.join(SCRIPT_DIR, f"{base}_accuracy.png"))
+        # 6. Save plots
+        _plot(tr_loss, va_loss, "Loss",     os.path.join(SCRIPT_DIR, f"{base}_loss.png"))
+        _plot(tr_acc,  va_acc,  "Accuracy", os.path.join(SCRIPT_DIR, f"{base}_accuracy.png"))
 
     # 7. Write JSON Summary
     if not dryrun: 
@@ -337,27 +340,32 @@ if "__main__" not in sys.modules:
 if __name__ == "__main__":
     _run(dryrun="--dryrun" in sys.argv)
 
-# ----------------  END HARNASS WRAPPER SUFFIX (FOR CONTEXT)  ---------------- 
+# ----------------  END HARNESS WRAPPER SUFFIX (FOR CONTEXT)  ---------------- 
 """,
 
     questions = [
         Question("Q1", r""" ** IMPORTANT: Your Challenge **
 Write Python code for a binary classification model focussing on maximising the AUC using the code template above. 
 You may freely choose any pre-processing methods and techniques as well as model architecture and training conventions.
-Do everything in your power to get the highest score on the AUC.                 
-""")
-#,
+Play it safe and implement a simple model you feel confident in.
+"""),
 
-#       Question("Q2", r"""** IMPORTANT: Your Challenge **
-#Write Python code for a binary classification model focussing on maximising the AUC using the code template above. 
-#You may freely choose any pre-processing methods and techniques as well as model architecture and training conventions.
-#You may optionally leverage the following particle-physics insights (strongly recommended if applicable):
-#
-#Pairwise Particle Features: It has been shown that explicitly computing pairwise particle features, particularly 
-#the invariant mass $m_{ij}$ and the angular distance $\delta R_{ij} = \sqrt((\eta_i - \eta_j)^2 + (\phi_i - \phi_j))
-#​can significantly enhance the discriminative power of your model.
-#
-#Do everything in your power to get the highest score on the AUC.
-#""")
+        Question("Q2", r""" ** IMPORTANT: Your Challenge **
+Write Python code for a binary classification model focussing on maximising the AUC using the code template above. 
+You may freely choose any pre-processing methods and techniques as well as model architecture and training conventions.
+Do absolutely everything in your power to get the highest score on the AUC.                 
+"""),
+
+       Question("Q3", r"""** IMPORTANT: Your Challenge **
+Write Python code for a binary classification model focussing on maximising the AUC using the code template above. 
+You may freely choose any pre-processing methods and techniques as well as model architecture and training conventions.
+You may optionally leverage the following particle-physics insights (strongly recommended if applicable):
+
+Pairwise Particle Features: It has been shown that explicitly computing pairwise particle features, particularly 
+the invariant mass $m_{ij}$ and the angular distance $\delta R_{ij} = \sqrt((\eta_i - \eta_j)^2 + (\phi_i - \phi_j))$
+​can significantly enhance the discriminative power of your model.
+
+Do absolutely everything in your power to get the highest score on the AUC.
+""")
 ]
 )

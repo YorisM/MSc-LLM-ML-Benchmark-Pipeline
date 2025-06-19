@@ -1,0 +1,100 @@
+{
+  "LLMGeneration": {
+    "model": "meta-llama/llama-4-maverick",
+    "prompt_tokens": 2865,
+    "prompt_chars": 12088,
+    "response_tokens": 1095,
+    "response_chars": 4700,
+    "cost_usd": 0.0011727,
+    "generation_ms": 8479,
+    "code": "# 0. ---------- IMPORTS ----------\nimport torch\nimport torch.nn as nn\nimport torch.nn.functional as F\nfrom torch_geometric.data import Data, Batch\nfrom torch_geometric.nn import GraphConv, global_mean_pool\nimport numpy as np\nfrom sklearn.preprocessing import StandardScaler\n\n# 1. ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.scaler = StandardScaler()\n\n    def fit(self, events):\n        X = np.concatenate([np.column_stack([evt[\"hit_r\"], evt[\"hit_theta\"], evt[\"hit_z\"], evt[\"layer_id\"].astype(np.float32) / evt[\"layer_id\"].max()]) for evt in events])\n        self.scaler.fit(X)\n\n    def transform(self, X):\n        if isinstance(X, np.ndarray):\n            X = self.scaler.transform(X)\n        else:\n            X = self.scaler.transform(X.numpy())\n            X = torch.from_numpy(X).to(torch.float32)\n        return X\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# 2. ---------- MODEL ARCHITECTURE ----------\nclass HitClassifier(nn.Module):\n    def __init__(self, in_features):\n        super().__init__()\n        self.conv1 = GraphConv(in_features, 128)\n        self.conv2 = GraphConv(128, 128)\n        self.conv3 = GraphConv(128, 64)\n        self.fc = nn.Linear(64, 1)\n\n    def forward(self, batch):\n        hits, track_ids = zip(*batch)  # Unzip the batch into hits and track_ids\n        graphs = []\n        for hit, track_id in zip(hits, track_ids):\n            edge_index = self.create_edge_index(hit)\n            graph = Data(x=hit, edge_index=edge_index, y=track_id)\n            graphs.append(graph)\n        batch = Batch.from_data_list(graphs)\n        x = F.relu(self.conv1(batch.x, batch.edge_index))\n        x = F.relu(self.conv2(x, batch.edge_index))\n        x = F.relu(self.conv3(x, batch.edge_index))\n        x = global_mean_pool(x, batch.batch)\n        x = torch.sigmoid(self.fc(x))\n        return x\n\n    @staticmethod\n    def create_edge_index(hit):\n        # Simple edge creation: connect each hit to its nearest neighbor\n        # This is a placeholder; a more sophisticated method should be used\n        num_hits = hit.size(0)\n        edge_index = torch.zeros((2, num_hits - 1), dtype=torch.long)\n        for i in range(num_hits - 1):\n            edge_index[0, i] = i\n            edge_index[1, i] = i + 1\n        return edge_index\n\ndef make_model(in_features):\n    return HitClassifier(in_features)\n\n# 3. ---------- MODEL TRAINING ----------\nEPOCHS = 10\ndef train_model(model, train_loader, val_loader, epochs):\n    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')\n    model.to(device)\n    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)\n    criterion = nn.MSELoss()\n\n    train_loss, val_loss, train_acc, val_acc = [], [], [], []\n    for epoch in range(epochs):\n        model.train()\n        total_loss, total_correct = 0, 0\n        total_samples = 0\n        for batch in train_loader:\n            hits, track_ids = zip(*batch)\n            graphs = []\n            for hit, track_id in zip(hits, track_ids):\n                edge_index = HitClassifier.create_edge_index(hit)\n                graph = Data(x=hit.to(device), edge_index=edge_index.to(device), y=track_id.to(device))\n                graphs.append(graph)\n            batch = Batch.from_data_list(graphs).to(device)\n            optimizer.zero_grad()\n            output = model([(batch.x, batch.y)])\n            loss = criterion(output, batch.y.float().unsqueeze(-1))\n            loss.backward()\n            optimizer.step()\n            total_loss += loss.item() * batch.num_graphs\n            total_samples += batch.num_graphs\n\n        train_loss.append(total_loss / total_samples)\n\n        model.eval()\n        with torch.no_grad():\n            total_loss, total_correct = 0, 0\n            total_samples = 0\n            for batch in val_loader:\n                hits, track_ids = zip(*batch)\n                graphs = []\n                for hit, track_id in zip(hits, track_ids):\n                    edge_index = HitClassifier.create_edge_index(hit)\n                    graph = Data(x=hit.to(device), edge_index=edge_index.to(device), y=track_id.to(device))\n                    graphs.append(graph)\n                batch = Batch.from_data_list(graphs).to(device)\n                output = model([(batch.x, batch.y)])\n                loss = criterion(output, batch.y.float().unsqueeze(-1))\n                total_loss += loss.item() * batch.num_graphs\n                total_samples += batch.num_graphs\n            val_loss.append(total_loss / total_samples)\n\n        print(f'Epoch {epoch+1}, Train Loss: {train_loss[-1]}, Val Loss: {val_loss[-1]}')\n\n    return model, train_loss, val_loss, train_acc, val_acc",
+    "reasoning": "",
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "Outer_attempt": 2
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-06-16T09:14:37Z",
+    "PyLint": {
+      "passed": false,
+      "messages": [
+        {
+          "type": "error",
+          "module": "script_meta-llama_llama-4-maverick_1114_2",
+          "obj": "",
+          "line": 61,
+          "column": 0,
+          "endLine": 61,
+          "endColumn": 44,
+          "path": "outputs\\16-06\\TRACKFORMERS\\Q1\\script_meta-llama_llama-4-maverick_1114_2.py",
+          "symbol": "import-error",
+          "message": "Unable to import 'torch_geometric.data'",
+          "message-id": "E0401"
+        },
+        {
+          "type": "error",
+          "module": "script_meta-llama_llama-4-maverick_1114_2",
+          "obj": "",
+          "line": 62,
+          "column": 0,
+          "endLine": 62,
+          "endColumn": 58,
+          "path": "outputs\\16-06\\TRACKFORMERS\\Q1\\script_meta-llama_llama-4-maverick_1114_2.py",
+          "symbol": "import-error",
+          "message": "Unable to import 'torch_geometric.nn'",
+          "message-id": "E0401"
+        },
+        {
+          "type": "error",
+          "module": "script_meta-llama_llama-4-maverick_1114_2",
+          "obj": "_run",
+          "line": 192,
+          "column": 4,
+          "endLine": 192,
+          "endColumn": 44,
+          "path": "outputs\\16-06\\TRACKFORMERS\\Q1\\script_meta-llama_llama-4-maverick_1114_2.py",
+          "symbol": "assignment-from-no-return",
+          "message": "Assigning result of a function call, where the function has no return",
+          "message-id": "E1111"
+        }
+      ]
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-06-16T09:14:37Z",
+        "metrics": {
+          ".\\./outputs/16-06/TRACKFORMERS/Q1/script_meta-llama_llama-4-maverick_1114_2.py": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 198,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 198,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  }
+}

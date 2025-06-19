@@ -4,6 +4,7 @@ import os
 import logging
 from dotenv import load_dotenv
 from challenges.FOURTOPS.fourtops import fourtop_challenge
+from challenges.TRACKFORMERS.trackformers import trackformers_challenge
 
 # Load environment variables from the .env file
 load_dotenv()
@@ -16,7 +17,7 @@ OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
 # Configure logging
 LOG_FILE = "log.log"
-LOG_LEVEL = logging.INFO
+LOG_LEVEL = logging.DEBUG
 LOG_FORMAT = "%(asctime)s - %(filename)s - %(levelname)s - %(message)s"
 logging.basicConfig(
     filename=LOG_FILE,
@@ -25,14 +26,10 @@ logging.basicConfig(
 )
 
 # Models - Needs at least two models 
-models = ["openai/o3",
-          "openai/gpt-4o-mini",
-          "anthropic/claude-3.7-sonnet",
-          "google/gemini-2.5-pro-preview",
-          "meta-llama/llama-4-maverick",
-          "deepseek/deepseek-r1"] 
+models = ["openai/o3-pro"] 
 
         #"openai/o3",
+        #"openai/o3-pro",
         #"openai/gpt-4o-mini"
         #"anthropic/claude-3.7-sonnet",
         #"google/gemini-2.5-pro-preview",
@@ -40,7 +37,7 @@ models = ["openai/o3",
         #"deepseek/deepseek-r1"]
 
 # Number of attempts to retrieve correct response
-num_attempts = 3
+num_attempts = 2
 
 # Max Tokens
 MAX_TOKENS = 16*4096
@@ -57,7 +54,7 @@ MEMORY_LIMIT_GB = 0     #32
 PIDS_LIMIT      = 0     #1024
 
 # All the challenges in the pipeline
-challenges = [fourtop_challenge]
+challenges = [fourtop_challenge] #[trackformers_challenge] #
 
 # Docker Image
 DOCKER_IMAGE = "llm-script-sandbox:latest"

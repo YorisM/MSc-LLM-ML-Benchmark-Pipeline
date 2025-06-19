@@ -24,4 +24,4 @@ RUN chmod +x /usr/local/bin/train.sh
 USER sandbox
 ENTRYPOINT ["/usr/local/bin/train.sh"]
 
-# to build the image: docker build -f docker/Dockerfile.train -t llm-training-sandbox:latest .
+# to build the image        :   docker build -f docker/Dockerfile.train -t llm-training-sandbox:latest .

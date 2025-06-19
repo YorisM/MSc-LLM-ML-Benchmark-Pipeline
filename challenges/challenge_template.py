@@ -2,7 +2,7 @@
 
 from challenges.challenges import Challenge, Question
 
-fourtop_challenge = Challenge(
+CHALLENGE_NAME_challenge = Challenge(
     name = "",
 
     dataset = { 
@@ -45,7 +45,7 @@ fourtop_challenge = Challenge(
 
     questions = [
         Question("Q1", r""" ** Question **
-                 """)
+""")
 
 ]
 )

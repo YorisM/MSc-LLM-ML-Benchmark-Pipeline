@@ -1,0 +1,45 @@
+##################################################
+Configuration and statistics for this detector data set:
+
+*** Detector parameters ***
+    Detector id: 2023-09-11_114831
+    Detector dimension: 3D
+    Included sub-detectors: Short-strip, Long-strip, Barrel
+    Number of pixel sub-detector layers: 1
+    Number of short-strip sub-detector layers: 5
+    Number of long-strip sub-detector layers: 4
+    Number of barrel sub-detector layers: 4
+    Detector centre (r, theta, z): (0, 0, 0)
+    Distance between short-strip sub-detector layers over z: 1
+    Distance between long-strip sub-detector layers over z: 1
+    Distance between barrel sub-detector layers over r: 1
+    Pixel sub-detector outer radius: n/a
+    Short-strip sub-detector outer radius: 3
+    Long-strip sub-detector outer radius: 6
+    Barrel sub-detector outer radius: 4
+
+*** Experiment parameters ***
+    Experiment name: noisy-100k-events-10-to-50-tracks
+    Hit coordinate recordings: noisy
+    Number of events: 100000
+    Number of tracks per event [min, max]: [10, 50]
+    Track function type: linear
+    Track count aggregation: False
+    Hit recording probability: 100.00%
+
+*** Data set statistics ***
+    Number of generated events: 100000
+    Number of maximum expected tracks per event: 50
+    Number of total generated tracks: 4365969
+    Number of generated tracks per event [min, max]: [14, 50]
+    Number of generated tracks per event MEDIAN: 45.00
+    Number of generated tracks per event MEAN: 43.66
+    Number of generated tracks per event STANDARD DEVIATION: 5.78
+    Number of maximum expected hits per event: 450
+    Number of total recorded hits: 93978336
+    Number of recorded hits per event [min, max]: [270, 1341]
+    Number of recorded hits per event MEDIAN: 948.00
+    Number of recorded hits per event MEAN: 939.78
+    Number of recorded hits per event STANDARD DEVIATION: 161.36
+
+##################################################

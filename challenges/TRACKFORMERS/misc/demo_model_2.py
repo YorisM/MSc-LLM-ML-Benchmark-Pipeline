@@ -69,9 +69,6 @@ class TinyEncoder(nn.Module):
 
 # FitAccuracy
 def fit_accuracy(pred_label, true_tid):
-    """
-    TrackML-style: for each true track find best-matching predicted cluster.
-    """
     correct = 0
     for t in np.unique(true_tid):
         mask_true = true_tid == t
@@ -122,17 +119,21 @@ if __name__ == "__main__":
     args = parse()
     device = torch.device("cpu")
 
+    print(f"Loading data ...")
     train_evts = load_split(args.data_dir, args.tag, "train")
     val_evts   = load_split(args.data_dir, args.tag, "val")
     test_evts  = load_split(args.data_dir, args.tag, "test")
 
+    print(f"Building model ...")
     model = TinyEncoder().to(device)
     opt   = torch.optim.AdamW(model.parameters(), lr=args.lr)
 
+    print(f"Training model ...")
     for ep in range(1, args.epochs + 1):
         tr_loss = run_epoch(train_evts, model, opt)
         val_acc = evaluate(val_evts, model)
         print(f"E{ep:02d}  train_loss={tr_loss:.4f}  val_FitAcc={val_acc:.3f}")
 
+    print(f"Evaluating model ...")
     test_acc = evaluate(test_evts, model)
     print(f"\nFINAL  test_FitAccuracy = {test_acc:.3f}")

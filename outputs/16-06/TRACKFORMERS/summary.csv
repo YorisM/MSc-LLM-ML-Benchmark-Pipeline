@@ -1,0 +1,3 @@
+question,model,path,metrics_json,missing_files
+Q1,anthropic_claude-3.7-sonnet,outputs\16-06\TRACKFORMERS\Q1\anthropic_claude-3.7-sonnet\anthropic_claude-3.7-sonnet_1106_2_test_model.pkl,"{""accuracy"": 0.17765042979942694, ""FitAccuracy"": 0.6272510349251752}",*_manifest.sha256
+Q1,openai_o3-pro,outputs\16-06\TRACKFORMERS\Q1\openai_o3-pro\openai_o3-pro_1226_1_model.pkl,{},

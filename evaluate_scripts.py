@@ -1,178 +1,90 @@
 # evaluate_scripts.py
 
-# Imports
-import os, sys, importlib, importlib.util, glob, logging, torch, csv, time, argparse, pickle
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-
+import os, glob, logging, csv, time, argparse, json
 from pathlib import Path
-from typing import Tuple
-from torch.utils.data import DataLoader, TensorDataset
-from sklearn.metrics import accuracy_score, roc_curve, auc
+from typing import List, Tuple, Dict, Iterator
+from challenges.FOURTOPS.evaluate_fourtops import load_FOURTOPS_test, evaluate_FOURTOPS
+from challenges.TRACKFORMERS.evaluate_trackformers import load_TRACKFORMERS_test, evaluate_TRACKFORMERS
+from utils.utils import append_to_response_json
 
-from utils import append_to_response_json
-
-# - - - - - TODO - - - - - 
-#   fix test_FOURTOPS_outputs
-#   generalize evaluation for multiple challenges
-# - - - - - - - - - - - - -
-
-def _apply_preproc(preproc, x: torch.Tensor) -> torch.Tensor:
-    if callable(preproc):
-        return preproc(x)
-    if hasattr(preproc, "transform"):
-        return preproc.transform(x)
-    raise TypeError("Pre-processor is neither callable nor has .transform()")
-
-def _mount_llm_script(model_dir: str) -> None:
+def _iter_input_dir(input_dir: str | Path) -> Iterator[Path]:
     """
-    Import the LLM-generated script that lives next to the artefacts and
-    register it *also* as sys.modules['__main__'] so that
-    __main__.MyPreprocessor can be resolved during unpickling.
-    Safe to call more than once per process.
+    Yield every .../outputs/<DATE>/<CHALLENGE>/<QUESTION>/ directory that
+    lives under *input_dir*, regardless of whether the caller hands us
+    
+        ─ outputs/<DATE>/
+        ─ outputs/<DATE>/<CHALLENGE>/
+        ─ outputs/<DATE>/<CHALLENGE>/<QUESTION>/
+    
+    Any other depth raises ValueError.
     """
-    # find the script_<model>_*.py file
-    script_path = next(
-        f for f in os.listdir(model_dir)
-        if f.startswith("script_") and f.endswith(".py")
-    )
-    script_path = os.path.join(model_dir, script_path)
 
-    # If we already loaded *this* script, nothing to do
-    if "__main__" in sys.modules and getattr(sys.modules["__main__"], "__file__", None) == script_path:
-        return
+    root = Path(input_dir).resolve()
+    try:
+        out_idx = root.parts.index("outputs")
+    except ValueError:
+        raise ValueError(f"{root} is not inside an 'outputs' tree")
 
-    spec = importlib.util.spec_from_file_location("llm_script", script_path)
-    mod  = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)           # type: ignore[attr-defined]
+    # relative path depth after “outputs/”
+    depth = len(root.parts) - out_idx - 1
 
-    sys.modules["llm_script"] = mod        # real name
-    sys.modules["__main__"]   = mod        # alias used inside pickle
+    if depth == 1:                       # outputs/<DATE>
+        for ch in root.iterdir():
+            if ch.is_dir():
+                yield from _iter_input_dir(ch)
 
-def _initialize_artefacts(model_path: str):
-    model_dir = os.path.dirname(model_path)
+    elif depth == 2:                     # outputs/<DATE>/<CHALLENGE>
+        for q in root.iterdir():
+            if q.is_dir():
+                yield from _iter_input_dir(q)
 
-    # ❶ Make sure MyPreprocessor lives in sys.modules['__main__']
-    _mount_llm_script(model_dir)
+    elif depth == 3:                     # outputs/<DATE>/<CHALLENGE>/<QUESTION>
+        yield root
 
-    # ❷ Now unpickle safely
-    with open(model_path.replace("_model.pkl", "_preproc.pkl"), "rb") as f:
-        preproc = pickle.load(f)
-    with open(model_path, "rb") as f:
-        model = pickle.load(f)
+    else:
+        raise ValueError("Path depth must be 1-3 under 'outputs/'")
 
-    return model, preproc
+def find_models(date_str: str, challenge: str) -> List[Tuple[str, str, str]]:
+    """
+    Walks ./outputs/<date>/<challenge>/** and returns a list of
+    (question_id, model_folder_name, <path-to-model.pkl>) tuples.
+    """
 
-def find_FOURTOPS_models(date_str):
-    root = os.path.join("outputs", date_str, "FOURTOPS")
-    candidates = []
+    root = os.path.join("outputs", date_str, challenge)
+    candidates: List[Tuple[str, str, str]] = []
+
+    if not os.path.isdir(root):
+        logging.warning("Folder %s does not exist", root)
+        return candidates
+    
+    skip = {"Failed Dry-run Scripts", "StaticFail"}
+
     for qid in os.listdir(root):
         qpath = os.path.join(root, qid)
-        if not os.path.isdir(qpath) or qid == "Failed Dry‑run Scripts":
+        if qid in skip or not os.path.isdir(qpath):
             continue
-        if not os.path.isdir(qpath) or qid == "StaticFail":
-            continue
+        
         for m in os.listdir(qpath):
             mpath = os.path.join(qpath, m)
             if not os.path.isdir(mpath):
                 continue
-            # look for any *_scripted.pt
-            for pt in glob.glob(os.path.join(mpath, "*_model.pkl")):
-                candidates.append((qid, m, pt))
-    logging.info(f"Found FOURTOP model candidates: {candidates}")
+
+            for pkl in glob.glob(os.path.join(mpath, "*_model.pkl")):
+                candidates.append((qid, m, pkl))
+
+    logging.info(f"Found {challenge} model candidates: {candidates}")
     return candidates
 
-def load_FOURTOPS_test():
-    X = pd.read_csv('./challenges/FOURTOPS/data/X_test.csv',
-                          dtype=np.float32).to_numpy(copy=False)
-    Y = pd.read_csv('./challenges/FOURTOPS/data/Y_test.csv',
-                          dtype=np.int64).to_numpy(copy=False).ravel()
-    X = torch.from_numpy(X).float()
-    Y = torch.from_numpy(Y).long()
-    test_ds = TensorDataset(X, Y)
-    return (DataLoader(test_ds, batch_size=512, shuffle=False, num_workers=0))
-
-def evaluate_FOURTOPS(model_path: str, test_loader) \
-    -> Tuple[np.ndarray, np.ndarray, float, float]:
+def verify_outputs(date_str: str, challenge: str) -> Dict[str, Dict[str, List[str]]]:
     """
-    PARAMETERS
-    model_path  : path to `<MODEL>_model.pkl`
-    test_loader : DataLoader yielding (features, labels)
-
-    RETURNS
-    fpr, tpr : np.ndarray
-    auc      : float
-    acc      : float
+    Verify that each model folder under ./outputs/<date>/<challenge>/… 
+    contains all artefacts defined in *patterns*.
+    Returns {question_id -> {model_name -> [missing_patterns]}}.
     """
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    logging.info("Evaluating %s on %s", model_path, device)
-
-    model, preproc = _initialize_artefacts(model_path)
-    model = model.to(device)
-
-    # Helper to move arbitrarily nested tensors
-    def _to(t, dev):
-        if isinstance(t, torch.Tensor):
-            return t.to(dev)
-        elif isinstance(t, (tuple, list)):
-            return tuple(_to(x, dev) for x in t)
-        else:
-            raise TypeError("Unexpected type in batch:", type(t))
-
-    # Determine output mode
-    it  = iter(test_loader)
-    xb0, yb0 = next(it)
-    xb0, yb0 = _to(xb0, device), yb0.to(device)
-    xb0      = _apply_preproc(preproc, xb0)      # ← fixed: xb0 not xb
-    out0 = model(*xb0) if isinstance(xb0, (tuple, list)) else model(xb0)
-    out0 = out0.detach()
-
-    mn, mx = out0.min().item(), out0.max().item()
-    mode   = "prob" if 0.0 <= mn <= mx <= 1.0 else "logit"
-
-    if mode == "prob":
-        act = (lambda o: o[:, 1])                          if out0.ndim == 2 and out0.size(1) == 2 else \
-              (lambda o: o.squeeze())
-    else:  # logits
-        act = (lambda o: torch.sigmoid(o).squeeze(1))      if out0.ndim == 2 and out0.size(1) == 1 else \
-              (lambda o: torch.softmax(o, 1)[:, 1])        if out0.ndim == 2 and out0.size(1) == 2 else \
-              (lambda o: torch.sigmoid(o))
-    logging.info("Output mode: %s", mode)
-
-    # Collect Predictions
-    all_probs  = act(out0).cpu().numpy().tolist()
-    all_labels = yb0.cpu().numpy().tolist()
-
-    with torch.no_grad():
-        for xb, yb in it:
-            xb, yb = _to(xb, device), yb.to(device)
-            xb = _apply_preproc(preproc, xb)
-            logits = model(*xb) if isinstance(xb,(tuple,list)) else model(xb)
-            all_probs.extend(act(logits).cpu().numpy().tolist())
-            all_labels.extend(yb.cpu().numpy().tolist())
-
-    # Metrics
-    fpr, tpr, _ = roc_curve(all_labels, all_probs)
-    roc_auc     = auc(fpr, tpr)
-    acc         = accuracy_score(all_labels,
-                                 (np.array(all_probs) >= 0.5).astype(int))
-
-    logging.info("Evaluation finished: AUC %.4f  ACC %.4f", roc_auc, acc)
-    return fpr, tpr, roc_auc, acc
-
-def test_FOURTOPS_outputs(date_str: str):
-    """
-    Walks ./outputs/{date_str}/FOURTOPS/ and, for every question sub-folder
-    (except “Failed Dry-run Scripts”), ensures each model folder contains a file
-    that matches the seven wildcard patterns below.
-
-    Returns dict:  {question_id -> {model_name -> list_of_missing_patterns}}
-    """
-
-    root = os.path.join("outputs", date_str, "FOURTOPS")
+    root = os.path.join("outputs", date_str, challenge)
     results: dict[str, dict[str, list[str]]] = {}
+    skip = {"Failed Dry-run Scripts", "StaticFail"}
 
     if not os.path.isdir(root):
         raise FileNotFoundError(f"Folder {root!r} does not exist")
@@ -183,30 +95,25 @@ def test_FOURTOPS_outputs(date_str: str):
         "*_preproc.pkl",
         "*_loss.png",
         "*_accuracy.png",
-        "*_ROC.png",
         "*_manifest.sha256"
     ]
 
-    for qid in os.listdir(root):                                    # question folders
+    for qid in os.listdir(root):
         qpath = os.path.join(root, qid)
-        if not os.path.isdir(qpath) or qid == "Failed Dry-run Scripts":
-            continue
-        if not os.path.isdir(qpath) or qid == "StaticFail":
+        if qid in skip or not os.path.isdir(qpath):
             continue
 
         results[qid] = {}
-        for model_name in os.listdir(qpath):                        # model folders
+        for model_name in os.listdir(qpath):
             mpath = os.path.join(qpath, model_name)
-            if not os.path.isdir(mpath) or model_name == "Failed Dry-run Scripts":
-                continue
-            if not os.path.isdir(mpath) or model_name == "StaticFail":
+            if model_name in skip or not os.path.isdir(mpath):
                 continue
 
-            # check each glob-pattern
             missing = [
                 pat for pat in PATTERNS
-                if len(glob.glob(os.path.join(mpath, pat))) == 0
+                if not glob.glob(os.path.join(mpath, pat))
             ]
+            results[qid][model_name] = missing
 
             results[qid][model_name] = missing
             if missing:
@@ -215,52 +122,57 @@ def test_FOURTOPS_outputs(date_str: str):
                 logging.info("Date %s - %s - Model %s all present",  date_str, qid, model_name)
     return results
 
-
 challenge_evaluators = {
     "FOURTOPS": dict(
-        find_models=find_FOURTOPS_models,
-        load_test=load_FOURTOPS_test,
-        evaluate=evaluate_FOURTOPS,
-        test_outputs=test_FOURTOPS_outputs
+        find_models = find_models,
+        load_test   = load_FOURTOPS_test,
+        evaluate    = evaluate_FOURTOPS,
+        test_outputs= verify_outputs
     ),
 
-    # future ones go here...
+    "TRACKFORMERS": dict(
+        find_models = find_models,
+        load_test   = load_TRACKFORMERS_test,
+        evaluate    = evaluate_TRACKFORMERS,
+        test_outputs= verify_outputs
+    )
 }
 
 def evaluate_results(input_dir):
-    # derive date and challenge from path: ./outputs/<date>/<challenge>/<question>/
-    parts      = Path(input_dir).parts
-    date_str, challenge = parts[-3], parts[-2]
+    # derive date and challenge from input dir
+    for q_dir in _iter_input_dir(input_dir):
+        parts = q_dir.parts
+        date_str, challenge = parts[-3], parts[-2]
 
-    if challenge not in challenge_evaluators:
-        logging.error("No evaluator defined for challenge %s", challenge)
-        return
+        if challenge not in challenge_evaluators:
+            logging.error("No evaluator defined for challenge %s", challenge)
+            continue
 
     # 1) load test data
     test_loader = challenge_evaluators[challenge]["load_test"]()
 
     # 2) find scripted models
-    candidates  = challenge_evaluators[challenge]["find_models"](date_str)
+    candidates  = challenge_evaluators[challenge]["find_models"](date_str, challenge)
 
-    # 3) run all evaluate_FOURTOPS (or whatever) and stash results + write JSON block
-    eval_results = []   # will hold tuples (qid, model_name, pt_path, fpr, tpr, auc, acc)
+    # 3) run all evaluate_<challenge> fuinctions and stash results + write JSON block
+    eval_results = []   # will hold metrics
     for qid, model_name, pt_path in candidates:
+        model_dir = os.path.dirname(pt_path) 
         t0 = time.perf_counter() # start timer
+
         try:
-            fpr, tpr, roc_auc, acc = \
-                challenge_evaluators[challenge]["evaluate"](pt_path, test_loader)
+            metrics = challenge_evaluators[challenge]["evaluate"](pt_path, test_loader)
             eval_ok = True
         except Exception as e:
             logging.error("Evaluation failed for %s: %s", pt_path, e)
-            roc_auc = acc = None
+            metrics = {}
             eval_ok = False
-        eval_time = time.perf_counter() - t0 # end timer
+        eval_time = time.perf_counter() - t0
 
         # Write Evaluation block response JSON
-        model_dir = os.path.dirname(pt_path)
         try:
             json_file = next(p for p in os.listdir(model_dir)
-                             if p.startswith("response_") and p.endswith(".json"))
+                            if p.startswith("response_") and p.endswith(".json"))
             json_path = os.path.join(model_dir, json_file)
 
             append_to_response_json(
@@ -268,80 +180,46 @@ def evaluate_results(input_dir):
                 "Evaluation",
                 {
                     "passed": eval_ok,
-                    "metrics": {"auc": roc_auc, "accuracy": acc},
+                    "metrics": metrics,
                     "runtime_s": round(eval_time, 2)
                 }
             )
         except StopIteration:
             logging.warning("No response_…json found in %s; skipping append", model_dir)
-
-        eval_results.append((qid, model_name, pt_path, fpr, tpr, roc_auc, acc))
-        logging.info("Evaluated %s/%s → acc=%.3f auc=%.3f", qid, model_name, acc, roc_auc)
+        
+        eval_results.append((qid, model_name, pt_path, metrics))
 
     # 4) now that all models have been evaluated, check for missing outputs once
-    missing = challenge_evaluators[challenge]["test_outputs"](date_str)
+    missing = challenge_evaluators[challenge]["test_outputs"](date_str, challenge)
 
     # 5) write out your summary.csv, including missing‐files in the last column
     summary_path = os.path.join("outputs", date_str, challenge, "summary.csv")
     with open(summary_path, "w", newline="") as csvf:
         writer = csv.writer(csvf)
-        writer.writerow(["question","model","accuracy","auc","path","missing_files"])
-        for qid, model_name, pt_path, fpr, tpr, roc_auc, acc in eval_results:
+        writer.writerow(["question","model","path","metrics_json","missing_files"])
+        for qid, model_name, pt_path, metrics in eval_results:
             miss_list = missing.get(qid, {}).get(model_name, [])
             writer.writerow([
                 qid,
                 model_name,
-                f"{acc:.4f}",
-                f"{roc_auc:.4f}",
                 pt_path,
+                json.dumps(metrics, allow_nan = False),
                 ",".join(miss_list)
             ])
 
-            # save ROC plot
-            outdir   = os.path.dirname(pt_path)
-            basename = os.path.splitext(os.path.basename(pt_path))[0]
-            plt.figure()
-            plt.plot(fpr, tpr, label=f"AUC={roc_auc:.3f}")
-            plt.xlabel("FPR"); plt.ylabel("TPR")
-            plt.title(f"{qid}-{model_name} ROC")
-            plt.legend()
-            plt.savefig(os.path.join(outdir, f"{basename}_ROC.png"))
-            plt.close()
-
     logging.info("Summary written to %s", summary_path)
 
-def main(date_str="17-04"):
-    test_loader = load_FOURTOPS_test()
-    scripts = find_FOURTOPS_models(date_str)
-
-    summary_path = f"outputs/{date_str}/FOURTOPS/summary.csv"
-    with open(summary_path, "w", newline="") as csvf:
-        writer = csv.writer(csvf)
-        writer.writerow(["question","model","accuracy","auc","scripted_pt"])
-
-        for qid, model_name, input_dir in scripts:
-            fpr, tpr, roc_auc, acc = evaluate_FOURTOPS(input_dir, test_loader)
-            writer.writerow([qid, model_name, f"{acc:.4f}", f"{roc_auc:.4f}", input_dir])
-
-            # save ROC plot right next to the .pt
-            outdir = os.path.dirname(input_dir)
-            basename = os.path.splitext(os.path.basename(input_dir))[0]
-            plt.figure()
-            plt.plot(fpr, tpr, label=f"AUC={roc_auc:.3f}")
-            plt.xlabel("False Positive Rate")
-            plt.ylabel("True Positive Rate")
-            plt.title(f"{qid}-{model_name} ROC")
-            plt.legend()
-            plt.savefig(os.path.join(outdir, f"{basename}_ROC.png"))
-            plt.close()
-
-            logging.info("Evaluated %s/%s → acc=%.3f auc=%.3f",
-                         qid, model_name, acc, roc_auc)
-
-    logging.info("Summary written to %s", summary_path)
+def main(date_str: str, challenge: str):
+    input_root = os.path.join("outputs", date_str, challenge)
+    if not os.path.isdir(input_root):
+        logging.error("Folder %s does not exist", input_root)
+        return
+    evaluate_results(input_root)
 
 if __name__=="__main__":
     p = argparse.ArgumentParser()
-    p.add_argument("--date", default=time.strftime("%d-%m"))
+    p.add_argument("--date",      default=time.strftime("%d-%m"))
+    p.add_argument("--challenge", "-c", default="FOURTOPS",
+                   choices=["FOURTOPS", "TRACKFORMERS"])
     args = p.parse_args()
-    main(args.date)
+    main(args.date, args.challenge)
