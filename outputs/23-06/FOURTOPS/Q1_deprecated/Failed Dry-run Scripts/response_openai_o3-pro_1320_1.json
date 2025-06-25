@@ -1,0 +1,70 @@
+{
+  "LLMGeneration": {
+    "model": "openai/o3-pro",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "prompt_tokens": 3657,
+    "prompt_chars": 14648,
+    "response_tokens": 4748,
+    "response_chars": 7660,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.022649,
+    "generation_ms": 197551,
+    "code": "# <start code template>\n# 0. ---------- IMPORTS ----------\n# NOTE: Some imports (torch, nn, numpy, DataLoader) are already available (see prefix).\n# Only import extra std-lib modules, torch, scipy, sklearn (sub-)modules you actually use.\nimport math\nfrom typing import Optional, List\n\n# 2. ---------- PRE-PROCESSING ----------\nclass MyPreprocessor:\n    \"\"\"\n    Simple feature-engineering + standardisation pre-processor.\n\n    Added features (per event):\n        1. n_obj          – number of reconstructed objects (Energy > 0)\n        2. sum_E          – scalar sum of objects' energies\n        3. sum_pT         – scalar sum of transverse momenta\n        4. mean_abs_eta   – mean absolute pseudo-rapidity of present objects\n    Final feature size  = 92 + 4 = 96\n    \"\"\"\n\n    def __init__(self):\n        # Fitted statistics\n        self.mean: Optional[torch.Tensor] = None  # (96,)\n        self.std:  Optional[torch.Tensor] = None  # (96,)\n\n    # ---------- internal helpers ----------\n    @staticmethod\n    def _add_features(X: torch.Tensor) -> torch.Tensor:\n        \"\"\"\n        X: (N,92)  FloatTensor\n        returns (N,96)\n        \"\"\"\n        # ensure float32\n        X = X.float()\n\n        # Slice views ------------------------------------------------------------------\n        energies = X[:, 3::5]                                  # (N,18)  energies\n        pTs      = X[:, 4::5]                                  # (N,18)  pT\n        etas     = X[:, 5::5]                                  # (N,18)  eta\n\n        mask      = (energies > 0).float()                     # (N,18)  1 if object present\n        n_obj     = mask.sum(dim=1, keepdim=True)              # (N,1)\n        sum_E     = energies.sum(dim=1, keepdim=True)          # (N,1)\n        sum_pT    = pTs.sum(dim=1, keepdim=True)               # (N,1)\n        mean_eta  = (etas.abs() * mask).sum(dim=1, keepdim=True) / (n_obj + 1e-6)  # (N,1)\n\n        derived = torch.cat([n_obj, sum_E, sum_pT, mean_eta], dim=1)  # (N,4)\n        return torch.cat([X, derived], dim=1)                          # (N,96)\n\n    # ---------- API required by harness ----------\n    @staticmethod\n    def _collate_fn(batch: list):\n        # fall back to default collate\n        return None\n\n    def make_loader_cfg(self):\n        # Slightly larger batch – helps GPU throughput but still memory-safe on CPU.\n        return {\"batch_size\": 1024}\n\n    def fit(self, X, y=None):\n        \"\"\"\n        Compute per-feature mean/std on the training set.\n        \"\"\"\n        with torch.no_grad():\n            X_full = self._add_features(X)                     # (N,96)\n            self.mean = X_full.mean(dim=0)                     # (96,)\n            self.std  = X_full.std(dim=0)                      # (96,)\n            self.std[self.std < 1e-6] = 1.0                    # avoid division by zero\n        return self\n\n    def transform(self, X):\n        \"\"\"\n        Standardise using statistics from fit().\n        \"\"\"\n        X_full = self._add_features(X)                         # (N,96)\n        X_norm = (X_full - self.mean) / self.std               # (N,96)\n        return X_norm                                          \n\n    def fit_transform(self, X, y=None):\n        self.fit(X, y)\n        return self.transform(X)\n\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# 2. ---------- MODEL DEFINITION ----------\nclass BinaryClassifier(nn.Module):\n    def __init__(self, sample_object: torch.Tensor):\n        \"\"\"\n        sample_object: Tensor of shape (B, F) or (F,)\n        \"\"\"\n        super().__init__()\n        input_dim = sample_object.shape[-1]  # F = 96\n\n        self.net = nn.Sequential(                       # Output shapes in comments (batch, *)\n            nn.Linear(input_dim, 128),                  # -> (B,128)\n            nn.BatchNorm1d(128),\n            nn.ReLU(),\n            nn.Dropout(0.30),\n\n            nn.Linear(128, 64),                         # -> (B,64)\n            nn.BatchNorm1d(64),\n            nn.ReLU(),\n            nn.Dropout(0.30),\n\n            nn.Linear(64, 32),                          # -> (B,32)\n            nn.BatchNorm1d(32),\n            nn.ReLU(),\n\n            nn.Linear(32, 1)                            # -> (B,1)\n        )\n\n    def forward(self, x: torch.Tensor):\n        logits = self.net(x)                            # (B,1)\n        return logits.squeeze(-1)                       # (B,)\n\ndef make_model(example_object):\n    return BinaryClassifier(example_object)\n\n# 3. ---------- MODEL TRAINING ----------\nEPOCHS = 12   # Feel-good default – early stopping will cap if not useful.\n\ndef _epoch_run(model, loader, criterion, device, train: bool, optimizer=None):\n    \"\"\"\n    Utility to run one full epoch in train or eval mode.\n    Returns avg_loss, avg_acc\n    \"\"\"\n    if train:\n        model.train()\n    else:\n        model.eval()\n\n    total_loss = 0.0\n    total_correct = 0\n    total_samples = 0\n\n    with torch.set_grad_enabled(train):\n        for xb, yb in loader:\n            xb = xb.to(device).float()                  # (B,F)\n            yb = yb.to(device).float()                 # (B,)\n\n            logits = model(xb)                          # (B,)\n            loss   = criterion(logits, yb)\n\n            if train:\n                optimizer.zero_grad(set_to_none=True)\n                loss.backward()\n                # gradient clipping for stability\n                torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)\n                optimizer.step()\n\n            total_loss     += loss.item() * yb.size(0)\n            preds           = (torch.sigmoid(logits) > 0.5).long()\n            total_correct  += (preds == yb.long()).sum().item()\n            total_samples  += yb.size(0)\n\n    avg_loss = total_loss / max(1, total_samples)\n    avg_acc  = total_correct / max(1, total_samples)\n    return avg_loss, avg_acc\n\n\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    \"\"\"\n    Standard training loop with early stopping on validation loss.\n    Returns:\n        trained_model, train_loss_history, val_loss_history, train_acc_history, val_acc_history\n    \"\"\"\n    device = torch.device(\"cuda\" if torch.cuda.is_available() else \"cpu\")\n    model.to(device)\n\n    criterion  = nn.BCEWithLogitsLoss()\n    optimizer  = torch.optim.AdamW(model.parameters(), lr=3e-4, weight_decay=1e-4)\n    scheduler  = torch.optim.lr_scheduler.ReduceLROnPlateau(\n                    optimizer, mode=\"min\", factor=0.5, patience=2, verbose=False)\n\n    patience = 4\n    best_val_loss = math.inf\n    epochs_no_improve = 0\n\n    # Histories\n    tr_loss_hist: List[float] = []\n    va_loss_hist: List[float] = []\n    tr_acc_hist : List[float] = []\n    va_acc_hist : List[float] = []\n\n    for epoch in range(1, epochs + 1):\n        train_loss, train_acc = _epoch_run(model, train_loader, criterion, device,\n                                           train=True, optimizer=optimizer)\n        val_loss,   val_acc   = _epoch_run(model, val_loader,   criterion, device,\n                                           train=False)\n\n        scheduler.step(val_loss)\n\n        tr_loss_hist.append(train_loss)\n        va_loss_hist.append(val_loss)\n        tr_acc_hist.append(train_acc)\n        va_acc_hist.append(val_acc)\n\n        # Early stopping\n        if val_loss + 1e-5 < best_val_loss:\n            best_val_loss = val_loss\n            epochs_no_improve = 0\n        else:\n            epochs_no_improve += 1\n            if epochs_no_improve >= patience:\n                break  # Stop training\n\n    return model, tr_loss_hist, va_loss_hist, tr_acc_hist, va_acc_hist\n\n# IMPORTANT: DO NOT execute the pipeline here – the harness will do that.\n# <end code template>",
+    "reasoning": "",
+    "Outer_attempt": 1
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-06-23T11:20:34Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-06-23T11:20:34Z",
+        "metrics": {
+          ".\\./outputs/23-06/FOURTOPS/Q1/script_openai_o3-pro_1320_1.py": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 269,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 269,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2025-06-23T11:20:56Z",
+    "passed": false,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/23-06/FOURTOPS/Q1/script_openai_o3-pro_1320_1.py\nargv2=--dryrun\n",
+      "stderr": "Traceback (most recent call last):\n  File \"/workspace/outputs/23-06/FOURTOPS/Q1/script_openai_o3-pro_1320_1.py\", line 373, in <module>\n    _run(dryrun=\"--dryrun\" in sys.argv)\n    ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/outputs/23-06/FOURTOPS/Q1/script_openai_o3-pro_1320_1.py\", line 321, in _run\n    example_sample = first_batch[0]\n                     ~~~~~~~~~~~^^^\nTypeError: 'NoneType' object is not subscriptable\n"
+    },
+    "return_code": 1
+  }
+}

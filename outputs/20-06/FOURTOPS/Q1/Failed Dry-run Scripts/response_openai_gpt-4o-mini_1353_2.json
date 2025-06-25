@@ -1,0 +1,70 @@
+{
+  "LLMGeneration": {
+    "model": "openai/gpt-4o-mini",
+    "endpoint": "https://openrouter.ai/api/v1/completions",
+    "prompt_tokens": 3660,
+    "prompt_chars": 14641,
+    "response_tokens": 1076,
+    "response_chars": 4421,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 4.629e-05,
+    "generation_ms": 17194,
+    "code": "# 0. ---------- IMPORTS ----------\nfrom sklearn.metrics import roc_auc_score\nfrom torch import optim\n\n# 2. ---------- PRE-PROCESSING ----------\nclass MyPreprocessor:\n\n    def __init__(self):\n        self.mean = None\n        self.std = None\n\n    def _raw_reshape(self, X):           \n        return X # Returns identify by default\n\n    @staticmethod\n    def _collate_fn(batch: list):\n        return None # Return 'None' to fall back on default collate function.\n\n    def make_loader_cfg(self):\n        return {\n            \"loader_class\": \"torch.utils.data.DataLoader\",\n            \"collate_fn\": \"self._collate_fn\",\n            \"batch_size\": 512,\n            \"shuffle\": True,\n            \"num_workers\": 0\n        }\n\n    def fit(self, X, y=None):\n        self.mean = X.mean(dim=0)  # Calculate mean (1D tensor of shape [92])\n        self.std = X.std(dim=0)    # Calculate standard deviation (1D tensor of shape [92])\n        return self\n\n    def transform(self, X):\n        X_normalized = (X - self.mean) / self.std  # Normalize the data\n        return X_normalized # must return an indexable, picklable object\n\n    def fit_transform(self, X, y=None):\n        self.fit(X, y)\n        return self.transform(X)\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# 2. ---------- MODEL DEFINITION ----------\nclass BinaryClassifier(nn.Module):\n    def __init__(self, sample_object):\n        super().__init__()\n        input_size = sample_object.shape[1]  # 92 features\n        self.fc1 = nn.Linear(input_size, 128) # (batch_size, 92) -> (batch_size, 128)\n        self.fc2 = nn.Linear(128, 64)         # (batch_size, 128) -> (batch_size, 64)\n        self.fc3 = nn.Linear(64, 1)           # (batch_size, 64) -> (batch_size, 1)\n        self.relu = nn.ReLU()\n        self.sigmoid = nn.Sigmoid()\n\n    def forward(self, x):\n        x = self.fc1(x)                       # (batch_size, 92) -> (batch_size, 128)\n        x = self.relu(x)\n        x = self.fc2(x)                       # (batch_size, 128) -> (batch_size, 64)\n        x = self.relu(x)\n        x = self.fc3(x)                       # (batch_size, 64) -> (batch_size, 1)\n        return self.sigmoid(x)                # (batch_size, 1)\n\ndef make_model(example_object):\n    return BinaryClassifier(example_object)\n\n# 3. ---------- MODEL TRAINING ----------\nEPOCHS = 20   # Increased epochs to allow better training\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    criterion = nn.BCELoss()      # Binary Cross Entropy Loss\n    optimizer = optim.Adam(model.parameters(), lr=0.001)  # Adam optimizer\n\n    train_loss_history, val_loss_history = [], []\n    auroc_train, auroc_val = [], []\n\n    for epoch in range(epochs):\n        model.train()  # Set model to training mode\n        train_loss = 0.0\n\n        for inputs, labels in train_loader:\n            optimizer.zero_grad()  # Zero the gradients\n            outputs = model(inputs).squeeze()  # Forward pass\n            loss = criterion(outputs, labels.float())\n            loss.backward()  # Backward pass\n            optimizer.step()  # Update weights\n\n            train_loss += loss.item() * inputs.size(0)  # Accumulate loss\n\n        epoch_train_loss = train_loss / len(train_loader.dataset)\n        train_loss_history.append(epoch_train_loss)\n\n        # Validation\n        model.eval()  # Set model to evaluation mode\n        val_loss = 0.0\n        predictions, true_labels = [], []\n\n        with torch.no_grad():\n            for inputs, labels in val_loader:\n                outputs = model(inputs).squeeze()  # Forward pass\n                loss = criterion(outputs, labels.float())\n                val_loss += loss.item() * inputs.size(0)\n\n                predictions.extend(outputs.cpu().numpy())  # Collect predictions\n                true_labels.extend(labels.cpu().numpy())    # Collect true labels\n\n        epoch_val_loss = val_loss / len(val_loader.dataset)\n        val_loss_history.append(epoch_val_loss)\n\n        # Calculate AUC\n        train_auc = roc_auc_score(labels.cpu(), predictions)\n        val_auc = roc_auc_score(true_labels, predictions)\n        auroc_train.append(train_auc)\n        auroc_val.append(val_auc)\n\n        print(f'Epoch {epoch+1}/{epochs}, Train Loss: {epoch_train_loss:.4f}, Val Loss: {epoch_val_loss:.4f}, Train AUC: {train_auc:.4f}, Val AUC: {val_auc:.4f}')\n\n    return model, train_loss_history, val_loss_history, auroc_train, auroc_val",
+    "reasoning": "",
+    "Outer_attempt": 2
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-06-20T11:53:28Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-06-20T11:53:28Z",
+        "metrics": {
+          ".\\./outputs/20-06/FOURTOPS/Q1/script_openai_gpt-4o-mini_1353_2.py": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 201,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 201,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2025-06-20T11:53:49Z",
+    "passed": false,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/20-06/FOURTOPS/Q1/script_openai_gpt-4o-mini_1353_2.py\nargv2=--dryrun\n",
+      "stderr": "Traceback (most recent call last):\n  File \"/workspace/outputs/20-06/FOURTOPS/Q1/script_openai_gpt-4o-mini_1353_2.py\", line 277, in <module>\n    _run(dryrun=\"--dryrun\" in sys.argv)\n    ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/outputs/20-06/FOURTOPS/Q1/script_openai_gpt-4o-mini_1353_2.py\", line 225, in _run\n    example_sample = first_batch[0]\n                     ~~~~~~~~~~~^^^\nTypeError: 'NoneType' object is not subscriptable\n"
+    },
+    "return_code": 1
+  }
+}

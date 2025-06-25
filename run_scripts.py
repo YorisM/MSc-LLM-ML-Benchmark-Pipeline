@@ -5,9 +5,10 @@ import os, sys, config, subprocess, logging, time, argparse, psutil, json
 import pandas as pd
 
 from tqdm import tqdm
+from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from utils.utils import append_to_response_json
+from utils.utils import append_to_response_json, iter_input_dir, SKIP_DIRS
 
 # Execution Flow
 # (main.py)  ─▶ execute_scripts_in_batch(...)
@@ -42,17 +43,16 @@ def naive_safety_check(script_path):
     logging.info("Successfully passed naive safety check.")    
     return True
 
-def collect_valid_scripts(base_folder):
-    scripts = []
-    for root, _, files in os.walk(base_folder):
-        if os.path.basename(root) == "Failed Dry-run Scripts":
-            continue
-        elif os.path.basename(root) == "StaticFail":
-            continue
-        for f in files:
-            if f.endswith(".py"):
-                scripts.append(os.path.join(root, f))
-    logging.info(f"Collected valid scripts for execution: {scripts}")
+def _find_scripts(base_folder: str | Path) -> list[str]:
+    scripts: list[str] = []
+
+    for q_dir in iter_input_dir(base_folder):
+        for py in q_dir.rglob("*.py"):
+            if py.parent.name in SKIP_DIRS:
+                continue
+            scripts.append(str(py))
+
+    logging.info("Collected %d valid scripts for execution", len(scripts))
     return scripts
 
 def execute_script(
@@ -109,6 +109,9 @@ def execute_script(
             "--security-opt", f"seccomp=docker/seccomp_profile.json",
             "-v", f"{mount_src}:/workspace:rw",
             "-v", f"{mount_src}/challenges/FOURTOPS/data:/data:ro",
+            "-e", f"DRYRUN_TIMEOUT_S={config.DRYRUN_TIMEOUT_S}",
+            "-e", f"TRAIN_TIMEOUT_S={config.TRAIN_TIMEOUT_S}",
+            "-e", f"EVAL_TIMEOUT_S={config.EVAL_TIMEOUT_S}",
             "-w", "/workspace",
             "llm-training-sandbox:latest",
             rel_script,
@@ -214,7 +217,7 @@ def execute_scripts_in_batch(base_folder, max_workers=1, *, dryrun=False, use_do
     Returns list of results.
     """
 
-    scripts = collect_valid_scripts(base_folder)
+    scripts = _find_scripts(base_folder)
     logging.info("Found %d scripts to run under %s", len(scripts), base_folder)
     results = []
 

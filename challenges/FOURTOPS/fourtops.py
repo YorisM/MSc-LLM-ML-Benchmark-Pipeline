@@ -71,54 +71,66 @@ negative classes. The higher the score the better.
     prefix = r"""
 # ----------------  START HARNESS WRAPPER PREFIX (FOR CONTEXT)  ---------------- 
 # Environment: Python 3.12, PyTorch 2.6.0, Torch_Geometric 2.6.1, NumPy 2.2.3, SciPy v1.15.2, SciKit-Learn 1.6.1
-import os, sys, pickle, torch, torch_geometric, gc, json
+import os, sys, pickle, torch, torch_geometric, gc, json, importlib
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from torch import nn
 from torch.utils.data import Dataset, DataLoader
-from sklearn.metrics import roc_auc_score, accuracy_score
 
 torch.manual_seed(42)                        
 os.environ["PYTHONHASHSEED"] = "42"
 SCRIPT_DIR = os.path.dirname(os.path.abspath(sys.argv[0]))
-
+                        
 DATASET = {dataset_dict}
                        
 def load_data():
-    X_train = pd.read_csv('./challenges/FOURTOPS/data/X_train.csv',
-                          dtype=np.float32).to_numpy(copy=False)
-    Y_train = pd.read_csv('./challenges/FOURTOPS/data/Y_train.csv',
-                          dtype=np.int64 ).to_numpy(copy=False).ravel()
-    X_val   = pd.read_csv('./challenges/FOURTOPS/data/X_val.csv',
-                          dtype=np.float32).to_numpy(copy=False)
-    Y_val   = pd.read_csv('./challenges/FOURTOPS/data/Y_val.csv',
-                          dtype=np.int64 ).to_numpy(copy=False).ravel()
+    X_train = pd.read_csv(DATASET["X_train"], dtype=np.float32).to_numpy(copy=False)
+    Y_train = pd.read_csv(DATASET["Y_train"], dtype=np.int64).to_numpy(copy=False).ravel()
+    X_val   = pd.read_csv(DATASET["X_val"], dtype=np.float32).to_numpy(copy=False)
+    Y_val   = pd.read_csv(DATASET['Y_val'], dtype=np.int64).to_numpy(copy=False).ravel()
 
     gc.collect()
 
-    return (torch.from_numpy(X_train),
-            torch.from_numpy(Y_train),
-            torch.from_numpy(X_val),
-            torch.from_numpy(Y_val))
+    return (torch.from_numpy(X_train), torch.from_numpy(Y_train),
+            torch.from_numpy(X_val), torch.from_numpy(Y_val))
 
-class PairDataset(torch.utils.data.Dataset):
+class PairDataset(Dataset):
     def __init__(self, x, y):
         self.x = x
         self.y = y
+
     def __len__(self):
         return len(self.y)
+        
     def __getitem__(self, idx):
-        if isinstance(self.x, (tuple, list)):
+    
+        if isinstance(self.x, (tuple, list)) and all(torch.is_tensor(t) for t in self.x):
             return (tuple(t[idx] for t in self.x), self.y[idx])
         else:
-            return (self.x[idx], self.y[idx])      
+            return (self.x[idx], self.y[idx])
 
-def make_loaders(X_train, Y_train, X_val, Y_val, batch=512):
-    train_ds = PairDataset(X_train, Y_train)
-    val_ds   = PairDataset(X_val , Y_val)
-    return (DataLoader(train_ds, batch_size=batch, shuffle=True,  num_workers=0),
-            DataLoader(val_ds,   batch_size=batch, shuffle=False, num_workers=0))
+def _make_dataset(x, y):
+    custom = globals().get("make_dataset", None)
+    if callable(custom):
+        ds = custom(x, y)
+        if ds is not None:
+            return ds
+    return PairDataset(x, y)
+
+def make_loaders(X_train, Y_train, X_val, Y_val, *, batch=512, collate_fn=None, loader_cls=None):
+    train_ds = _make_dataset(X_train, Y_train)
+    val_ds   = _make_dataset(X_val , Y_val)
+
+    if loader_cls is None: 
+        loader_cls = DataLoader
+
+    train_ld = loader_cls(train_ds, batch_size=batch, shuffle=True, num_workers=0, 
+                        collate_fn=collate_fn)
+    val_ld   = loader_cls(val_ds, batch_size=batch, shuffle=False, num_workers=0,
+                        collate_fn=collate_fn)
+
+    return train_ld, val_ld
 
 # ----------------  END HARNESS WRAPPER PREFIX (FOR CONTEXT)  ----------------                        
 # -------------------------- START OF LLM BLOCK ------------------------------
@@ -131,29 +143,21 @@ def make_loaders(X_train, Y_train, X_val, Y_val, batch=512):
 # Only import extra std-lib modules, torch, scipy, sklearn (sub-)modules you actually use.
 # <LLM: Import modules>
 
-# 1. ---------- PRE-PROCESSING ----------
+# 2. ---------- PRE-PROCESSING ----------
 class MyPreprocessor:
     #    Must implement:
-    #   - fit(...) -> self
-    #   - transform(X: Tensor)   -> Tensor  **or**  Tuple[Tensor, Tensor]
-
-    # REQUIREMENTS
-    # IMPORTANT: All state must be picklable with the std-lib pickle module.
-    # IMPORTANT: Batch first.
-    # May allocate NumPy arrays or Torch tensors internally, but:
-    # transform() must be deterministic.
-    # Store only derived parameters needed for transform i.e. do not store the raw data
-    # itself in the preprocessor object.
+    #   - fit(...)               -> self
+    #   - transform(X: ???)      -> ???
 
     # DATA SPECIFICS
-    # IMPORTANT: X_train, Y_train, X_val, Y_val are provided as PyTorch tensors in the environment.
     # Total flat length per event (X_train & X_val): 92
     # Index  0 :  missing-ET magnitude  (E_T_miss)
     # Index  1 :  missing-ET azimuth    (phi_Et_miss)
     # Indices  2-6  : object 1  ->  obj_1, E_1, p_T1, eta_1, phi_1
-    # Indices  7-11 : object 2  -> obj_2, E_2 , p_T_2 , eta_2 , phi_2
+    # Indices  7-11 : object 2  ->  obj_2, E_2 , p_T_2 , eta_2 , phi_2
     # ...
-    # Indices 88-92 : object 18 -> obj_18, E_18 , p_T_18 , eta_18 , phi_18
+    # Indices 88-92 : object 18 ->  obj_18, E_18 , p_T_18 , eta_18 , phi_18
+    # Global features       = 2
     # Per-object slice size = 5
     # Max objects encoded   = 18
 
@@ -161,21 +165,47 @@ class MyPreprocessor:
     # When modifying data features or feature engineering: annotate tensor size as comments after 
     # each tensor operation to reduce dimension mismatches.
 
-    # <LLM: Write code to preprocess the data>    
+    # REQUIREMENTS
+    # IMPORTANT: All state must be picklable with the std-lib pickle module.
+    # May allocate NumPy arrays or Torch tensors internally, but:
+    # transform() must be deterministic.
+    # Store only derived parameters needed for transform i.e. do not store the raw data
+    # itself in the preprocessor object.
+
+    # <LLM: Write code to preprocess the data> 
+
     def __init__(self):
         # <LLM: Define and initialize any stateful components here>
         pass
 
+    def _raw_reshape(self, X):           
+        # <LLM: Apply optional raw data reshaping logic here>
+        return X # Returns identify by default
+
+    # Uncomment to implement custom collate function.    
+    # @staticmethod
+    # def _collate_fn(batch: list):
+    #    <LLM: Apply optional custom collate logic here>
+    #    return None
+
+    def make_loader_cfg(self):
+        # Return dict or None.  If dict, evaluator uses it to rebuild loader:
+        #{
+        #   "loader_class": "torch.utils.data.DataLoader",
+        #   "collate_fn": "self._collate_fn",
+        #   "batch_size": 256,
+        #   "shuffle": False,
+        #   "num_workers": 0
+        #}
+        return None
+
     def fit(self, X, y=None):
-        # <LLM: Extract statistics or fit transformers>
+        # <LLM: Extract statistics for fit transformers>
         return self
 
     def transform(self, X):
-        # # Example output options:
-        # - return X_new                        # (N, features)
-        # - return (X_seq, mask)                # (N,L,F), (N,L)
-        # <LLM: Apply preprocessing logic, return torch.Tensor>
-        return X 
+        # <LLM: Apply pre-processing logic>
+        return X # must return an indexable, picklable object
 
     def fit_transform(self, X, y=None):
         self.fit(X, y)
@@ -186,58 +216,26 @@ def make_preprocessor():
 
 # 2. ---------- MODEL DEFINITION ----------
 class BinaryClassifier(nn.Module):
-    # A UNIVERSAL wrapper.  You *must* keep forward(self, data, mask=None)
-    # so it works for BOTH loader paths:
-    # (data, label)              -> forward(data)
-    # ((data, mask), label)      -> forward(data, mask)
-
-    # input_shape examples
-    #   Flat       : (F,)               -> MLP or 1-D CNN
-    #   Sequence   : (L, F)             -> Transformer / RNN / DeepSets
-    #   2-D image  : (C, H, W)          -> 2-D CNN   (requires reshape upstream!)
-    #   Node set   : (N, F_node)         -> GNN / Set Transformer
-    
-    def __init__(self, input_shape: tuple[int, ...], *, use_mask: bool):
+    def __init__(self, sample_object):
         super().__init__()
-        self.use_mask = use_mask
         # <LLM: Define and initialize any stateful components here>
 
     # <LLM: optionally build extra layers here>
 
-    def forward(self, data: torch.Tensor, mask: torch.Tensor | None = None):
-        # data : Tensor
-        # Flat  -> (B, F)
-        # Seq   -> (B, L, F)
-        # 2-D   -> (B, C, H, W)
-        # mask : None or BoolTensor (B, L)
-
+    def forward(self, *data):
         # <LLM: Define your model's forward pass here>
+        pass
 
-def make_model(input_shape, *, use_mask=False):
-    return BinaryClassifier(input_shape, use_mask=use_mask)
+def make_model(example_object):
+    return BinaryClassifier(example_object)
 
 # 3. ---------- MODEL TRAINING ----------
 EPOCHS = 10   # <LLM: adjust if you wish>
-def train_model(model, train_loader, val_loader, epochs):
-    # PARAMETERS
-    # model : torch.nn.Module   
-    # train_loader / val_loader yield either
-    #   (data,  label)            # single tensor
-    #   ((data, mask), label)     # tensor + padding mask
-    #   Forward signature must match the chosen format.
-    #   epochs: int
-
-    # RETURNS
-    # trained_model : nn.Module          (same instance, trained in-place)
-    # train_loss    : list[float]        (length == epochs)
-    # val_loss      : list[float]
-    # train_acc     : list[float]
-    # val_acc       : list[float]
-    
+def train_model(model: nn.Module, train_loader, val_loader, epochs: int):
     # REQUIREMENTS 
     # Do NOT pass "verbose=" to any PyTorch scheduler (not supported in this image).
+    # Must return trained_model, train_loss, val_loss, train_acc, val_acc
     # Implement early-stopping.
-    # train_loader / val_loader yield either (data,label) or ((data, mask), label)
     # Forward signature must match.
 
     # <LLM: Write code to define training loop>
@@ -245,18 +243,23 @@ def train_model(model, train_loader, val_loader, epochs):
     return trained_model, train_loss, val_loss, train_acc, val_acc
 
 # IMPORTANT: DO NOT execute the pipeline here – the harness will do that.
-# IMPORTANT: Strictly follow this code template, and do not deviate from it.
 # <end code template>
 """,
 
     suffix = r"""
 # ---------------------------  END OF LLM-CODE BLOCK ---------------------------
 # ----------------  START HARNESS WRAPPER SUFFIX (FOR CONTEXT)  ---------------- 
-                         
+
+def _import_dotted(path: str):
+    mod, name = path.rsplit(".", 1)
+    module = importlib.import_module(mod)
+    return getattr(module, name)
+
 def _plot(series_train, series_val, name, out_path):
     plt.figure()
-    plt.plot(series_train, label=f"Train {name}")
-    plt.plot(series_val,   label=f"Val {name}")
+    epochs = range(1, len(series_train) + 1)
+    plt.plot(epochs, series_train, label=f"Train {name}")
+    plt.plot(epochs, series_val,   label=f"Val {name}")
     plt.title(name); plt.xlabel("Epoch"); plt.legend()
     plt.savefig(out_path); plt.close()
 
@@ -265,21 +268,22 @@ def _run(dryrun=False):
     X_train, Y_train, X_val, Y_val = load_data()
     if dryrun:
         X_train, Y_train, X_val, Y_val = X_train[:200], Y_train[:200], X_val[:20], Y_val[:20]
-    pre = make_preprocessor().fit(X_train, Y_train)
-    X_train = pre.transform(X_train)                    # may be Tensor or Tuple
+    pre     = make_preprocessor().fit(X_train, Y_train)
+    X_train = pre.transform(X_train)
     X_val   = pre.transform(X_val)
-    train_loader, val_loader = make_loaders(X_train, Y_train, X_val, Y_val)
+
+    collate = getattr(pre, "_collate_fn", None)
+    cfg     = getattr(pre, "make_loader_cfg", lambda: None)() or {}
+    loader_cls = _import_dotted(cfg["loader_class"]) if "loader_class" in cfg else None
+    train_loader, val_loader = make_loaders(X_train, Y_train, X_val, Y_val, 
+                                            batch      = cfg.get("batch_size", 512), 
+                                            collate_fn = collate,
+                                            loader_cls = loader_cls)
 
     # 2. Build model
-    if isinstance(X_train, torch.Tensor):               # single-tensor case
-        temp_ref    = X_train
-        input_shape = temp_ref.shape[1:]                # e.g. (F,)
-        use_mask    = False
-    else:                                               # tuple => (data, mask)
-        temp_ref    = X_train
-        input_shape = temp_ref[0].shape[1:]             # e.g. (L, F)
-        use_mask    = True                              
-    model = make_model(input_shape, use_mask=use_mask)
+    first_batch    = next(iter(train_loader))
+    example_sample = first_batch[0]
+    model          = make_model(example_sample)
 
     # 3. Train model
     n_epochs = 1 if dryrun else globals().get("EPOCHS", 10)
@@ -290,19 +294,11 @@ def _run(dryrun=False):
         print("ERROR during training:", e)
         raise
 
-    # 4. *Dry-run safety check* - run a single toy forward pass
+    # 4. Dry-run safety check
     if dryrun:
-        toy_data = torch.zeros(8, *input_shape, dtype=torch.float32)
-        if use_mask:
-            toy_mask = torch.zeros(8, input_shape[0], dtype=torch.bool)
-            toy_batch = (toy_data, toy_mask)
-        else:
-            toy_batch = toy_data
-
-        toy_transformed = pre.transform(toy_batch)
+        sample, _ = first_batch
         try:
-            _ = trained_model(*toy_transformed) if isinstance(toy_transformed, (tuple, list)) \
-                else trained_model(toy_transformed)
+            _ = trained_model(*sample) if isinstance(sample, (tuple, list)) else trained_model(sample)
         except Exception as e:
             raise RuntimeError("Sanity-check forward pass failed") from e
         return
@@ -345,27 +341,26 @@ if __name__ == "__main__":
 
     questions = [
         Question("Q1", r""" ** IMPORTANT: Your Challenge **
-Write Python code for a binary classification model focussing on maximising the AUC using the code template above. 
+Write Python code for a binary classification model focusing on maximising the AUC using the code template above. 
 You may freely choose any pre-processing methods and techniques as well as model architecture and training conventions.
-Play it safe and implement a simple model you feel confident in.
-"""),
+Do absolutely everything in your power to achieve the highest possible AUC.                 
+""")
+,
 
-        Question("Q2", r""" ** IMPORTANT: Your Challenge **
-Write Python code for a binary classification model focussing on maximising the AUC using the code template above. 
+       Question("Q2", r"""** IMPORTANT: Your Challenge **
+Write Python code for a binary classification model focusing on maximising the AUC using the code template above. 
 You may freely choose any pre-processing methods and techniques as well as model architecture and training conventions.
-Do absolutely everything in your power to get the highest score on the AUC.                 
-"""),
-
-       Question("Q3", r"""** IMPORTANT: Your Challenge **
-Write Python code for a binary classification model focussing on maximising the AUC using the code template above. 
-You may freely choose any pre-processing methods and techniques as well as model architecture and training conventions.
-You may optionally leverage the following particle-physics insights (strongly recommended if applicable):
+                
+You may optionally leverage the following particle-physics insights (strongly recommended if possible):
 
 Pairwise Particle Features: It has been shown that explicitly computing pairwise particle features, particularly 
 the invariant mass $m_{ij}$ and the angular distance $\delta R_{ij} = \sqrt((\eta_i - \eta_j)^2 + (\phi_i - \phi_j))$
 ​can significantly enhance the discriminative power of your model.
+                
+Model Architecture: It has been shown that Transformer models and Graph Neural Networks are particularly well-suited
+for this task.
 
-Do absolutely everything in your power to get the highest score on the AUC.
-""")
+Do absolutely everything in your power to achieve the highest possible AUC. 
+#""")
 ]
 )

@@ -1,0 +1,75 @@
+{
+  "LLMGeneration": {
+    "model": "openai/o4-mini-high",
+    "endpoint": "https://openrouter.ai/api/v1/completions",
+    "prompt_tokens": 3623,
+    "prompt_chars": 14485,
+    "response_tokens": 16577,
+    "response_chars": 7260,
+    "reasoning_tokens": null,
+    "reasoning_chars": 2601,
+    "Inner attempt": 1,
+    "cost_usd": 0.003846205,
+    "generation_ms": 133836,
+    "code": "# 0. ---------- IMPORTS ----------\nimport torch\nimport torch.nn as nn\nimport torch.nn.functional as F\nimport numpy as np\nfrom sklearn.metrics import roc_auc_score\n\n# 2. ---------- PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.id_map = None\n        self.num_obj_types = None\n\n    def _raw_reshape(self, X):\n        return X\n\n    def make_loader_cfg(self):\n        return None\n\n    def fit(self, X, y=None):\n        # X: [n,92]\n        obj_ids = X[:, 2::5].long()  # [n,18]\n        unique_ids = torch.unique(obj_ids)  # sorted unique\n        # map pad id=0 to index 0\n        self.id_map = {0: 0}\n        real_ids = [int(i) for i in unique_ids.tolist() if int(i) != 0]\n        for idx, pid in enumerate(real_ids, start=1):\n            self.id_map[pid] = idx\n        self.num_obj_types = len(real_ids) + 1\n        return self\n\n    def transform(self, X):\n        # X: [n,92]\n        # Global features\n        E_miss = X[:, 0:1]  # [n,1]\n        phi_miss = X[:, 1:2]  # [n,1]\n        g0 = torch.log1p(E_miss)  # [n,1]\n        sin_phi_miss = torch.sin(phi_miss)  # [n,1]\n        cos_phi_miss = torch.cos(phi_miss)  # [n,1]\n        global_feats = torch.cat([g0, sin_phi_miss, cos_phi_miss], dim=1)  # [n,3]\n\n        # Object IDs and features\n        raw_ids = X[:, 2::5].long()  # [n,18]\n        # map raw_ids to indices\n        id_indices = torch.zeros_like(raw_ids)  # [n,18]\n        for raw_id, idx in self.id_map.items():\n            id_indices[raw_ids == raw_id] = idx\n        mask = (id_indices != 0).unsqueeze(-1)  # [n,18,1]\n\n        # one-hot encode ids\n        id_onehot = F.one_hot(id_indices, num_classes=self.num_obj_types).float()  # [n,18,num_obj_types]\n        id_onehot = id_onehot * mask  # zero out pad ones\n\n        # Kinematic features\n        E = X[:, 3::5]  # [n,18]\n        pT = X[:, 4::5]  # [n,18]\n        eta = X[:, 5::5]  # [n,18]\n        phi = X[:, 6::5]  # [n,18]\n        logE = torch.log1p(E)  # [n,18]\n        logpT = torch.log1p(pT)  # [n,18]\n        sin_phi = torch.sin(phi)  # [n,18]\n        cos_phi = torch.cos(phi)  # [n,18]\n        kin_feats = torch.stack([logE, logpT, eta, sin_phi, cos_phi], dim=2)  # [n,18,5]\n        kin_feats = kin_feats * mask  # zero out pad\n\n        # Combine id and kin features\n        object_feats = torch.cat([id_onehot, kin_feats], dim=2)  # [n,18,num_obj_types+5]\n\n        return (global_feats, object_feats)\n\n    def fit_transform(self, X, y=None):\n        return self.fit(X, y).transform(X)\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# 2. ---------- MODEL DEFINITION ----------\nclass BinaryClassifier(nn.Module):\n    def __init__(self, sample_object):\n        super().__init__()\n        # sample_object: tuple (global_feats, object_feats), shapes ([batch,3], [batch,18,D])\n        global_dim = sample_object[0].size(1)\n        num_objects = sample_object[1].size(1)\n        obj_feat_dim = sample_object[1].size(2)\n        # per-object MLP\n        self.obj_mlp = nn.Sequential(\n            nn.Linear(obj_feat_dim, 64),\n            nn.ReLU(inplace=True),\n            nn.Dropout(0.1),\n            nn.Linear(64, 32),\n            nn.ReLU(inplace=True)\n        )\n        # classifier MLP\n        self.classifier = nn.Sequential(\n            nn.Linear(32 + global_dim, 64),\n            nn.ReLU(inplace=True),\n            nn.Dropout(0.1),\n            nn.Linear(64, 32),\n            nn.ReLU(inplace=True),\n            nn.Dropout(0.1),\n            nn.Linear(32, 1)\n        )\n\n    def forward(self, global_feats, object_feats):\n        # global_feats: [batch,3], object_feats: [batch,18,D]\n        b, n, d = object_feats.shape\n        x = object_feats.view(b * n, d)  # [b*n, d]\n        obj_emb = self.obj_mlp(x)  # [b*n,32]\n        obj_emb = obj_emb.view(b, n, -1)  # [b,18,32]\n        agg = obj_emb.sum(dim=1)  # [b,32]\n        combined = torch.cat([agg, global_feats], dim=1)  # [b,32+3]\n        out = self.classifier(combined)  # [b,1]\n        return out.squeeze(1)  # [b]\n\ndef make_model(example_object):\n    return BinaryClassifier(example_object)\n\n# 3. ---------- MODEL TRAINING ----------\nEPOCHS = 10\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    device = torch.device(\"cuda\" if torch.cuda.is_available() else \"cpu\")\n    model = model.to(device)\n    criterion = nn.BCEWithLogitsLoss()\n    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-5)\n    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=3)\n    best_val_auc = 0.0\n    best_state = None\n    patience, counter = 5, 0\n    train_loss, val_loss = [], []\n    train_acc, val_acc = [], []\n    for epoch in range(epochs):\n        model.train()\n        total_loss, total_correct, total_samples = 0.0, 0, 0\n        for x, y in train_loader:\n            global_feats, object_feats = x\n            global_feats = global_feats.to(device)\n            object_feats = object_feats.to(device)\n            y = y.to(device)\n            optimizer.zero_grad()\n            logits = model(global_feats, object_feats)  # [b]\n            loss = criterion(logits, y.float())\n            loss.backward()\n            optimizer.step()\n            preds = (torch.sigmoid(logits) > 0.5).long()\n            total_correct += preds.eq(y).sum().item()\n            total_samples += y.size(0)\n            total_loss += loss.item() * y.size(0)\n        train_loss_epoch = total_loss / total_samples\n        train_acc_epoch = total_correct / total_samples\n        train_loss.append(train_loss_epoch)\n        train_acc.append(train_acc_epoch)\n        model.eval()\n        val_total_loss, val_total_correct, val_total = 0.0, 0, 0\n        all_labels, all_scores = [], []\n        with torch.no_grad():\n            for x, y in val_loader:\n                global_feats, object_feats = x\n                global_feats = global_feats.to(device)\n                object_feats = object_feats.to(device)\n                y = y.to(device)\n                logits = model(global_feats, object_feats)\n                loss = criterion(logits, y.float())\n                preds = (torch.sigmoid(logits) > 0.5).long()\n                val_total_correct += preds.eq(y).sum().item()\n                val_total += y.size(0)\n                val_total_loss += loss.item() * y.size(0)\n                all_labels.append(y.cpu())\n                all_scores.append(torch.sigmoid(logits).cpu())\n        val_loss_epoch = val_total_loss / val_total\n        val_acc_epoch = val_total_correct / val_total\n        labels_cat = torch.cat(all_labels).numpy()\n        scores_cat = torch.cat(all_scores).numpy()\n        try:\n            val_auc = roc_auc_score(labels_cat, scores_cat)\n        except:\n            val_auc = 0.0\n        val_loss.append(val_loss_epoch)\n        val_acc.append(val_acc_epoch)\n        scheduler.step(val_loss_epoch)\n        if val_auc > best_val_auc:\n            best_val_auc = val_auc\n            best_state = {k: v.cpu() for k, v in model.state_dict().items()}\n            counter = 0\n        else:\n            counter += 1\n            if counter >= patience:\n                break\n    if best_state is not None:\n        model.load_state_dict(best_state)\n    model = model.cpu()\n    return model, train_loss, val_loss, train_acc, val_acc",
+    "reasoning": "**Building a code template**\n\nThe user is asking for help filling in a code template that includes a preprocessor, model, and a training loop. My goal is to maximize AUC, ensuring the final code runs without errors. \n\nI'll begin with necessary imports, then write the `MyPreprocessor` class, focusing on fit and transform functions, and maybe a `collate_fn`. Next, I’ll build the dataset from `X_train` and `Y_train`, transforming flat vectors into usable features, possibly separating them into global and per-object features. I’m considering using a Graph Neural Network or a simple feed-forward network for performance.**Designing the model architecture**\n\nTo maximize AUC, I'm considering using a more advanced architecture like a set-based network, such as Deep Sets, or a per-object MLP with an aggregator and a final MLP. Since the input can have up to 18 objects, I’ll treat each object’s features carefully. The first two features are global, and for each object, there’s an `obj_id` and several physical features.\n\nI plan to one-hot encode `obj_id`, but it might be better to use an embedding layer due to the potential for many types. To gather statistics, I’ll record unique `obj_id` values during the fit process. I'll transform the input into arrays for global features, object IDs, and object features. I think a custom Dataset will streamline handling the outputs, returning tensors as needed for the model. A cleaner approach would allow the preprocessor to directly output tuple data for batching. Using the standard DataLoader should simplify things since it can efficiently process these tuples without a custom collate function. For the model, I can leverage a Deep Sets architecture to effectively embed and process each object.**Implementing training adjustments**\n\nI can incorporate the AUC metric in our training loop, but since the harness doesn't capture it, I might print it to logs instead. Early stopping relies on validation AUC, which is essential. I'm considering using FocalLoss to focus on challenging examples, but it might be overkill. A batch size of 512 and training for 20 epochs sounds good. While the default is set to 10 epochs, I could adjust it to 20 with a patience of 5 for early stopping.\n\nNow, step by step, I’ll start coding. First, I’ll import the necessary libraries, like `torch` and `sklearn.metrics`. Then I'll define my `MyPreprocessor` class, focusing on extracting unique object identifiers and preparing tensors for training. For the transformation, I’ll compute global features and object IDs, ensuring everything is appropriately formatted.",
+    "Outer_attempt": 1
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-06-24T11:22:25Z",
+    "PyLint": {
+      "passed": false,
+      "messages": [
+        {
+          "type": "error",
+          "module": "script_openai_o4-mini-high_1322_1",
+          "obj": "MyPreprocessor.transform",
+          "line": 123,
+          "column": 20,
+          "endLine": 123,
+          "endColumn": 73,
+          "path": "outputs\\24-06\\FOURTOPS\\Q2\\script_openai_o4-mini-high_1322_1.py",
+          "symbol": "not-callable",
+          "message": "F.one_hot is not callable",
+          "message-id": "E1102"
+        }
+      ]
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-06-24T11:22:25Z",
+        "metrics": {
+          ".\\./outputs/24-06/FOURTOPS/Q2/script_openai_o4-mini-high_1322_1.py": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 274,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 274,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  }
+}

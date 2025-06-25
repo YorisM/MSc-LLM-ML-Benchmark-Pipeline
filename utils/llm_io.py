@@ -35,10 +35,10 @@ def _mount_llm_script(model_dir: str) -> None:
 def _initialize_artefacts(model_path: str):
     model_dir = os.path.dirname(model_path)
 
-    # ❶ Make sure MyPreprocessor lives in sys.modules['__main__']
+    # Make sure MyPreprocessor lives in sys.modules['__main__']
     _mount_llm_script(model_dir)
 
-    # ❷ Now unpickle safely
+    # Now unpickle safely
     with open(model_path.replace("_model.pkl", "_preproc.pkl"), "rb") as f:
         preproc = pickle.load(f)
     with open(model_path, "rb") as f:

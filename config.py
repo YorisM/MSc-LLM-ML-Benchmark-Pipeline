@@ -26,18 +26,26 @@ logging.basicConfig(
 )
 
 # Models - Needs at least two models 
-models = ["openai/o3-pro"] 
+models = ["openai/o4-mini-high",
+          "openai/o3-pro",
+          "anthropic/claude-sonnet-4",
+          "google/gemini-2.5-pro",
+          "x-ai/grok-3-beta",
+          "deepseek/deepseek-chat-v3-0324"
+          ] 
 
-        #"openai/o3",
-        #"openai/o3-pro",
-        #"openai/gpt-4o-mini"
-        #"anthropic/claude-3.7-sonnet",
-        #"google/gemini-2.5-pro-preview",
-        #"meta-llama/llama-4-maverick",
-        #"deepseek/deepseek-r1"]
+"""
+models = ["openai/o4-mini-high",
+          "openai/o3-pro",
+          "anthropic/claude-sonnet-4",
+          "google/gemini-2.5-pro",
+          "x-ai/grok-3-beta",
+          "deepseek/deepseek-chat-v3-0324"
+          ] 
+"""
 
 # Number of attempts to retrieve correct response
-num_attempts = 2
+num_attempts = 5
 
 # Max Tokens
 MAX_TOKENS = 16*4096

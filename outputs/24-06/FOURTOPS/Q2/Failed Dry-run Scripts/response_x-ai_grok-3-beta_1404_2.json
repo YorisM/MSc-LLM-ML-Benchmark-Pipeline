@@ -1,0 +1,70 @@
+{
+  "LLMGeneration": {
+    "model": "x-ai/grok-3-beta",
+    "endpoint": "https://openrouter.ai/api/v1/completions",
+    "prompt_tokens": null,
+    "prompt_chars": 14485,
+    "response_tokens": null,
+    "response_chars": 71267,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": null,
+    "generation_ms": 180627,
+    "code": "# 0. ---------- IMPORTS ----------\nimport torch\nimport torch.nn as nn\nimport torch.optim as optim\nfrom sklearn.preprocessing import StandardScaler\nfrom sklearn.metrics import roc_auc_score\nimport numpy as np\n\n# 2. ---------- PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        # Initialize stateful components for feature scaling\n        self.scaler_global = StandardScaler()  # For global features (E_T_miss, phi_Et_miss)\n        self.scaler_objects = StandardScaler()  # For object kinematic features (E, p_T, eta, phi)\n\n    def _raw_reshape(self, X):\n        # Reshape input data to separate global features and object features\n        # Input shape: [N, 92]\n        global_features = X[:, :2]  # Shape: [N, 2]\n        object_features = X[:, 2:].reshape(-1, 18, 5)  # Shape: [N, 18, 5] (18 objects, 5 features each)\n        return global_features, object_features\n\n    def fit(self, X, y=None):\n        # Extract statistics for scaling\n        global_features, object_features = self._raw_reshape(X)\n\n        # Fit scaler for global features\n        self.scaler_global.fit(global_features)\n\n        # Fit scaler for object features (only non-zero padded data)\n        mask = object_features[:, :, 0] != 0  # Mask for non-padded objects (obj_id != 0)\n        valid_features = object_features[mask, 1:]  # Shape: [num_valid_objects, 4]\n        if valid_features.shape[0] > 0:  # Ensure there are valid features to fit\n            self.scaler_objects.fit(valid_features)\n        return self\n\n    def transform(self, X):\n        # Apply preprocessing logic\n        global_features, object_features = self._raw_reshape(X)  # Shapes: [N, 2], [N, 18, 5]\n\n        # Scale global features\n        global_scaled = torch.tensor(self.scaler_global.transform(global_features), \n                                     dtype=torch.float32)  # Shape: [N, 2]\n\n        # Scale object features (only for non-padded objects)\n        object_scaled = object_features.clone()  # Shape: [N, 18, 5]\n        mask = object_features[:, :, 0] != 0  # Shape: [N, 18]\n        valid_features = object_features[mask, 1:]  # Shape: [num_valid, 4]\n        if valid_features.shape[0] > 0:\n            scaled_valid = torch.tensor(self.scaler_objects.transform(valid_features), \n                                        dtype=torch.float32)  # Shape: [num_valid, 4]\n            object_scaled[mask, 1:] = scaled_valid\n\n        # Compute additional features (e.g., number of objects per event)\n        num_objects = torch.sum(mask, dim=1).unsqueeze(-1)  # Shape: [N, 1]\n\n        # Concatenate global features with computed features\n        global_enriched = torch.cat([global_scaled, num_objects], dim=1)  # Shape: [N, 3]\n\n        return global_enriched, object_scaled  # Return tuple of tensors\n\n    def make_loader_cfg(self):\n        # Custom loader configuration\n        return {\n            \"loader_class\": \"torch.utils.data.DataLoader\",\n            \"batch_size\": 256,\n            \"shuffle\": False,\n            \"num_workers\": 0\n        }\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# 2. ---------- MODEL DEFINITION ----------\nclass BinaryClassifier(nn.Module):\n    def __init__(self, sample_object):\n        super().__init__()\n        # Unpack sample object (global features and object features)\n        sample_global, sample_objects = sample_object\n        global_input_dim = sample_global.shape[-1]  # Should be 3 (E_T_miss, phi, num_objects)\n        object_feature_dim = sample_objects.shape[-1] - 1  # Should be 4 (E, p_T, eta, phi)\n        max_objects = sample_objects.shape[-2]  # Should be 18\n\n        # Define layers for processing object features\n        self.object_mlp = nn.Sequential(\n            nn.Linear(object_feature_dim, 32),\n            nn.ReLU(),\n            nn.Linear(32, 16),\n            nn.ReLU()\n        )  # Output per object: 16\n\n        # Attention mechanism for aggregating object features\n        self.attention = nn.Linear(16, 1)  # Compute attention scores\n\n        # Define layers for global features\n        self.global_mlp = nn.Sequential(\n            nn.Linear(global_input_dim, 16),\n            nn.ReLU(),\n            nn.Linear(16, 8),\n            nn.ReLU()\n        )  # Output for global: 8\n\n        # Final classifier combining object and global features\n        combined_dim = 16 + 8  # Object aggregated (16) + global (8)\n        self.classifier = nn.Sequential(\n            nn.Linear(combined_dim, 32),\n            nn.ReLU(),\n            nn.Dropout(0.3),\n            nn.Linear(32, 16),\n            nn.ReLU(),\n            nn.Dropout(0.2),\n            nn.Linear(16, 1),\n            nn.Sigmoid()\n        )\n\n    def forward(self, *data):\n        # Unpack input data\n        global_features, object_features = data  # Shapes: [batch, 3], [batch, 18, 5]\n\n        # Process object features\n        obj_mask = object_features[:, :, 0] != 0  # Shape: [batch, 18]\n        obj_feats = object_features[:, :, 1:]  # Shape: [batch, 18, 4]\n        obj_processed = self.object_mlp(obj_feats)  # Shape: [batch, 18, 16]\n\n        # Apply attention to aggregate object features\n        attn_scores = self.attention(obj_processed)  # Shape: [batch, 18, 1]\n        attn_weights = torch.softmax(attn_scores + (~obj_mask.unsqueeze(-1) * -1e9), dim=1)  # Mask padded objects\n        obj_aggregated = torch.sum(obj_processed * attn_weights, dim=1)  # Shape: [batch, 16]\n\n        # Process global features\n        global_processed = self.global_mlp(global_features)  # Shape: [batch, 8]\n\n        # Combine features for final classification\n        combined = torch.cat([obj_aggregated, global_processed], dim=1)  # Shape: [batch, 24]\n        output = self.classifier(combined)  # Shape: [batch, 1]\n        return output\n\ndef make_model(example_object):\n    return BinaryClassifier(example_object)\n\n# 3. ---------- MODEL TRAINING ----------\nEPOCHS = 50\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    device = torch.device(\"cuda\" if torch.cuda.is_available() else \"cpu\")\n    model.to(device)\n\n    optimizer = optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-5)\n    criterion = nn.BCELoss()\n    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=5, threshold=1e-3)\n\n    best_val_auc = -float('inf')\n    early_stopping_patience = 10\n    early_stopping_counter = 0\n    best_model_state = None\n\n    train_loss_history = []\n    val_loss_history = []\n    train_auc_history = []\n    val_auc_history = []\n\n    for epoch in range(epochs):\n        # Training phase\n        model.train()\n        running_loss = 0.0\n        train_preds = []\n        train_labels = []\n\n        for batch in train_loader:\n            data, targets = batch\n            global_feats, obj_feats = data\n            global_feats = global_feats.to(device)\n            obj_feats = obj_feats.to(device)\n            targets = targets.to(device).float().view(-1, 1)\n\n            optimizer.zero_grad()\n            outputs = model(global_feats, obj_feats)  # Shape: [batch, 1]\n            loss = criterion(outputs, targets)\n            loss.backward()\n            optimizer.step()\n\n            running_loss += loss.item()\n            train_preds.extend(outputs.detach().cpu().numpy().flatten())\n            train_labels.extend(targets.cpu().numpy().flatten())\n\n        epoch_train_loss = running_loss / len(train_loader)\n        train_auc = roc_auc_score(train_labels, train_preds)\n        train_loss_history.append(epoch_train_loss)\n        train_auc_history.append(train_auc)\n\n        # Validation phase\n        model.eval()\n        val_loss = 0.0\n        val_preds = []\n        val_labels = []\n\n        with torch.no_grad():\n            for batch in val_loader:\n                data, targets = batch\n                global_feats, obj_feats = data\n                global_feats = global_feats.to(device)\n                obj_feats = obj_feats.to(device)\n                targets = targets.to(device).float().view(-1, 1)\n\n                outputs = model(global_feats, obj_feats)\n                loss = criterion(outputs, targets)\n                val_loss += loss.item()\n                val_preds.extend(outputs.cpu().numpy().flatten())\n                val_labels.extend(targets.cpu().numpy().flatten())\n\n        epoch_val_loss = val_loss / len(val_loader)\n        val_auc = roc_auc_score(val_labels, val_preds)\n        val_loss_history.append(epoch_val_loss)\n        val_auc_history.append(val_auc)\n\n        # Scheduler step based on validation AUC\n        scheduler.step(val_auc)\n\n        # Early stopping based on validation AUC\n        if val_auc > best_val_auc:\n            best_val_auc = val_auc\n            best_model_state = model.state_dict()\n            early_stopping_counter = 0\n        else:\n            early_stopping_counter += 1\n            if early_stopping_counter >= early_stopping_patience:\n                print(f\"Early stopping at epoch {epoch+1}\")\n                break\n\n    # Load best model\n    if best_model_state is not None:\n        model.load_state_dict(best_model_state)\n\n    return model, train_loss_history, val_loss_history, train_auc_history, val_auc_history",
+    "reasoning": "",
+    "Outer_attempt": 2
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-06-24T12:04:43Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-06-24T12:04:43Z",
+        "metrics": {
+          ".\\./outputs/24-06/FOURTOPS/Q2/script_x-ai_grok-3-beta_1404_2.py": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 277,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 277,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2025-06-24T12:05:02Z",
+    "passed": false,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/24-06/FOURTOPS/Q2/script_x-ai_grok-3-beta_1404_2.py\nargv2=--dryrun\n",
+      "stderr": "Traceback (most recent call last):\n  File \"/workspace/outputs/24-06/FOURTOPS/Q2/script_x-ai_grok-3-beta_1404_2.py\", line 394, in <module>\n    _run(dryrun=\"--dryrun\" in sys.argv)\n    ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/outputs/24-06/FOURTOPS/Q2/script_x-ai_grok-3-beta_1404_2.py\", line 328, in _run\n    pre     = make_preprocessor().fit(X_train, Y_train)\n  File \"/workspace/outputs/24-06/FOURTOPS/Q2/script_x-ai_grok-3-beta_1404_2.py\", line 104, in fit\n    valid_features = object_features[mask, 1:]  # Shape: [num_valid_objects, 4]\n                     ~~~~~~~~~~~~~~~^^^^^^^^^^\nIndexError: The shape of the mask [200, 18] at index 1 does not match the shape of the indexed tensor [200, 17, 5] at index 1\n"
+    },
+    "return_code": 1
+  }
+}

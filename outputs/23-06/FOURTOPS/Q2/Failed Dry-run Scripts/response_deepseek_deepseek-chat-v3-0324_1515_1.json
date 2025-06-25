@@ -1,0 +1,70 @@
+{
+  "LLMGeneration": {
+    "model": "deepseek/deepseek-chat-v3-0324",
+    "endpoint": "https://openrouter.ai/api/v1/completions",
+    "prompt_tokens": 3930,
+    "prompt_chars": 15070,
+    "response_tokens": 2706,
+    "response_chars": 10268,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.00371748,
+    "generation_ms": 91085,
+    "code": "# 0. ---------- IMPORTS ----------\nimport torch.nn.functional as F\nfrom torch.nn import Linear, BatchNorm1d, Dropout\nfrom torch.optim import Adam\nfrom torch.optim.lr_scheduler import ReduceLROnPlateau\nimport math\nfrom sklearn.metrics import roc_auc_score\n\n# 2. ---------- PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.max_objs = 18\n        self.obj_feat_size = 5\n        self.global_feats = 2\n\n    def _raw_reshape(self, X):\n        return X\n\n    def _create_pairwise_features(self, objects):\n        num_objs = objects.shape[0]\n        pairwise_feats = []\n\n        for i in range(num_objs):\n            for j in range(i+1, num_objs):\n                eta_i, phi_i = objects[i, 3], objects[i, 4]\n                eta_j, phi_j = objects[j, 3], objects[j, 4]\n\n                delta_eta = eta_i - eta_j\n                delta_phi = phi_i - phi_j\n                delta_phi = torch.remainder(delta_phi + math.pi, 2 * math.pi) - math.pi\n\n                delta_r = torch.sqrt(delta_eta**2 + delta_phi**2)\n\n                pti, ptj = objects[i, 2], objects[j, 2]\n                m_inv = torch.sqrt(2 * pti * ptj * (torch.cosh(delta_eta) - torch.cos(delta_phi)))\n\n                pairwise_feats.append(torch.stack([delta_r, m_inv]))\n\n        if pairwise_feats:\n            return torch.stack(pairwise_feats)\n        return torch.zeros(0, 2)\n\n    def _process_events(self, X):\n        batch_global = []\n        batch_objs = []\n        batch_pairwise = []\n        valid_objs = []\n\n        for event in X:\n            global_feats = event[:2]\n            obj_data = event[2:].reshape(-1, self.obj_feat_size)\n\n            valid_idx = obj_data[:, 0] != 0  # obj_id 0 means padding\n            valid_obj = obj_data[valid_idx][:, 1:]  # remove obj_id column\n\n            pairwise_feats = self._create_pairwise_features(valid_obj)\n\n            batch_global.append(global_feats)\n            batch_objs.append(valid_obj)\n            batch_pairwise.append(pairwise_feats)\n            valid_objs.append(valid_idx.sum().item())\n\n        return batch_global, batch_objs, batch_pairwise, valid_objs\n\n    def fit(self, X, y=None):\n        return self\n\n    def transform(self, X):\n        return self._process_events(X)\n\n    @staticmethod\n    def _collate_fn(batch):\n        inputs, targets = zip(*batch)\n        global_feats, objs, pairwise, valid_objs = zip(*inputs)\n\n        # Pad objects and features to max in batch\n        max_objs = max(len(o) for o in objs)\n        max_pairwise = max(len(p) for p in pairwise)\n\n        obj_padded = [\n            F.pad(o, (0, 0, 0, max_objs - len(o)), value=0) \n            for o in objs\n        ]\n        pairwise_padded = [\n            F.pad(p, (0, 0, 0, max_pairwise - len(p)), value=0)\n            for p in pairwise\n        ]\n\n        global_feats = torch.stack(global_feats)\n        obj_padded = torch.stack(obj_padded)\n        pairwise_padded = torch.stack(pairwise_padded)\n        valid_objs = torch.tensor(valid_objs)\n        targets = torch.stack(targets)\n\n        return (global_feats, obj_padded, pairwise_padded, valid_objs), targets\n\n    def make_loader_cfg(self):\n        return {\n            \"batch_size\": 128,\n            \"collate_fn\": self._collate_fn\n        }\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# 2. ---------- MODEL DEFINITION ----------\nclass BinaryClassifier(nn.Module):\n    def __init__(self, sample_object):\n        super().__init__()\n        global_feats, obj_padded, pairwise_padded, _ = sample_object\n\n        self.obj_feat_size = obj_padded.shape[-1]\n        self.pairwise_feat_size = pairwise_padded.shape[-1]\n\n        # Object features processing\n        self.obj_encoder = nn.Sequential(\n            Linear(self.obj_feat_size, 64),\n            BatchNorm1d(64),\n            nn.LeakyReLU(),\n            Dropout(0.3),\n            Linear(64, 128),\n            BatchNorm1d(128),\n            nn.LeakyReLU(),\n            Dropout(0.3)\n        )\n\n        # Pairwise features processing\n        self.pairwise_encoder = nn.Sequential(\n            Linear(self.pairwise_feat_size, 32),\n            BatchNorm1d(32),\n            nn.LeakyReLU(),\n            Dropout(0.2),\n            Linear(32, 64),\n            BatchNorm1d(64),\n            nn.LeakyReLU(),\n            Dropout(0.2)\n        )\n\n        # Global features processing\n        self.global_encoder = nn.Sequential(\n            Linear(2, 32),\n            BatchNorm1d(32),\n            nn.LeakyReLU(),\n            Dropout(0.1),\n            Linear(32, 64),\n            BatchNorm1d(64),\n            nn.LeakyReLU(),\n            Dropout(0.1)\n        )\n\n        # Main classifier\n        self.classifier = nn.Sequential(\n            Linear(128 + 64 + 64, 256),\n            BatchNorm1d(256),\n            nn.LeakyReLU(),\n            Dropout(0.4),\n            Linear(256, 128),\n            BatchNorm1d(128),\n            nn.LeakyReLU(),\n            Dropout(0.4),\n            Linear(128, 1)\n        )\n\n    def forward(self, *data):\n        global_feats, obj_padded, pairwise_padded, valid_objs = data\n\n        # Process global features [batch_size, 2]\n        global_encoded = self.global_encoder(global_feats)  # [batch_size, 64]\n\n        # Process object features\n        batch_size, max_objs, _ = obj_padded.shape\n        obj_flat = obj_padded.view(batch_size * max_objs, -1)  # [batch*max_objs, feat_size]\n        obj_encoded = self.obj_encoder(obj_flat).view(batch_size, max_objs, -1)  # [batch, max_objs, 128]\n\n        # Mask out padded objects\n        mask = torch.arange(max_objs).expand(batch_size, max_objs).to(obj_encoded.device) < valid_objs.unsqueeze(1)\n        obj_encoded = obj_encoded * mask.unsqueeze(-1)  # [batch, max_objs, 128]\n\n        # Average pooling over objects\n        obj_pooled = obj_encoded.sum(dim=1) / valid_objs.unsqueeze(1).clamp(min=1)  # [batch, 128]\n\n        # Process pairwise features\n        batch_size, max_pairs, _ = pairwise_padded.shape\n        pairwise_flat = pairwise_padded.view(batch_size * max_pairs, -1)  # [batch*max_pairs, 2]\n        pairwise_encoded = self.pairwise_encoder(pairwise_flat).view(batch_size, max_pairs, -1)  # [batch, max_pairs, 64]\n\n        # Average pooling over pairwise features\n        valid_pairs = torch.tensor([max(1, (n*(n-1))//2) for n in valid_objs], \n                                 device=pairwise_encoded.device)\n        pairwise_pooled = pairwise_encoded.sum(dim=1) / valid_pairs.unsqueeze(1)  # [batch, 64]\n\n        # Concatenate all features\n        combined = torch.cat([global_encoded, obj_pooled, pairwise_pooled], dim=1)  # [batch, 256]\n\n        # Final prediction\n        logits = self.classifier(combined)  # [batch, 1]\n        return torch.sigmoid(logits.squeeze(1))  # [batch]\n\ndef make_model(example_object):\n    return BinaryClassifier(example_object)\n\n# 3. ---------- MODEL TRAINING ----------\nEPOCHS = 30\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')\n    model = model.to(device)\n\n    optimizer = Adam(model.parameters(), lr=3e-4, weight_decay=1e-5)\n    scheduler = ReduceLROnPlateau(optimizer, 'max', patience=4, factor=0.5, verbose=False)\n    criterion = nn.BCELoss()\n\n    best_auc = 0\n    best_model = None\n    epochs_no_improve = 0\n    patience = 7\n\n    train_loss_history = []\n    val_loss_history = []\n    train_acc_history = []\n    val_acc_history = []\n\n    for epoch in range(epochs):\n        model.train()\n        epoch_train_loss = 0\n        all_targets = []\n        all_preds = []\n\n        for batch in train_loader:\n            inputs, targets = batch\n            inputs = tuple(t.to(device) for t in inputs)\n            targets = targets.float().to(device)\n\n            optimizer.zero_grad()\n            outputs = model(*inputs)\n            loss = criterion(outputs, targets)\n            loss.backward()\n            optimizer.step()\n\n            epoch_train_loss += loss.item()\n\n            all_preds.append(outputs.detach().cpu())\n            all_targets.append(targets.detach().cpu())\n\n        train_preds = torch.cat(all_preds)\n        train_targets = torch.cat(all_targets)\n        train_auc = roc_auc_score(train_targets.numpy(), train_preds.numpy())\n        train_acc = ((train_preds > 0.5).float() == train_targets).float().mean().item()\n        train_loss_history.append(epoch_train_loss / len(train_loader))\n        train_acc_history.append(train_acc)\n\n        model.eval()\n        val_loss = 0\n        all_val_preds = []\n        all_val_targets = []\n\n        with torch.no_grad():\n            for batch in val_loader:\n                inputs, targets = batch\n                inputs = tuple(t.to(device) for t in inputs)\n                targets = targets.float().to(device)\n\n                outputs = model(*inputs)\n                loss = criterion(outputs, targets)\n                val_loss += loss.item()\n\n                all_val_preds.append(outputs.cpu())\n                all_val_targets.append(targets.cpu())\n\n        val_preds = torch.cat(all_val_preds)\n        val_targets = torch.cat(all_val_targets)\n        val_auc = roc_auc_score(val_targets.numpy(), val_preds.numpy())\n        val_acc = ((val_preds > 0.5).float() == val_targets).float().mean().item()\n\n        val_loss_history.append(val_loss / len(val_loader))\n        val_acc_history.append(val_acc)\n\n        scheduler.step(val_auc)\n\n        if val_auc > best_auc:\n            best_auc = val_auc\n            best_model = model.state_dict()\n            epochs_no_improve = 0\n        else:\n            epochs_no_improve += 1\n\n        if epochs_no_improve >= patience:\n            print(f'Early stopping at epoch {epoch + 1}')\n            break\n\n    model.load_state_dict(best_model)\n    return model, train_loss_history, val_loss_history, train_acc_history, val_acc_history",
+    "reasoning": "",
+    "Outer_attempt": 1
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-06-23T13:16:07Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-06-23T13:16:07Z",
+        "metrics": {
+          ".\\./outputs/23-06/FOURTOPS/Q3/script_deepseek_deepseek-chat-v3-0324_1515_1.py": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 330,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 330,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2025-06-23T13:16:25Z",
+    "passed": false,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/23-06/FOURTOPS/Q3/script_deepseek_deepseek-chat-v3-0324_1515_1.py\nargv2=--dryrun\n",
+      "stderr": "Traceback (most recent call last):\n  File \"/workspace/outputs/23-06/FOURTOPS/Q3/script_deepseek_deepseek-chat-v3-0324_1515_1.py\", line 452, in <module>\n    _run(dryrun=\"--dryrun\" in sys.argv)\n    ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/outputs/23-06/FOURTOPS/Q3/script_deepseek_deepseek-chat-v3-0324_1515_1.py\", line 387, in _run\n    X_train = pre.transform(X_train)\n  File \"/workspace/outputs/23-06/FOURTOPS/Q3/script_deepseek_deepseek-chat-v3-0324_1515_1.py\", line 141, in transform\n    return self._process_events(X)\n           ~~~~~~~~~~~~~~~~~~~~^^^\n  File \"/workspace/outputs/23-06/FOURTOPS/Q3/script_deepseek_deepseek-chat-v3-0324_1515_1.py\", line 128, in _process_events\n    pairwise_feats = self._create_pairwise_features(valid_obj)\n  File \"/workspace/outputs/23-06/FOURTOPS/Q3/script_deepseek_deepseek-chat-v3-0324_1515_1.py\", line 97, in _create_pairwise_features\n    eta_i, phi_i = objects[i, 3], objects[i, 4]\n                                  ~~~~~~~^^^^^^\nIndexError: index 4 is out of bounds for dimension 1 with size 4\n"
+    },
+    "return_code": 1
+  }
+}

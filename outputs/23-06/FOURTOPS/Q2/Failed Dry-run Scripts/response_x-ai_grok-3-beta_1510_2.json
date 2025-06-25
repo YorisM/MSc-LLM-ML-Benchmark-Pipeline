@@ -1,0 +1,70 @@
+{
+  "LLMGeneration": {
+    "model": "x-ai/grok-3-beta",
+    "endpoint": "https://openrouter.ai/api/v1/completions",
+    "prompt_tokens": null,
+    "prompt_chars": 15070,
+    "response_tokens": null,
+    "response_chars": 64395,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": null,
+    "generation_ms": 180449,
+    "code": "# 0. ---------- IMPORTS ----------\nimport torch\nimport torch.nn as nn\nimport torch.optim as optim\nfrom sklearn.metrics import roc_auc_score\nimport numpy as np\n\n# 2. ---------- PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.global_means = None\n        self.global_stds = None\n        self.obj_means = None\n        self.obj_stds = None\n        self.max_objects = 18\n        self.obj_slice_size = 5\n\n    def _raw_reshape(self, X):\n        return X  # Return as is, shape: [N, 92]\n\n    def fit(self, X, y=None):\n        # Extract global features (E_T_miss, phi_Et_miss)\n        global_features = X[:, :2]\n        self.global_means = torch.mean(global_features, dim=0)\n        self.global_stds = torch.std(global_features, dim=0)\n        self.global_stds[self.global_stds == 0] = 1.0\n\n        # Extract object features\n        obj_features = X[:, 2:].reshape(-1, self.max_objects, self.obj_slice_size)  # Shape: [N, 18, 5]\n        obj_features_valid = obj_features[obj_features[:, :, 0] != 0]  # Filter out padding\n        if obj_features_valid.size(0) > 0:\n            self.obj_means = torch.mean(obj_features_valid, dim=0)\n            self.obj_stds = torch.std(obj_features_valid, dim=0)\n            self.obj_stds[self.obj_stds == 0] = 1.0\n        else:\n            self.obj_means = torch.zeros(self.obj_slice_size)\n            self.obj_stds = torch.ones(self.obj_slice_size)\n        return self\n\n    def transform(self, X):\n        # Standardize global features\n        global_features = X[:, :2]\n        global_features = (global_features - self.global_means) / self.global_stds  # Shape: [N, 2]\n\n        # Reshape object features\n        obj_features = X[:, 2:].reshape(-1, self.max_objects, self.obj_slice_size)  # Shape: [N, 18, 5]\n\n        # Standardize object features\n        obj_features = (obj_features - self.obj_means) / self.obj_stds  # Shape: [N, 18, 5]\n\n        # Calculate pairwise features (invariant mass and delta R)\n        pairwise_masses = []\n        pairwise_deltaRs = []\n        for i in range(self.max_objects):\n            for j in range(i + 1, self.max_objects):\n                # Extract kinematics for pair\n                pt1, eta1, phi1 = obj_features[:, i, 2:5]  # p_T, eta, phi for obj i\n                pt2, eta2, phi2 = obj_features[:, j, 2:5]  # p_T, eta, phi for obj j\n                E1 = obj_features[:, i, 1]  # Energy for obj i\n                E2 = obj_features[:, j, 1]  # Energy for obj j\n\n                # Compute invariant mass approximation (simplified)\n                mass = torch.sqrt(torch.abs(2 * pt1 * pt2 * (1 - torch.cos(phi1 - phi2)) + (E1 + E2) ** 2))\n                pairwise_masses.append(mass.unsqueeze(-1))  # Shape: [N, 1]\n\n                # Compute delta R\n                delta_eta = eta1 - eta2\n                delta_phi = torch.abs(phi1 - phi2)\n                delta_phi = torch.min(delta_phi, 2 * np.pi - delta_phi)\n                delta_R = torch.sqrt(delta_eta ** 2 + delta_phi ** 2)\n                pairwise_deltaRs.append(delta_R.unsqueeze(-1))  # Shape: [N, 1]\n\n        pairwise_features = torch.cat(pairwise_masses + pairwise_deltaRs, dim=-1)  # Shape: [N, num_pairs * 2]\n        num_pairs = len(pairwise_masses)\n        expected_pairwise_features = num_pairs * 2  # invariant masses + delta Rs\n\n        # Check if pairwise_features matches expected shape\n        if pairwise_features.shape[-1] != expected_pairwise_features:\n            # If mismatch, create a tensor of zeros with the expected shape\n            pairwise_features = torch.zeros(X.shape[0], expected_pairwise_features, device=X.device)\n\n        # Flatten object features\n        obj_features_flat = obj_features.reshape(-1, self.max_objects * self.obj_slice_size)  # Shape: [N, 90]\n\n        # Concatenate all features\n        transformed_X = torch.cat([global_features, obj_features_flat, pairwise_features], dim=-1)  # Shape: [N, 2 + 90 + num_pairs*2]\n        return transformed_X\n\n    def fit_transform(self, X, y=None):\n        self.fit(X, y)\n        return self.transform(X)\n\n    def make_loader_cfg(self):\n        return None\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# 2. ---------- MODEL DEFINITION ----------\nclass BinaryClassifier(nn.Module):\n    def __init__(self, sample_object):\n        super().__init__()\n        input_dim = sample_object.shape[-1]  # Dynamic input dimension based on preprocessed features\n        self.fc1 = nn.Linear(input_dim, 512)\n        self.bn1 = nn.BatchNorm1d(512)\n        self.fc2 = nn.Linear(512, 256)\n        self.bn2 = nn.BatchNorm1d(256)\n        self.fc3 = nn.Linear(256, 128)\n        self.bn3 = nn.BatchNorm1d(128)\n        self.fc4 = nn.Linear(128, 1)\n        self.relu = nn.ReLU()\n        self.dropout = nn.Dropout(0.3)\n        self.sigmoid = nn.Sigmoid()\n\n    def forward(self, x):\n        x = self.fc1(x)\n        x = self.bn1(x)\n        x = self.relu(x)\n        x = self.dropout(x)\n        x = self.fc2(x)\n        x = self.bn2(x)\n        x = self.relu(x)\n        x = self.dropout(x)\n        x = self.fc3(x)\n        x = self.bn3(x)\n        x = self.relu(x)\n        x = self.dropout(x)\n        x = self.fc4(x)\n        x = self.sigmoid(x)\n        return x\n\ndef make_model(example_object):\n    return BinaryClassifier(example_object)\n\n# 3. ---------- MODEL TRAINING ----------\nEPOCHS = 20\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    optimizer = optim.Adam(model.parameters(), lr=0.001)\n    criterion = nn.BCELoss()\n    device = torch.device(\"cuda\" if torch.cuda.is_available() else \"cpu\")\n    model.to(device)\n\n    best_val_auc = 0.0\n    patience = 5\n    trigger_times = 0\n    train_loss, val_loss = [], []\n    train_acc, val_acc = [], []\n    val_auc = []\n\n    for epoch in range(epochs):\n        model.train()\n        running_loss = 0.0\n        correct = 0\n        total = 0\n        for batch_x, batch_y in train_loader:\n            batch_x, batch_y = batch_x.to(device), batch_y.to(device).float()\n            optimizer.zero_grad()\n            outputs = model(batch_x).squeeze()\n            loss = criterion(outputs, batch_y)\n            loss.backward()\n            optimizer.step()\n            running_loss += loss.item()\n            predicted = (outputs >= 0.5).float()\n            total += batch_y.size(0)\n            correct += (predicted == batch_y).sum().item()\n        epoch_train_loss = running_loss / len(train_loader)\n        epoch_train_acc = correct / total\n        train_loss.append(epoch_train_loss)\n        train_acc.append(epoch_train_acc)\n\n        model.eval()\n        val_running_loss = 0.0\n        correct = 0\n        total = 0\n        val_outputs_all = []\n        val_labels_all = []\n        with torch.no_grad():\n            for batch_x, batch_y in val_loader:\n                batch_x, batch_y = batch_x.to(device), batch_y.to(device).float()\n                outputs = model(batch_x).squeeze()\n                val_running_loss += criterion(outputs, batch_y).item()\n                predicted = (outputs >= 0.5).float()\n                total += batch_y.size(0)\n                correct += (predicted == batch_y).sum().item()\n                val_outputs_all.append(outputs.cpu().numpy())\n                val_labels_all.append(batch_y.cpu().numpy())\n        epoch_val_loss = val_running_loss / len(val_loader)\n        epoch_val_acc = correct / total\n        val_loss.append(epoch_val_loss)\n        val_acc.append(epoch_val_acc)\n\n        # Compute AUC\n        val_outputs_all = np.concatenate(val_outputs_all)\n        val_labels_all = np.concatenate(val_labels_all)\n        epoch_val_auc = roc_auc_score(val_labels_all, val_outputs_all)\n        val_auc.append(epoch_val_auc)\n\n        print(f\"Epoch {epoch+1}/{epochs}, Train Loss: {epoch_train_loss:.4f}, Val Loss: {epoch_val_loss:.4f}, Val AUC: {epoch_val_auc:.4f}\")\n\n        # Early stopping based on AUC\n        if epoch_val_auc > best_val_auc:\n            best_val_auc = epoch_val_auc\n            trigger_times = 0\n        else:\n            trigger_times += 1\n            if trigger_times >= patience:\n                print(\"Early stopping triggered\")\n                break\n\n    return model, train_loss, val_loss, train_acc, val_acc",
+    "reasoning": "",
+    "Outer_attempt": 2
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-06-23T13:10:27Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-06-23T13:10:27Z",
+        "metrics": {
+          ".\\./outputs/23-06/FOURTOPS/Q3/script_x-ai_grok-3-beta_1510_2.py": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 279,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 279,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2025-06-23T13:10:45Z",
+    "passed": false,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/23-06/FOURTOPS/Q3/script_x-ai_grok-3-beta_1510_2.py\nargv2=--dryrun\n",
+      "stderr": "Traceback (most recent call last):\n  File \"/workspace/outputs/23-06/FOURTOPS/Q3/script_x-ai_grok-3-beta_1510_2.py\", line 371, in <module>\n    _run(dryrun=\"--dryrun\" in sys.argv)\n    ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/outputs/23-06/FOURTOPS/Q3/script_x-ai_grok-3-beta_1510_2.py\", line 306, in _run\n    X_train = pre.transform(X_train)\n  File \"/workspace/outputs/23-06/FOURTOPS/Q3/script_x-ai_grok-3-beta_1510_2.py\", line 129, in transform\n    pt1, eta1, phi1 = obj_features[:, i, 2:5]  # p_T, eta, phi for obj i\n    ^^^^^^^^^^^^^^^\nValueError: too many values to unpack (expected 3)\n"
+    },
+    "return_code": 1
+  }
+}

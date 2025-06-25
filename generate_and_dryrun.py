@@ -4,6 +4,7 @@
 import os, requests, json, logging, shutil, time, re, textwrap
 import config
 from pathlib import Path
+from tqdm import tqdm
 
 from static_checks import run_pylint, run_bandit
 from run_scripts import run_single_script
@@ -279,7 +280,7 @@ def generate_and_dryrun():
     for challenge in config.challenges:
         logging.info(f"Executing challenge: {challenge.name}")
 
-        for question in challenge.questions:
+        for question in tqdm(challenge.questions, desc=f"{challenge.name} questions", leave=False):
             day_month = time.strftime("%d-%m")
             output_dir = f"./outputs/{day_month}/{challenge.name}/{question.question_id}/"
             os.makedirs(output_dir, exist_ok=True)
@@ -287,13 +288,20 @@ def generate_and_dryrun():
 
             prompt = challenge.build_prompt(question)
             prompt = f"{prompt}"
+
+            # Save prompt
+            prompt_path = os.path.join(output_dir, f"{question.question_id}_prompt.txt")
+            with open(prompt_path, "w", encoding="utf-8") as f:
+                f.write(prompt)
+
             logging.info("Prompt: %s", prompt)
 
-            for model in config.models:
+            for model in tqdm(config.models, desc="Models", leave=False):
                 safe_model = model.replace("/", "_")
                 
                 run_success = False
-                for attempt in range(1, config.num_attempts + 1):
+                for attempt in tqdm(range(1, config.num_attempts + 1), desc=f"{model} Attempt", 
+                                    leave=False):
                     logging.info("Querying model %s: Attempt %d", model, attempt)
                     response = query_openrouter(model, prompt)
 

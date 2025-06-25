@@ -1,0 +1,70 @@
+{
+  "LLMGeneration": {
+    "model": "openai/gpt-4o-mini",
+    "endpoint": "https://openrouter.ai/api/v1/completions",
+    "prompt_tokens": 3660,
+    "prompt_chars": 14641,
+    "response_tokens": 1017,
+    "response_chars": 4273,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 5.796e-05,
+    "generation_ms": 17295,
+    "code": "# 0. ---------- IMPORTS ----------\nfrom sklearn.preprocessing import StandardScaler\nfrom sklearn.metrics import roc_auc_score\nimport numpy as np\n\n# 2. ---------- PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.scaler = StandardScaler()\n\n    def fit(self, X, y=None):\n        # We only fit on the non-object features (first 2 columns)\n        self.scaler.fit(X[:, :2])  # (N, 2)\n        return self\n\n    def transform(self, X):\n        # Scale the first 2 columns and leave the rest unchanged\n        X_scaled = self.scaler.transform(X[:, :2])  # (N, 2)\n        return np.hstack([X_scaled, X[:, 2:]])  # (N, 92)\n\n    def fit_transform(self, X, y=None):\n        return self.fit(X, y).transform(X)\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# 2. ---------- MODEL DEFINITION ----------\nclass BinaryClassifier(nn.Module):\n    def __init__(self, sample_object):\n        super().__init__()\n        self.fc1 = nn.Linear(sample_object.shape[1], 64)  # Input: 92, Output: 64\n        self.fc2 = nn.Linear(64, 32)                       # Input: 64, Output: 32\n        self.fc3 = nn.Linear(32, 1)                        # Input: 32, Output: 1\n        self.dropout = nn.Dropout(0.5)                     # Dropout Layer\n        self.activation = nn.Sigmoid()\n\n    def forward(self, x):\n        x = self.fc1(x)                                   # (B, 64)\n        x = nn.ReLU()(x)                                  # (B, 64)\n        x = self.dropout(x)                               # (B, 64)\n        x = self.fc2(x)                                   # (B, 32)\n        x = nn.ReLU()(x)                                  # (B, 32)\n        x = self.fc3(x)                                   # (B, 1)\n        return self.activation(x)                          # (B, 1)\n\ndef make_model(example_object):\n    return BinaryClassifier(example_object)\n\n# 3. ---------- MODEL TRAINING ----------\nEPOCHS = 10\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')\n    model.to(device)\n\n    criterion = nn.BCELoss()\n    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)\n    best_roc_auc = 0\n    patience, trials = 5, 0  # Early stopping\n\n    train_losses, val_losses, train_aucs, val_aucs = [], [], [], []\n\n    for epoch in range(epochs):\n        model.train()\n        running_loss = 0.0\n        for data, targets in train_loader:\n            data, targets = data.to(device), targets.float().to(device)  # (B, 92), (B,)\n            optimizer.zero_grad()\n            outputs = model(data)                                       # (B, 1)\n            loss = criterion(outputs.squeeze(), targets)               # Loss calculation\n            loss.backward()\n            optimizer.step()\n            running_loss += loss.item()\n\n        running_loss /= len(train_loader)\n        train_losses.append(running_loss)\n\n        # Validation\n        model.eval()\n        val_running_loss = 0.0\n        val_targets = []\n        val_outputs = []\n\n        with torch.no_grad():\n            for data, targets in val_loader:\n                data, targets = data.to(device), targets.float().to(device)  # (B, 92), (B,)\n                outputs = model(data)                                       # (B, 1)\n                val_loss = criterion(outputs.squeeze(), targets)\n                val_running_loss += val_loss.item()\n\n                val_targets.extend(targets.cpu().numpy())\n                val_outputs.extend(outputs.squeeze().cpu().numpy())\n\n        val_running_loss /= len(val_loader)\n        val_losses.append(val_running_loss)\n\n        # ROC AUC Calculation\n        val_auc = roc_auc_score(val_targets, val_outputs)\n        val_aucs.append(val_auc)\n\n        print(f'Epoch [{epoch + 1}/{epochs}], Train Loss: {running_loss:.4f}, Val Loss: {val_running_loss:.4f}, Val AUC: {val_auc:.4f}')\n\n        # Early stopping\n        if val_auc > best_roc_auc:\n            best_roc_auc = val_auc\n            trials = 0  # reset trials on improvement\n        else:\n            trials += 1\n\n        if trials >= patience:\n            print(\"Early stopping triggered.\")\n            break\n\n    return model, train_losses, val_losses, train_aucs, val_aucs",
+    "reasoning": "",
+    "Outer_attempt": 1
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-06-20T11:52:27Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-06-20T11:52:27Z",
+        "metrics": {
+          ".\\./outputs/20-06/FOURTOPS/Q1/script_openai_gpt-4o-mini_1351_1.py": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 198,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 198,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2025-06-20T11:52:50Z",
+    "passed": false,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/20-06/FOURTOPS/Q1/script_openai_gpt-4o-mini_1351_1.py\nargv2=--dryrun\nERROR during training: mat1 and mat2 must have the same dtype, but got Double and Float\n",
+      "stderr": "Traceback (most recent call last):\n  File \"/workspace/outputs/20-06/FOURTOPS/Q1/script_openai_gpt-4o-mini_1351_1.py\", line 274, in <module>\n    _run(dryrun=\"--dryrun\" in sys.argv)\n    ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/outputs/20-06/FOURTOPS/Q1/script_openai_gpt-4o-mini_1351_1.py\", line 228, in _run\n    trained_model, tr_loss, va_loss, tr_acc, va_acc = train_model(\n                                                      ~~~~~~~~~~~^\n        model, train_loader, val_loader, epochs=n_epochs)\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/outputs/20-06/FOURTOPS/Q1/script_openai_gpt-4o-mini_1351_1.py\", line 140, in train_model\n    outputs = model(data)                                       # (B, 1)\n  File \"/usr/local/lib/python3.13/site-packages/torch/nn/modules/module.py\", line 1751, in _wrapped_call_impl\n    return self._call_impl(*args, **kwargs)\n           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.13/site-packages/torch/nn/modules/module.py\", line 1762, in _call_impl\n    return forward_call(*args, **kwargs)\n  File \"/workspace/outputs/20-06/FOURTOPS/Q1/script_openai_gpt-4o-mini_1351_1.py\", line 110, in forward\n    x = self.fc1(x)                                   # (B, 64)\n  File \"/usr/local/lib/python3.13/site-packages/torch/nn/modules/module.py\", line 1751, in _wrapped_call_impl\n    return self._call_impl(*args, **kwargs)\n           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.13/site-packages/torch/nn/modules/module.py\", line 1762, in _call_impl\n    return forward_call(*args, **kwargs)\n  File \"/usr/local/lib/python3.13/site-packages/torch/nn/modules/linear.py\", line 125, in forward\n    return F.linear(input, self.weight, self.bias)\n           ~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nRuntimeError: mat1 and mat2 must have the same dtype, but got Double and Float\n"
+    },
+    "return_code": 1
+  }
+}

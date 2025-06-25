@@ -1,8 +1,24 @@
-# utils.py
+# utils/utils.py
 
 import os, pathlib, platform, json, datetime, logging
-from typing import Union, TextIO, Optional
+from typing import Union, TextIO, Optional, Iterator
 from sys import stdout
+
+
+# Config
+SKIP_DIRS: set[str] = {"Failed Dry-run Scripts", "StaticFail"}
+
+
+class _NpEncoder(json.JSONEncoder):
+    def default(self, obj):
+        import numpy as np
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()          
+        if isinstance(obj, (np.floating,)):
+            return float(obj)
+        if isinstance(obj, (np.integer,)):
+            return int(obj)
+        return super().default(obj)
 
 def print_repo_tree(
     root: Union[str, pathlib.Path] = ".",
@@ -86,9 +102,10 @@ def append_to_response_json(json_path: str, section: str, payload: dict, *, trim
                             ts: bool = True) -> None:
 
     p = pathlib.Path(json_path)
-    blob = {}
 
-    if p.exists():
+    if not p.exists() or p.stat().st_size == 0:
+        blob = {}
+    else:
         blob = json.loads(p.read_text(encoding="utf-8"))
 
     if trim_output:
@@ -100,8 +117,34 @@ def append_to_response_json(json_path: str, section: str, payload: dict, *, trim
         payload = {"__timestamp": datetime.datetime.utcnow()
                                       .isoformat(timespec="seconds")+'Z',
                    **payload}
-
+    
     blob[section] = payload
-    p.write_text(json.dumps(blob, ensure_ascii=False, indent=2),
-                 encoding="utf-8")
+
+    p.write_text(json.dumps(blob, ensure_ascii=False, indent=2, cls=_NpEncoder), 
+                encoding="utf-8")
+    
     logging.debug("Updated %s -> %s", p.name, section)
+
+def iter_input_dir(base: pathlib.Path | str) -> Iterator[pathlib.Path]:
+    """
+    Yield every outputs/<DATE>/<CHALLENGE>/<QUESTION> directory that lives
+    *under* `base`, no matter whether `base` itself is
+      • outputs/<DATE>/…
+      • outputs/<DATE>/<CHALLENGE>/…
+      • outputs/<DATE>/<CHALLENGE>/<QUESTION>
+    """
+    root = pathlib.Path(base).resolve()
+    try:
+        out_idx = root.parts.index("outputs")
+    except ValueError:
+        raise ValueError(f"{root} is not inside an 'outputs' tree")
+
+    depth = len(root.parts) - out_idx - 1          # after “outputs/”
+
+    if depth == 3:                                 # already at question depth
+        yield root
+        return
+
+    for p in root.rglob("*"):
+        if p.is_dir() and len(p.parts) - out_idx - 1 == 3:
+            yield p

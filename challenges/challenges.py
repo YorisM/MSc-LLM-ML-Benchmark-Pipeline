@@ -3,16 +3,18 @@
 import json
 
 # General Prompting Structure
-# - - - - - - - - - - - - - - - - - - - - 
+# - - - - - - - - - - - - - -
 # Instructions
 #   Problem Description
 #   Evaluation Metric
 #   Dataset Description
 #   Runtime Constraints
+#   Prefix
 #   Code Template
+#   Suffix
 #       Question
-#       Context
 # Response Format
+# - - - - - - - - - - - - - -
 
 
 # General Script Structure
@@ -30,7 +32,7 @@ a scalar metric in order to learn more about your scientific creativity
 and scientific understanding. You will follow all of the instructions 
 to your best capabilities. Your first priority is to produce a correct 
 solution in terms of runnable python code. Your second priority is to 
-do everything you can to maximise the metric defined below.
+maximise the scoring metric defined below.
 """ 
 
 DEFAULT_RUNTIME_CONSTRAINTS = r"""** Runtime Constraints **	

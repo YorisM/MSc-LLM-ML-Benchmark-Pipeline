@@ -1,0 +1,70 @@
+{
+  "LLMGeneration": {
+    "model": "deepseek/deepseek-chat-v3-0324",
+    "endpoint": "https://openrouter.ai/api/v1/completions",
+    "prompt_tokens": 3930,
+    "prompt_chars": 15070,
+    "response_tokens": 2222,
+    "response_chars": 8626,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.00401288,
+    "generation_ms": 70661,
+    "code": "import numpy as np\nimport torch\nimport torch.nn as nn\nimport torch.nn.functional as F\nfrom sklearn.metrics import roc_auc_score\n\nclass MyPreprocessor:\n    def __init__(self):\n        self.max_objects = 18\n        self.obj_features = 5  # obj_id, E, pT, eta, phi\n        self.global_features = 2  # Et_miss, phi_Et_miss\n        self.total_features = self.global_features + self.max_objects * self.obj_features\n\n    def _extract_objects(self, X):\n        batch_size = X.shape[0]\n        objects = X[:, 2:].reshape(batch_size, self.max_objects, self.obj_features)\n        valid_objects = (objects[..., 0] != 0)  # obj_id != 0 indicates valid object\n        return objects, valid_objects\n\n    def _compute_pairwise_features(self, objects, valid_objects):\n        batch_size = objects.shape[0]\n        all_mass = []\n        all_delta_r = []\n\n        for i in range(self.max_objects):\n            for j in range(i+1, self.max_objects):\n                mask = valid_objects[:, i] & valid_objects[:, j]\n\n                # Get four-vectors (E, pT, eta, phi)\n                obj_i = objects[:, i]\n                obj_j = objects[:, j]\n\n                # Compute invariant mass\n                px_i = obj_i[:, 2] * torch.cos(obj_i[:, 4])  # pT*cos(phi)\n                py_i = obj_i[:, 2] * torch.sin(obj_i[:, 4])  # pT*sin(phi)\n                pz_i = obj_i[:, 2] * torch.sinh(obj_i[:, 3]) # pT*sinh(eta)\n                ei = obj_i[:, 1]  # E\n\n                px_j = obj_j[:, 2] * torch.cos(obj_j[:, 4])\n                py_j = obj_j[:, 2] * torch.sin(obj_j[:, 4])\n                pz_j = obj_j[:, 2] * torch.sinh(obj_j[:, 3])\n                ej = obj_j[:, 1]\n\n                px_sum = px_i + px_j\n                py_sum = py_i + py_j\n                pz_sum = pz_i + pz_j\n                e_sum = ei + ej\n\n                mass = torch.sqrt(e_sum**2 - (px_sum**2 + py_sum**2 + pz_sum**2))\n\n                # Compute delta R\n                deta = obj_i[:, 3] - obj_j[:, 3]\n                dphi = torch.atan2(torch.sin(obj_i[:, 4]-obj_j[:, 4]), \n                                  torch.cos(obj_i[:, 4]-obj_j[:, 4]))\n                delta_r = torch.sqrt(deta**2 + dphi**2)\n\n                # Apply mask\n                mass[~mask] = 0\n                delta_r[~mask] = 0\n\n                all_mass.append(mass.unsqueeze(1))\n                all_delta_r.append(delta_r.unsqueeze(1))\n\n        pairwise_mass = torch.cat(all_mass, dim=1)  # [batch, n_pairs]\n        pairwise_dr = torch.cat(all_delta_r, dim=1) # [batch, n_pairs]\n\n        return pairwise_mass, pairwise_dr\n\n    def _combine_features(self, X, objects, valid_objects, pairwise_mass, pairwise_dr):\n        batch_size = X.shape[0]\n\n        # Global features (Et miss, phi Et miss)\n        global_feats = X[:, :2]\n\n        # Flatten objects and keep only valid ones\n        flat_objects = objects.reshape(batch_size, -1)\n\n        # Normalize features\n        norm_objects = flat_objects.clone()\n        for i in range(self.max_objects):\n            start = i * self.obj_features + 2  # Skip obj id\n            norm_objects[:, start] = torch.log1p(norm_objects[:, start]/1000)  # E in GeV\n            norm_objects[:, start+1] = torch.log1p(norm_objects[:, start+1]/1000)  # pT in GeV\n\n        # Create mask for real objects\n        obj_mask = valid_objects.float().unsqueeze(-1)\n\n        # Combine all features\n        processed = torch.cat([\n            global_feats,\n            norm_objects,\n            pairwise_mass,\n            pairwise_dr\n        ], dim=1)\n\n        return processed\n\n    def fit(self, X, y=None):\n        return self\n\n    def transform(self, X):\n        if torch.is_tensor(X):\n            X = X.clone()\n        else:\n            X = torch.tensor(X, dtype=torch.float32)\n\n        objects, valid_objects = self._extract_objects(X)\n        pairwise_mass, pairwise_dr = self._compute_pairwise_features(objects, valid_objects)\n        processed = self._combine_features(X, objects, valid_objects, pairwise_mass, pairwise_dr)\n        return processed\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\nclass BinaryClassifier(nn.Module):\n    def __init__(self, sample_object):\n        super().__init__()\n\n        # Sample object shape will be [batch_size, n_features]\n        n_features = sample_object.shape[1] if len(sample_object.shape) > 1 else sample_object.shape[0]\n\n        self.model = nn.Sequential(\n            nn.BatchNorm1d(n_features),\n            nn.Linear(n_features, 1024),\n            nn.ReLU(),\n            nn.Dropout(0.3),\n\n            nn.BatchNorm1d(1024),\n            nn.Linear(1024, 512),\n            nn.ReLU(),\n            nn.Dropout(0.3),\n\n            nn.BatchNorm1d(512),\n            nn.Linear(512, 256),\n            nn.ReLU(),\n            nn.Dropout(0.2),\n\n            nn.BatchNorm1d(256),\n            nn.Linear(256, 128),\n            nn.ReLU(),\n\n            nn.Linear(128, 1)\n        )\n\n    def forward(self, x):\n        return torch.sigmoid(self.model(x))\n\ndef make_model(example_object):\n    return BinaryClassifier(example_object)\n\ndef train_model(model, train_loader, val_loader, epochs):\n    device = torch.device(\"cuda\" if torch.cuda.is_available() else \"cpu\")\n    model = model.to(device)\n\n    criterion = nn.BCELoss()\n    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-5)\n    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=2, verbose=False)\n\n    best_auc = 0\n    best_model = None\n    train_losses = []\n    val_losses = []\n    train_accs = []\n    val_accs = []\n\n    for epoch in range(epochs):\n        model.train()\n        epoch_train_loss = 0\n        correct_train = 0\n        total_train = 0\n        all_targets_train = []\n        all_outputs_train = []\n\n        for inputs, targets in train_loader:\n            inputs, targets = inputs.float().to(device), targets.float().to(device)\n\n            optimizer.zero_grad()\n            outputs = model(inputs).squeeze()\n\n            loss = criterion(outputs, targets)\n            loss.backward()\n            optimizer.step()\n\n            epoch_train_loss += loss.item()\n            predicted = (outputs > 0.5).float()\n            correct_train += (predicted == targets).sum().item()\n            total_train += targets.size(0)\n\n            all_targets_train.extend(targets.cpu().numpy())\n            all_outputs_train.extend(outputs.detach().cpu().numpy())\n\n        train_loss = epoch_train_loss / len(train_loader)\n        train_acc = correct_train / total_train\n        train_auc = roc_auc_score(all_targets_train, all_outputs_train)\n\n        model.eval()\n        epoch_val_loss = 0\n        correct_val = 0\n        total_val = 0\n        all_targets_val = []\n        all_outputs_val = []\n\n        with torch.no_grad():\n            for inputs, targets in val_loader:\n                inputs, targets = inputs.float().to(device), targets.float().to(device)\n                outputs = model(inputs).squeeze()\n\n                loss = criterion(outputs, targets)\n                epoch_val_loss += loss.item()\n\n                predicted = (outputs > 0.5).float()\n                correct_val += (predicted == targets).sum().item()\n                total_val += targets.size(0)\n\n                all_targets_val.extend(targets.cpu().numpy())\n                all_outputs_val.extend(outputs.cpu().numpy())\n\n        val_loss = epoch_val_loss / len(val_loader)\n        val_acc = correct_val / total_val\n        val_auc = roc_auc_score(all_targets_val, all_outputs_val)\n\n        scheduler.step(val_loss)\n\n        train_losses.append(train_loss)\n        val_losses.append(val_loss)\n        train_accs.append(train_acc)\n        val_accs.append(val_acc)\n\n        print(f\"Epoch {epoch+1}/{epochs}\")\n        print(f\"Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}\")\n        print(f\"Train Acc: {train_acc:.4f}, Val Acc: {val_acc:.4f}\")\n        print(f\"Train AUC: {train_auc:.4f}, Val AUC: {val_auc:.4f}\")\n        print(\"-\" * 50)\n\n        if val_auc > best_auc:\n            best_auc = val_auc\n            best_model = model.state_dict()\n\n    # Load best model\n    model.load_state_dict(best_model)\n    return model, train_losses, val_losses, train_accs, val_accs\n\nEPOCHS = 30",
+    "reasoning": "",
+    "Outer_attempt": 3
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-06-23T13:20:02Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-06-23T13:20:02Z",
+        "metrics": {
+          ".\\./outputs/23-06/FOURTOPS/Q3/script_deepseek_deepseek-chat-v3-0324_1519_3.py": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 292,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 292,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2025-06-23T13:20:27Z",
+    "passed": false,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/23-06/FOURTOPS/Q3/script_deepseek_deepseek-chat-v3-0324_1519_3.py\nargv2=--dryrun\nERROR during training: ReduceLROnPlateau.__init__() got an unexpected keyword argument 'verbose'\n",
+      "stderr": "Traceback (most recent call last):\n  File \"/workspace/outputs/23-06/FOURTOPS/Q3/script_deepseek_deepseek-chat-v3-0324_1519_3.py\", line 404, in <module>\n    _run(dryrun=\"--dryrun\" in sys.argv)\n    ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/outputs/23-06/FOURTOPS/Q3/script_deepseek_deepseek-chat-v3-0324_1519_3.py\", line 358, in _run\n    trained_model, tr_loss, va_loss, tr_acc, va_acc = train_model(\n                                                      ~~~~~~~~~~~^\n        model, train_loader, val_loader, epochs=n_epochs)\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/outputs/23-06/FOURTOPS/Q3/script_deepseek_deepseek-chat-v3-0324_1519_3.py\", line 229, in train_model\n    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=2, verbose=False)\nTypeError: ReduceLROnPlateau.__init__() got an unexpected keyword argument 'verbose'\n"
+    },
+    "return_code": 1
+  }
+}
