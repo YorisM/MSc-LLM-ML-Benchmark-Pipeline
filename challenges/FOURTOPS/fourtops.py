@@ -6,10 +6,10 @@ fourtop_challenge = Challenge(
     name = "FOURTOPS",
 
     dataset = {
-    "X_train": "./challenges/FOURTOPS/data/X_train.csv",
-    "Y_train": "./challenges/FOURTOPS/data/Y_train.csv",
-    "X_val":   "./challenges/FOURTOPS/data/X_val.csv",
-    "Y_val":   "./challenges/FOURTOPS/data/Y_val.csv"
+    "X_train": "./challenges/FOURTOPS/data/train/X_train.csv",
+    "Y_train": "./challenges/FOURTOPS/data/train/Y_train.csv",
+    "X_val":   "./challenges/FOURTOPS/data/train/X_val.csv",
+    "Y_val":   "./challenges/FOURTOPS/data/train/Y_val.csv"
     },
 
     problem_description = r"""** Problem Description **
@@ -70,7 +70,8 @@ negative classes. The higher the score the better.
 
     prefix = r"""
 # ----------------  START HARNESS WRAPPER PREFIX (FOR CONTEXT)  ---------------- 
-# Environment: Python 3.12, PyTorch 2.6.0, Torch_Geometric 2.6.1, NumPy 2.2.3, SciPy v1.15.2, SciKit-Learn 1.6.1
+# Environment: python 3.12, torch 2.6.0, torch_geometric 2.6.1, numpy 2.3.1, 
+# scipy 1.16.0, scikit-learn 1.7.0
 import os, sys, pickle, torch, torch_geometric, gc, json, importlib
 import pandas as pd
 import numpy as np
@@ -118,7 +119,7 @@ def _make_dataset(x, y):
             return ds
     return PairDataset(x, y)
 
-def make_loaders(X_train, Y_train, X_val, Y_val, *, batch=512, collate_fn=None, loader_cls=None):
+def make_loaders(X_train, Y_train, X_val, Y_val, *, batch=512, collate_fn=None, loader_cls=None, workers=0):
     train_ds = _make_dataset(X_train, Y_train)
     val_ds   = _make_dataset(X_val , Y_val)
 
@@ -145,9 +146,9 @@ def make_loaders(X_train, Y_train, X_val, Y_val, *, batch=512, collate_fn=None, 
 
 # 2. ---------- PRE-PROCESSING ----------
 class MyPreprocessor:
-    #    Must implement:
-    #   - fit(...)               -> self
-    #   - transform(X: ???)      -> ???
+    # Must implement:
+    #   - fit() 
+    #   - transform()
 
     # DATA SPECIFICS
     # Total flat length per event (X_train & X_val): 92
@@ -186,7 +187,6 @@ class MyPreprocessor:
     # @staticmethod
     # def _collate_fn(batch: list):
     #    <LLM: Apply optional custom collate logic here>
-    #    return None
 
     def make_loader_cfg(self):
         # Return dict or None.  If dict, evaluator uses it to rebuild loader:
@@ -200,7 +200,7 @@ class MyPreprocessor:
         return None
 
     def fit(self, X, y=None):
-        # <LLM: Extract statistics for fit transformers>
+        # <LLM: Extract statistics for fit transform>
         return self
 
     def transform(self, X):
@@ -233,10 +233,10 @@ def make_model(example_object):
 EPOCHS = 10   # <LLM: adjust if you wish>
 def train_model(model: nn.Module, train_loader, val_loader, epochs: int):
     # REQUIREMENTS 
-    # Do NOT pass "verbose=" to any PyTorch scheduler (not supported in this image).
-    # Must return trained_model, train_loss, val_loss, train_acc, val_acc
-    # Implement early-stopping.
-    # Forward signature must match.
+    #   Do NOT pass "verbose=" to any PyTorch scheduler (not supported in this image).
+    #   Must return trained_model, train_loss, val_loss, train_acc, val_acc
+    #   Implement early-stopping.
+    #   Forward signature must match.
 
     # <LLM: Write code to define training loop>
     # <LLM: Implement early stopping if possible>
@@ -267,7 +267,10 @@ def _run(dryrun=False):
     # 1. Load & preprocess
     X_train, Y_train, X_val, Y_val = load_data()
     if dryrun:
-        X_train, Y_train, X_val, Y_val = X_train[:200], Y_train[:200], X_val[:20], Y_val[:20]
+        idx = torch.randperm(X_train.shape[0])[:400]
+        X_train, Y_train = X_train[idx], Y_train[idx]
+        idx = torch.randperm(X_val.shape[0])[:20]
+        X_val, Y_val = X_val[idx], Y_val[idx]
     pre     = make_preprocessor().fit(X_train, Y_train)
     X_train = pre.transform(X_train)
     X_val   = pre.transform(X_val)
@@ -278,7 +281,8 @@ def _run(dryrun=False):
     train_loader, val_loader = make_loaders(X_train, Y_train, X_val, Y_val, 
                                             batch      = cfg.get("batch_size", 512), 
                                             collate_fn = collate,
-                                            loader_cls = loader_cls)
+                                            loader_cls = loader_cls,
+                                            workers    = cfg.get("num_workers", 0))
 
     # 2. Build model
     first_batch    = next(iter(train_loader))
@@ -337,6 +341,7 @@ if __name__ == "__main__":
     _run(dryrun="--dryrun" in sys.argv)
 
 # ----------------  END HARNESS WRAPPER SUFFIX (FOR CONTEXT)  ---------------- 
+
 """,
 
     questions = [
@@ -354,13 +359,13 @@ You may freely choose any pre-processing methods and techniques as well as model
 You may optionally leverage the following particle-physics insights (strongly recommended if possible):
 
 Pairwise Particle Features: It has been shown that explicitly computing pairwise particle features, particularly 
-the invariant mass $m_{ij}$ and the angular distance $\delta R_{ij} = \sqrt((\eta_i - \eta_j)^2 + (\phi_i - \phi_j))$
-​can significantly enhance the discriminative power of your model.
+the invariant mass $m_{ij} = $ and the angular distance $\delta R_{ij} = \sqrt{(\eta_i - \eta_j)^2 + (\phi_i - \phi_j)^2}$
+can significantly enhance the discriminative power of your model.
                 
 Model Architecture: It has been shown that Transformer models and Graph Neural Networks are particularly well-suited
 for this task.
 
-Do absolutely everything in your power to achieve the highest possible AUC. 
-#""")
+Do absolutely everything in your power to achieve the highest possible AUC.
+""")
 ]
 )

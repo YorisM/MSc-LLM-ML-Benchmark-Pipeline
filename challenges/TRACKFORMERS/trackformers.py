@@ -2,12 +2,6 @@
 
 from challenges.challenges import Challenge, Question
 
-# To FIX:
-# -------
-# Datatype in preproc ambiguity
-#       MyPreprocessor.transform(self, events) -> MyPreprocessor.transform(self, hits: torch.Tensor)
-# Import PyG
-
 trackformers_challenge = Challenge(
     name = "TRACKFORMERS",
 
@@ -16,102 +10,131 @@ trackformers_challenge = Challenge(
             "Train" : "./challenges/TRACKFORMERS/data/REDVID_10-50_linear_train.pkl.gz",
             "Val"   : "./challenges/TRACKFORMERS/data/REDVID_10-50_linear_val.pkl.gz",
             "Test"  : "./challenges/TRACKFORMERS/data/REDVID_10-50_linear_test.pkl.gz"
+            },
+
+        "REDVID_10-50_linear_frac0.05" : {
+            "Train" : "./challenges/TRACKFORMERS/data/REDVID_10-50_linear_frac0.05_train.pkl.gz",
+            "Val"   : "./challenges/TRACKFORMERS/data/REDVID_10-50_linear_frac0.05_val.pkl.gz",
+            "Test"  : "./challenges/TRACKFORMERS/data/REDVID_10-50_linear_frac0.05_test.pkl.gz"
             }
         },
 
     problem_description = r"""** Problem Description **
 Efficiently reconstructing particle trajectories from detector hits is crucial for the performance of
 particle physics experiments at colliders like the Large Hadron Collider (LHC). With the significant increase
-in data volumes expected in the High-Luminosity LHC era. So far, traditional conventional algorithms have generally 
+in data volumes expected in the High-Luminosity LHC era . So far, traditional algorithms have generally 
 been used yet traditional tracking methods become computationally expensive and increasingly inefficient. 
-Deep Learning is likely to take over trajectory reconstruction in the future. 
+Deep Learning is likely to take over trajectory reconstruction in the future. Compared with classical combinatorial
+tracking the learned approach scales sub-quadratically, copes gracefully with dense environments, and is far better
+suited for the extreme occupancies anticipated in the High-Luminosity era. In this challenge we thus cast tracking 
+as a supervised classification problem: for every hit the model must predict the track-ID it belongs to.  
 """,
-
-# The challenge here is to develop a two-step regression network that efficiently handles events with variable-length
-# hit sequences. Your model should first group hits into distinct track clusters and then accurately predict
-# track parameters for each identified cluster. Accurate reconstruction of track parameters enables precise
-# measurements of fundamental particle properties and event reconstructions.
 
     dataset_description = r"""** Dataset Description **
 The provided dataset consists of simulated proton-proton collision events, each containing between 10 and 50
-particle tracks. With a median of 45. These events are generated using the REDVID simulation framework, which approximates realistic
+particle tracks. With a median of 45 tracks per event. These events are generated using the REDVID simulation framework, which approximates realistic
 detector geometries resembling those at the LHC. Each event comprises detector hits represented in cylindrical 
-coordinates. The dataset contains 100000 events, split 80% for training, 10% evaluation and 10% testing.
+coordinates. The dataset contains 5000 events, split 80% for training, 10% validation and 10% testing.
 
 IMPORTANT: The specific line format of the dataset is represented as a tensor dictionary as follows:
 
 {
-  "hit_r"       : np.array of floats,     # [N_hits,]
-  "hit_theta"   : np.array of floats,     # [N_hits,]
-  "hit_z"       : np.array of floats,     # [N_hits,]
-  "layer_id"    : np.array of ints  ,     # [N_hits,]
+  "hit_r"       : np.array of torch.float32,     # [N_hits,]
+  "hit_theta"   : np.array of torch.float32,     # [N_hits,]
+  "hit_z"       : np.array of torch.float32,     # [N_hits,]
+  "layer_id"    : np.array of torch.float32,     # [N_hits,]
 }
 
 Here, "hit_r" represents the r coordinate defining the recorded hit point, "hit_theta" represents the theta
 coordinate defining the recorded hit point, "hit_z" represents the z coordinate defining the recorded hit point,
 each of which are on the relevant sub-detector. The "layer_id" indicates which sub-detector the hit was recorded
 on. It is an incremental identifier for different sub-detector layers belonging to a geometry, which is unique within
-the scope of the geometry. Three different sub-detector types are available: pixel, short-strip, and long-strip.
-The data is variable-length per event, with no explicit ordering of hits.
+the scope of the geometry. The data is variable-length per event, with no explicit ordering of hits.
 """,
 
     evaluation_metric = r"""** Evaluation Metric **
-The primary evaluation metric is the accuracy, which measures the fraction of hits that are correctly associated
-with their corresponding true particle tracks based on clustering accuracy.
+The evaluation metric for this particle reconstruction challenge is the FitAccuracy. A reconstructed track is
+only kept if: i) it contains >= 4 detectors hits and, ii) at least 50% of those hits stem from one single truth
+track. All other reconstructed tracks are discarded.
+
+For every truth track $t$ we look for the surviving reconstructed track that shares the largest number of its hits.
+
+$$n_{\text{match}}(t) = \max_{r}\ \bigl |\ H(t) \cap H(r)\ \bigr|$$
+
+where $h(\cdot)$ is the set of hits associated with the reconstructed track $r$ and $H(t)$ is the set of hits
+The FitAccuracy is then defined as:
+
+$$ \text{FitAccuracy} =  \frac{ \sum_{t} n_{\text{match}}(t)}{\sum_{t} |H(t)|}\in[0,1] $$
+
+A perfect reconstruction obtains FitAccuracy = 1, while missing tracks, duplicated tracks or impurity in
+any reconstructed track lower the score. In other words, FitAccuracy is a hit-weighted reconstruction efficiency
+that rewards both high recall (many true hits found) and high purity (bad tracks are vetoed).
 """,
 
     prefix = r"""
 # ----------------  START HARNESS WRAPPER PREFIX (FOR CONTEXT)  ---------------- 
-# Environment: Python 3.12, PyTorch 2.6.0, PyG 2.6.1, NumPy 2.2.3, SciPy v1.15.2, SciKit-Learn 1.6.1
-import os, sys, pickle, gzip, json, torch, torch_geometric, scipy, numpy as np
+# Environment: python 3.12, torch 2.6.0, torch_geometric 2.6.1, numpy 2.3.1, 
+# scipy 1.16.0, scikit-learn 1.7.0
+import os, sys, pickle, importlib, gzip, json, torch, torch_geometric, scipy, numpy as np
 import matplotlib.pyplot as plt
 from torch import nn
 from torch.utils.data import Dataset, DataLoader
 
 torch.manual_seed(42)                        
 os.environ["PYTHONHASHSEED"] = "42"
+
 SCRIPT_DIR = os.path.dirname(os.path.abspath(sys.argv[0]))
 DATA_DIR = "./challenges/TRACKFORMERS/data"
-TAG      = "10_50_linear"
+TAG      = "10_50_linear_frac0.05"
 
 def _load_events(split: str):
     pkl = os.path.join(DATA_DIR, f"REDVID_{{TAG}}_{{split}}.pkl.gz")
     with gzip.open(pkl, "rb") as fh:
         return pickle.load(fh)["events"]
 
-def split_X_y(evt):
-    lay = evt["layer_id"].astype(np.float32)
-    lay_norm = lay / lay.max()
-    X = np.column_stack([evt["hit_r"],
-                         evt["hit_theta"],
-                         evt["hit_z"],
-                         lay_norm])
-    t_id = evt["track_id"].astype(np.int32)
-    return (torch.from_numpy(X),
-            torch.from_numpy(t_id))
+def _split_X_y(evt):
+    X = np.column_stack((evt["hit_r"],
+                        evt["hit_theta"],
+                        evt["hit_z"],
+                        evt["layer_id"]))
+    y = evt["track_id"].astype(np.int32)
+    return (torch.from_numpy(X),torch.from_numpy(y))
 
+def _make_dataset(events, pre, *, train: bool):
+    custom = globals().get("make_dataset", None)
+    if callable(custom):
+        ds = custom(events, pre, train=train)
+        if ds is not None:
+            return ds
+    return EventDataset(events, pre, train=train)
+
+def make_loaders(raw_train, raw_val, pre, *, batch=512,
+                 collate_fn=None, loader_cls=None, workers=0):
+    train_ds  = _make_dataset(raw_train, pre, train=True)
+    val_ds    = _make_dataset(raw_val,  pre, train=False)
+
+    if loader_cls is None:
+        loader_cls = DataLoader
+
+    train_ld = loader_cls(train_ds, batch_size=batch, shuffle=True,
+                          num_workers=workers, collate_fn=collate_fn)
+    val_ld   = loader_cls(val_ds,   batch_size=batch, shuffle=False,
+                          num_workers=workers, collate_fn=collate_fn)
+    return train_ld, val_ld
+    
 class EventDataset(Dataset):
     def __init__(self, events, pre, train=True):
         self.events, self.pre, self.train = events, pre, train
     def __len__(self):
         return len(self.events)
     def __getitem__(self, idx):
-        X, track_id = split_X_y(self.events[idx])
+        X, track_id = _split_X_y(self.events[idx])
         X = self.pre.transform(X) if self.pre is not None else X
         return (X, track_id)
 
 def _ragged(batch: list[tuple[torch.Tensor, torch.Tensor]]):
-    # batch[i] = (hits_i, track_id_i)      ← shapes: (N_i, F), (N_i,)
+    # batch[i] = (hits_i, track_id_i)      <- shapes: (N_i, F), (N_i)
     return batch
-
-def make_loaders(batch_size=128, workers=0):
-    tr = EventDataset(_load_events("train"), pre=None, train=True)
-    va = EventDataset(_load_events("val"),   pre=None, train=False)
-
-    train_ld = DataLoader(tr, batch_size=batch_size, shuffle=True,
-                          collate_fn=_ragged, num_workers=workers)
-    val_ld   = DataLoader(va, batch_size=batch_size, collate_fn=_ragged)
-    return train_ld, val_ld
 
 # ----------------  END HARNESS WRAPPER PREFIX (FOR CONTEXT)  ---------------- 
 # -------------------------- START OF LLM BLOCK ------------------------------
@@ -127,32 +150,59 @@ def make_loaders(batch_size=128, workers=0):
 
 # 1. ----------- (OPTIONAL) PRE-PROCESSING ----------
 class MyPreprocessor:
+    # Must implement:
+    #   - fit()
+    #   - transform()
+
     # REQUIREMENTS
-    # IMPORTANT: All state must be picklable with the std-lib pickle module.
-    # May allocate NumPy arrays or Torch tensors internally, but:
-    # transform() must be deterministic.
-    # fit(events) receives the *raw* event dicts list, not a tensor batch.
-    # Store only derived parameters needed for transform i.e. do not store the raw data
-    # itself in the preprocessor object.
+    #   IMPORTANT: All state must be picklable with the std-lib pickle module.
+    #   May allocate NumPy arrays or Torch tensors internally, but:
+    #   transform() must be deterministic.
+    #   fit(events) receives the *raw* event dicts list, not a tensor batch.
+    #   Store only derived parameters needed for transform i.e. do not store the raw data
+    #    itself in the preprocessor object.
+
+    # TIPS
+    #   When modifying data features or feature engineering: annotate tensor size as comments after 
+    #   each tensor operation to reduce dimension mismatches.
+
+    # <LLM: Write code to preprocess the data> 
+
     def __init__(self):
         # <LLM: Define and initialize any stateful components here>
         pass
+    
+    def _raw_reshape(self, data):           
+        # <LLM: Apply optional raw data reshaping logic here>
+        return data # Returns identity by default
+    
+    # Uncomment to implement custom collate function.    
+    # @staticmethod
+    # def _collate_fn(batch: list):
+    #    <LLM: Apply optional custom collate logic here>
 
-    def fit(self, events):
-        # <LLM: Extract statistics or fit transformers>
-        return X
+    def make_loader_cfg(self):
+        # Return dict or None.  If dict, evaluator uses it to rebuild loader:
+        #{
+        #   "loader_class": "torch.utils.data.DataLoader",
+        #   "collate_fn": "self._collate_fn",
+        #   "batch_size": 256,
+        #   "shuffle": False,
+        #   "num_workers": 0
+        #}
+        return None
 
-    def transform(self, events):
+    def fit(self, data):
+        # <LLM: Extract statistics or fit transform>
+        return self
+
+    def transform(self, data):
         # <LLM: Apply preprocessing logic, return torch.Tensor>
-        return X
-
-    def fit_transform(self, events):
-        self.fit(events)
-        return self.transform(X)
+        return data # must return an indexable, picklable object
 
 def make_preprocessor():
     return MyPreprocessor()
-    
+
 # 2. ---------- MODEL ARCHITECTURE ----------
 class HitClassifier(nn.Module):
     def __init__(self, in_features):
@@ -162,10 +212,8 @@ class HitClassifier(nn.Module):
     # <LLM: optionally build extra layers here>
     
     def forward(self, batch):
-        # batch : list[torch.Tensor]  or  list[tuple[Tensor, Tensor]]
-        #    You decide: either just the hits or the (hits, labels) tuples.
-
         # <LLM: Define your model's forward pass here>
+        pass
 
 def make_model(in_features):
     return HitClassifier(in_features)
@@ -173,34 +221,29 @@ def make_model(in_features):
 # 3. ---------- MODEL TRAINING ----------
 EPOCHS = 10   # <LLM: adjust if you wish>   
 def train_model(model, train_loader, val_loader, epochs):
-    # PARAMETERS
-    # model     : torch.nn.Module   
-    # train_loader / val_loader
-    # epochs    : int
-
-    # RETURNS
-    # trained_model : nn.Module          (same instance, trained in-place)
-    # train_loss    : list[float]        (length == epochs)
-    # val_loss      : list[float]
-    # train_acc     : list[float]
-    # val_acc       : list[float]
-    
     # REQUIREMENTS 
-    # Do NOT pass "verbose=" to any PyTorch scheduler (not supported in this image).
-    # Implement early-stopping.
+    #   Do NOT pass "verbose=" to any PyTorch scheduler (not supported in this image).
+    #   Must return trained_model, train_loss, val_loss, train_acc, val_acc
+    #   Implement early-stopping.
+    #   Forward signature must match.
 
     # <LLM: Write code to define training loop>
+    # <LLM: Implement early stopping if possible>
     return trained_model, train_loss, val_loss, train_acc, val_acc
 
-# IMPORTANT: DO NOT execute the pipeline here - the harness will do that.
-# IMPORTANT: Strictly follow this code template, and do not deviate from it.
-# <end code template>    
+# IMPORTANT: DO NOT execute the pipeline here – the harness will do that.
+# <end code template>
 """,
 
     suffix = r"""
 # ---------------------------  END OF LLM-CODE BLOCK ---------------------------
 # ----------------  START HARNESS WRAPPER SUFFIX (FOR CONTEXT)  ---------------- 
-                         
+
+def _import_dotted(path: str):
+    mod, name = path.rsplit(".", 1)
+    module = importlib.import_module(mod)
+    return getattr(module, name)
+
 def _plot(series_train, series_val, name, out_path):
     plt.figure()
     plt.plot(series_train, label=f"Train {name}")
@@ -214,33 +257,34 @@ def _run(dryrun=False):
     if dryrun:
         raw_train, raw_val = raw_train[:32], raw_val[:8]
     pre = make_preprocessor().fit(raw_train)
-    train_ds = EventDataset(raw_train, pre, train=True)
-    val_ds   = EventDataset(raw_val , pre, train=False)
-    train_ld = DataLoader(train_ds, batch_size=512,
-                        shuffle=True, collate_fn=_ragged)
-    val_ld   = DataLoader(val_ds,   batch_size=512,
-                        collate_fn=_ragged)
+    collate = getattr(pre, "_collate_fn", None)
+    cfg     = getattr(pre, "make_loader_cfg", lambda: None)() or {}
+    loader_cls = _import_dotted(cfg["loader_class"]) if "loader_class" in cfg else None
+
+    train_loader, val_loader = make_loaders(raw_train, raw_val, pre,
+                                            batch = cfg.get("batch_size", 128),
+                                            collate_fn = collate or _ragged,
+                                            loader_cls = loader_cls,
+                                            workers    = cfg.get("num_workers", 0))
 
     # 2. Build model
-    in_features = train_ds[0][0].shape[-1]                   
-    model = make_model(in_features)
+    first_batch    = next(iter(train_loader))
+    example_sample = first_batch[0]
+    model          = make_model(example_sample)
 
     # 3. Train model
     n_epochs = 1 if dryrun else globals().get("EPOCHS", 10)
     try:
         trained_model, tr_loss, va_loss, tr_acc, va_acc = train_model(
-            model, train_ld, val_ld, epochs=n_epochs)
+            model, train_loader, val_loader, epochs=n_epochs)
     except Exception as e:
         print("ERROR during training:", e)
         raise
 
     # 4. *Dry-run safety check* - run a single toy forward pass
     if dryrun:
-        toy_event       = torch.zeros(10, in_features)
-        toy_transformed = pre.transform(toy_event)
-        toy_batch       = [toy_transformed]
         try:
-            _ = trained_model(toy_batch)
+            _ = trained_model(first_batch)
         except Exception as e:
             raise RuntimeError("Sanity-check forward pass failed") from e
         return
@@ -278,13 +322,15 @@ if "__main__" not in sys.modules:
 if __name__ == "__main__":
     _run(dryrun="--dryrun" in sys.argv)
 # ----------------  END HARNESS WRAPPER SUFFIX (FOR CONTEXT)  ---------------- 
+
 """,
 
     questions = [
         Question("Q1", r""" ** IMPORTANT: Your Challenge **
-Write Python code for a classification model that classifies events into tracks. Focus on maximising the accuracy
-using the code template above. You may freely choose any pre-processing methods and techniques as well as model
-architecture and training conventions. Do everything in your power to get the highest accuracy.                        
+Write Python code for a model that classifies events into tracks. Focus on maximising 
+the FitAccuracy using the code template above. You may freely choose any pre-processing methods and 
+techniques as well as model architecture and training conventions. Do absolutely everything in your 
+power to achieve the highest possible FitAccuracy.                        
 """)
 
 #       Question("Q2", r""" ** IMPORTANT: Your Challenge **
@@ -292,7 +338,7 @@ architecture and training conventions. Do everything in your power to get the hi
 #using the code template above. You may freely choose any pre-processing methods and techniques as well as model
 #architecture and training conventions. 
 # 
-#
+# 
 # 
 # 
 #Do everything in your power to get the highest accuracy.      

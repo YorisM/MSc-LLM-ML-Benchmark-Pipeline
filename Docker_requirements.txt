@@ -1,11 +1,11 @@
-pandas
-numpy
-scipy
-torch
-torch_geometric
-matplotlib
-scikit-learn
+numpy==2.3.1
+scipy==1.16
+pandas==2.2.3
+scikit-learn==1.7.0
+hdbscan==0.8.40
+torch==2.6.0
+torch_geometric==2.6.1 
 
-psutil
-tqdm
-dotenv
+psutil==7.0.0
+tqdm==4.67.1
+python-dotenv==1.0.1

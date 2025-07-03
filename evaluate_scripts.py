@@ -165,8 +165,8 @@ def evaluate_results(input_dir: str | Path):
             except StopIteration:
                 logging.warning("No response_…json found in %s; skipping append", model_dir)
         
-        # Write Summary block response JSON
-        q_summaries.setdefault(qid, {})[model_name] = metrics
+            # Write Summary block response JSON
+            q_summaries.setdefault(qid, {})[model_name] = metrics
 
         # 5) now that all models have been evaluated, check for missing outputs once
         missing = challenge_evaluators[challenge]["test_outputs"](date_str, challenge)

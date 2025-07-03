@@ -5,7 +5,7 @@ Plot training/validation accuracy vs epochs for *all* models found under
 an outputs/… subtree.
 
 Basic usage:
-  python utils\\plot_training.py outputs\\23-06\\FOURTOPS\\Q3
+  python utils\\plot_training.py outputs\\23-06\\FOURTOPS\\Q1
 
 Options:
   --dots / --lines            choose marker style           (mutually exclusive)
@@ -111,6 +111,12 @@ def main() -> None:
     logging.debug("Found %d model folders.", len(model_dirs))
 
     fig, ax = plt.subplots(figsize=(12, 8))
+    fig.subplots_adjust(
+        left=0.1,
+        right=0.95,
+        bottom=0.1,
+        top=0.9
+    )
     base_colors = itertools.cycle(plt.rcParams['axes.prop_cycle'].by_key()['color'])
     as_lines = args.lines or not args.dots
 
@@ -147,11 +153,11 @@ def main() -> None:
     ax.set_ylabel("Accuracy", fontsize=14)
     ax.set_title(f"{challenge} - {question}: Training vs Validation Accuracy ({date_part})", fontsize=16)
     ax.legend()
-    fig.tight_layout()
+    #fig.tight_layout()
 
     if args.outfile:
         out_path = input_dir / args.outfile
-        fig.savefig(out_path, dpi=300, bbox_inches="tight")
+        fig.savefig(out_path, dpi=600)
         print(f"✅ Figure saved to {out_path}")
     else:
         plt.show()

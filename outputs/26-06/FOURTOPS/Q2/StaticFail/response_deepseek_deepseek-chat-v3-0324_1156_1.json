@@ -1,0 +1,75 @@
+{
+  "LLMGeneration": {
+    "model": "deepseek/deepseek-chat-v3-0324",
+    "endpoint": "https://openrouter.ai/api/v1/completions",
+    "prompt_tokens": 3953,
+    "prompt_chars": 15237,
+    "response_tokens": 1977,
+    "response_chars": 7627,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.0028466,
+    "generation_ms": 88610,
+    "code": "# 0. ---------- IMPORTS ----------\nfrom sklearn.metrics import roc_auc_score\nfrom torch.optim import AdamW\nfrom torch.optim.lr_scheduler import ReduceLROnPlateau\nimport torch.nn.functional as F\n\n# 2. ---------- PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.scaler_mean = None\n        self.scaler_std = None\n\n    def _raw_reshape(self, X):\n        return X\n\n    def _extract_features(self, X):\n        # Global features (2): E_T_miss, phi_Et_miss\n        global_features = X[:, :2]\n\n        # Object features (18 objects max, 5 features each)\n        object_features = X[:, 2:].reshape(X.shape[0], -1, 5)\n\n        # Remove padding (obj_id = 0)\n        mask = object_features[:, :, 0] != 0  # [batch, max_objects]\n        masked_objects = object_features * mask.unsqueeze(-1).float()\n\n        # Compute mean values per object feature\n        n_objects = mask.sum(dim=1, keepdim=True).clamp(min=1)  # [batch, 1]\n        means = masked_objects.sum(dim=1) / n_objects  # [batch, 5]\n\n        # Compute pairwise features\n        batch_size, max_objects, _ = object_features.shape\n\n        # Prepare object pairs\n        obj_pairs = []\n        for i in range(max_objects):\n            for j in range(i+1, max_objects):\n                # Only consider real objects (non-padding)\n                pair_mask = mask[:, i] & mask[:, j]\n                if pair_mask.any():\n                    obj1 = object_features[:, i]\n                    obj2 = object_features[:, j]\n\n                    # Delta R\n                    deta = obj1[:, 3] - obj2[:, 3]\n                    dphi = torch.remainder(obj1[:, 4] - obj2[:, 4] + np.pi, 2*np.pi) - np.pi\n                    delta_r = torch.sqrt(deta**2 + dphi**2)\n\n                    # Invariant mass\n                    px1 = obj1[:, 2] * torch.cos(obj1[:, 4])\n                    py1 = obj1[:, 2] * torch.sin(obj1[:, 4])\n                    pz1 = obj1[:, 2] * torch.sinh(obj1[:, 3])\n\n                    px2 = obj2[:, 2] * torch.cos(obj2[:, 4])\n                    py2 = obj2[:, 2] * torch.sin(obj2[:, 4])\n                    pz2 = obj2[:, 2] * torch.sinh(obj2[:, 3])\n\n                    p1 = torch.sqrt(px1**2 + py1**2 + pz1**2)\n                    p2 = torch.sqrt(px2**2 + py2**2 + pz2**2)\n\n                    e1 = obj1[:, 1]\n                    e2 = obj2[:, 1]\n                    m = torch.sqrt(2*(e1*e2 - (px1*px2 + py1*py2 + pz1*pz2)))\n\n                    pair_features = torch.stack([delta_r, m], dim=1)\n                    obj_pairs.append(pair_features)\n\n        if obj_pairs:\n            pairwise_features = torch.cat(obj_pairs, dim=1)  # [batch, n_pairs*2]\n            pairwise_means = pairwise_features.mean(dim=1, keepdim=True)\n        else:\n            pairwise_features = torch.zeros(X.shape[0], 0)\n            pairwise_means = torch.zeros(X.shape[0], 1)\n\n        # Combine all features\n        features = torch.cat([\n            global_features,\n            means,  # mean object features\n            pairwise_means,  # mean pairwise features\n        ], dim=1)\n\n        return features\n\n    def fit(self, X, y=None):\n        features = self._extract_features(X)\n        self.scaler_mean = features.mean(dim=0)\n        self.scaler_std = features.std(dim=0) + 1e-8\n        return self\n\n    def transform(self, X):\n        features = self._extract_features(X)\n        return (features - self.scaler_mean) / self.scaler_std\n\n# 2. ---------- MODEL DEFINITION ----------\nclass BinaryClassifier(nn.Module):\n    def __init__(self, sample_object):\n        super().__init__()\n        input_dim = sample_object.shape[-1]\n\n        self.transformer = nn.TransformerEncoder(\n            nn.TransformerEncoderLayer(\n                d_model=input_dim,\n                nhead=4,\n                dim_feedforward=256,\n                dropout=0.1,\n                activation='gelu',\n                batch_first=True,\n            ),\n            num_layers=4\n        )\n\n        self.head = nn.Sequential(\n            nn.Linear(input_dim, 128),\n            nn.ReLU(),\n            nn.Dropout(0.2),\n            nn.Linear(128, 64),\n            nn.ReLU(),\n            nn.Dropout(0.1),\n            nn.Linear(64, 1)\n        )\n\n    def forward(self, x):\n        # Add sequence dimension for transformer\n        if x.dim() == 2:\n            x = x.unsqueeze(1)  # [batch, 1, features]\n\n        x = self.transformer(x)  # [batch, 1, features]\n        x = x.squeeze(1)  # [batch, features]\n        return self.head(x)\n\ndef make_model(example_object):\n    return BinaryClassifier(example_object)\n\n# 3. ---------- MODEL TRAINING ----------\nEPOCHS = 30\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')\n    model.to(device)\n\n    optimizer = AdamW(model.parameters(), lr=5e-4, weight_decay=1e-4)\n    scheduler = ReduceLROnPlateau(optimizer, mode='max', patience=3, factor=0.5)\n    criterion = nn.BCEWithLogitsLoss()\n\n    best_auc = 0\n    best_model = None\n\n    train_losses = []\n    val_losses = []\n    train_accs = []\n    val_accs = []\n\n    for epoch in range(epochs):\n        model.train()\n        train_loss = 0\n        train_preds = []\n        train_targets = []\n\n        for X, y in train_loader:\n            X = X.to(device)\n            y = y.float().to(device)\n\n            optimizer.zero_grad()\n            outputs = model(X).squeeze()\n            loss = criterion(outputs, y)\n            loss.backward()\n            optimizer.step()\n\n            train_loss += loss.item()\n            train_preds.extend(torch.sigmoid(outputs).detach().cpu().numpy())\n            train_targets.extend(y.detach().cpu().numpy())\n\n        train_loss /= len(train_loader)\n        train_auc = roc_auc_score(train_targets, train_preds)\n        train_losses.append(train_loss)\n        train_accs.append(train_auc)\n\n        # Validation\n        model.eval()\n        val_loss = 0\n        val_preds = []\n        val_targets = []\n\n        with torch.no_grad():\n            for X, y in val_loader:\n                X = X.to(device)\n                y = y.float().to(device)\n\n                outputs = model(X).squeeze()\n                loss = criterion(outputs, y)\n\n                val_loss += loss.item()\n                val_preds.extend(torch.sigmoid(outputs).cpu().numpy())\n                val_targets.extend(y.cpu().numpy())\n\n        val_loss /= len(val_loader)\n        val_auc = roc_auc_score(val_targets, val_preds)\n        val_losses.append(val_loss)\n        val_accs.append(val_auc)\n\n        scheduler.step(val_auc)\n\n        if val_auc > best_auc:\n            best_auc = val_auc\n            best_model = model.state_dict()\n\n        print(f'Epoch {epoch+1}/{epochs}, '\n              f'Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}, '\n              f'Train AUC: {train_auc:.4f}, Val AUC: {val_auc:.4f}')\n\n        # Early stopping if no improvement for 5 epochs\n        if epoch >= 5 and val_auc < np.max(val_accs[-5:]):\n            print('Early stopping')\n            break\n\n    if best_model is not None:\n        model.load_state_dict(best_model)\n\n    return model, train_losses, val_losses, train_accs, val_accs",
+    "reasoning": "",
+    "Outer_attempt": 1
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-06-26T09:56:45Z",
+    "PyLint": {
+      "passed": false,
+      "messages": [
+        {
+          "type": "error",
+          "module": "script_deepseek_deepseek-chat-v3-0324_1156_1",
+          "obj": "_run",
+          "line": 313,
+          "column": 14,
+          "endLine": 313,
+          "endColumn": 31,
+          "path": "outputs\\26-06\\FOURTOPS\\Q2\\script_deepseek_deepseek-chat-v3-0324_1156_1.py",
+          "symbol": "undefined-variable",
+          "message": "Undefined variable 'make_preprocessor'",
+          "message-id": "E0602"
+        }
+      ]
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-06-26T09:56:45Z",
+        "metrics": {
+          ".\\./outputs/26-06/FOURTOPS/Q2/script_deepseek_deepseek-chat-v3-0324_1156_1.py": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 272,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 272,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  }
+}

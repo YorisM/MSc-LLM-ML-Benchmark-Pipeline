@@ -1,0 +1,7 @@
+script,success,return_code,stdout,stderr,duration_s,max_rss_kb
+C:\Users\yoris\projects\Benchmark\outputs\30-06\TRACKFORMERS\Q1\openai_o4-mini-high-2025-04-16\script_openai_o4-mini-high-2025-04-16_1433_2.py,True,0,"argv0=/usr/local/bin/train.sh
+argv1=outputs/30-06/TRACKFORMERS/Q1/openai_o4-mini-high-2025-04-16/script_openai_o4-mini-high-2025-04-16_1433_2.py
+argv2=
+#TRAIN_METRICS#{""epochs"": 1, ""train_loss"": [0.0], ""val_loss"": [0.0], ""train_acc"": [0.0], ""val_acc"": [0.0]}
+Hash manifest written â†’ openai_o4-mini-high-2025-04-16_manifest.sha256
+",,22.847121600003447,248

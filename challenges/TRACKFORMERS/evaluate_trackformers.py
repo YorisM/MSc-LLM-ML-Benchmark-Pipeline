@@ -4,39 +4,41 @@ import os, gzip, pickle, torch, hdbscan, logging
 import numpy as np
 from utils.llm_io import _initialize_artefacts, _apply_preproc
 from scipy.optimize import linear_sum_assignment
+from typing import Tuple
 from tqdm import tqdm
 
 def load_TRACKFORMERS_test(tag="10_50_linear"):
     """Return list of raw event dicts."""
-
     fn = os.path.join("challenges/TRACKFORMERS/data",
                     f"REDVID_{tag}_test.pkl.gz")
     with gzip.open(fn, "rb") as fh:
         test_events = pickle.load(fh)["events"]
-
     return test_events
 
-def _fit_accuracy(pred_lbl: np.ndarray, true_tid: np.ndarray) -> float:
-    """Greedy match of predicted clusters to true tracks, no noise."""
-
+def _fit_accuracy(pred_lbl: np.ndarray, true_tid: np.ndarray) -> Tuple[int, int]:
     if pred_lbl.shape != true_tid.shape:
         raise ValueError("pred / true shape mismatch")
     
     mask = true_tid != 0
     pred_lbl, true_tid = pred_lbl[mask], true_tid[mask]
 
-    if true_tid.size == 0:
-        return 0.0
+    unique_pred, pred_counts = np.unique(pred_lbl, return_counts=True)
+    overlap = {
+        p: np.bincount(true_tid[pred_lbl == p], minlength=true_tid.max()+1)
+        for p in unique_pred
+    }
+    
+    best_for_truth = {} # t -> (hits, cluster, id)
+    for p, cnt in zip(unique_pred, pred_counts):
+        hits = overlap[p].max()
+        if cnt >= 4 and hits / cnt >= 0.5:
+            t = overlap[p].argmax()
+            if hits > best_for_truth.get(t, (0,))[0]:
+                best_for_truth[t] = (hits, p)
+    
+    correct = sum(hits for hits, _ in best_for_truth.values())
 
-    correct = 0
-    for t in np.unique(true_tid):
-        m_true = true_tid == t
-        lbls, cnts = np.unique(pred_lbl[m_true], return_counts=True)
-        if lbls.size == 0:
-            continue
-        best_lbl = lbls[cnts.argmax()]
-        correct += np.sum(m_true & (pred_lbl == best_lbl))
-    return correct / len(true_tid)
+    return correct, mask.sum()      # raw counts, no division yet
 
 def _hungarian_accuracy(pred_lbl: np.ndarray, true_tid: np.ndarray) -> float:
     """
@@ -85,8 +87,9 @@ def evaluate_TRACKFORMERS(model_path: str, events) -> float:
     logging.debug("Initialize TRACKFORMERS evaluation..")
 
     # Initiate metrics
-    fit_acc_sum, n_events = 0.0, 0
-    all_pred, all_true = [], []   
+    total_correct_hits   = 0       # sum_t n_match(t)
+    total_truth_hitcount = 0       # sum_t | H(t) |
+    all_pred, all_true   = [], []
 
     with torch.no_grad():
         for evt in tqdm(events, desc="Evaluating TRACKFORMERS model..", unit="event"):
@@ -108,12 +111,12 @@ def evaluate_TRACKFORMERS(model_path: str, events) -> float:
             else:
                 proc_inp = proc_inp.to(device)
 
-            # ── model expects a list of event-tensors ──
+            # model expects a list of event-tensors
             batch_inp = list(proc_inp) if isinstance(proc_inp, (tuple, list)) else [proc_inp]
             out_list  = model(batch_inp)  # returns list of embeddings
             out_cpu   = out_list[0].detach().cpu()
 
-            # ── decode labels ───────────────────────────────────────────
+            # decode labels 
             if out_cpu.dtype in (torch.int32, torch.int64):
                 labels = out_cpu.squeeze().numpy()
             elif out_cpu.ndim == 2:                # logits/probs, k ≥ 1
@@ -128,13 +131,14 @@ def evaluate_TRACKFORMERS(model_path: str, events) -> float:
             mask = true_tid != 0
 
             # FitAccuracy for this event
-            fit_acc_sum += _fit_accuracy(labels, true_tid)
-            n_events    += 1
+            correct_hits, truth_hits = _fit_accuracy(labels, true_tid)
+            total_correct_hits   += correct_hits
+            total_truth_hitcount += truth_hits
 
-        # store for Hungarian accuracy (global)
-        if mask.any():
-            all_pred.append(labels[mask])
-            all_true.append(true_tid[mask])
+            # store for Hungarian accuracy (global)
+            if mask.any():
+                all_pred.append(labels[mask])
+                all_true.append(true_tid[mask])
 
         if all_pred:
             logging.debug("Starting Accuracy Calculations...")
@@ -144,9 +148,10 @@ def evaluate_TRACKFORMERS(model_path: str, events) -> float:
         else: 
                 accuracy = 0.0
 
+        fit_accuracy = total_correct_hits / max(total_truth_hitcount, 1)        
         metrics = {
-            "accuracy"      : accuracy,
-            "FitAccuracy"   : fit_acc_sum / max(n_events, 1),
+            "FitAccuracy"   : fit_accuracy,
+            "accuracy"      : accuracy
         }
 
     return metrics

@@ -12,8 +12,8 @@ import matplotlib.pyplot as plt
 plot_roc.py  —  Plot ROC curves for multiple models from a single JSON file.
 
 Basic usage:
-  python utils/plot_roc.py results\\23-06\\FOURTOPS\\Q2\\Q2_summary.json                        # show
-  python utils/plot_roc.py outputs\23-06\\FOURTOPS\\Q2\\Q2_summary.json --outfile roc.png      # save PNG
+  python utils/plot_roc.py results\\23-06\\FOURTOPS\\Q1\\Q1_summary.json                                # show
+  python utils/plot_roc.py outputs\23-06\\FOURTOPS\\Q1\\Q1_summary.json --outfile FOURTOPS_Q1_ROC.png   # save PNG
 """
 
 
@@ -65,7 +65,13 @@ def main() -> None:
     if not data:
         sys.exit("‼️  JSON is empty or malformed.")
 
-    fig, ax = plt.subplots(figsize=(8, 6))
+    fig, ax = plt.subplots(figsize=(12, 8))
+    fig.subplots_adjust(
+        left=0.1,
+        right=0.95,
+        bottom=0.1,
+        top=0.9
+    )
     colors = itertools.cycle(plt.rcParams["axes.prop_cycle"].by_key()["color"])
 
     for model_name, metrics in data.items():
@@ -89,11 +95,11 @@ def main() -> None:
     ax.legend(loc="lower right")
     ax.set_xlim(0, 1)
     ax.set_ylim(0, 1)
-    fig.tight_layout()
+    #fig.tight_layout()
 
     if args.outfile:
         out_path = args.input_file.parent / args.outfile
-        fig.savefig(out_path, dpi=300, bbox_inches="tight")
+        fig.savefig(out_path, dpi=600)
         print(f"✅ Figure saved to {out_path}")
     else:
         plt.show()

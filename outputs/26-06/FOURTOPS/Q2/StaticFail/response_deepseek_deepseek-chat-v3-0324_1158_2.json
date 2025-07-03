@@ -1,0 +1,88 @@
+{
+  "LLMGeneration": {
+    "model": "deepseek/deepseek-chat-v3-0324",
+    "endpoint": "https://openrouter.ai/api/v1/completions",
+    "prompt_tokens": 3953,
+    "prompt_chars": 15237,
+    "response_tokens": 2578,
+    "response_chars": 9902,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.00337548,
+    "generation_ms": 110158,
+    "code": "# 0. ---------- IMPORTS ----------\nfrom torch import optim\nfrom torch.nn import functional as F\nfrom sklearn.metrics import roc_auc_score\nimport math\n\n# 1. ---------- PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.global_mean = None\n        self.global_std = None\n        self.object_mean = None\n        self.object_std = None\n        self.num_objects = 18\n        self.object_features = 5\n        self.global_features = 2\n\n    def _raw_reshape(self, X):\n        # Reshape from (batch_size, 92) to (batch_size, total_features)\n        # where total_features = global_features (2) + num_objects * object_features (18*5=90)\n        return X.reshape(-1, self.global_features + self.num_objects * self.object_features)\n\n    def _get_objects(self, X):\n        # Extract objects from reshaped X\n        # shape: (batch_size, num_objects, object_features)\n        return X[:, self.global_features:].reshape(-1, self.num_objects, self.object_features)\n\n    def _compute_pairwise_features(self, objects):\n        # Compute pairwise invariant mass and delta R\n        # objects shape: (batch_size, num_objects, 5)\n        # where each object has (obj_id, E, pT, eta, phi)\n        batch_size = objects.shape[0]\n        num_objects = objects.shape[1]\n\n        # Precompute px, py, pz for each particle\n        pt = objects[:, :, 2]  # pT\n        eta = objects[:, :, 3] # eta\n        phi = objects[:, :, 4] # phi\n        E = objects[:, :, 1]   # E\n\n        px = pt * torch.cos(phi)\n        py = pt * torch.sin(phi)\n        pz = pt * torch.sinh(eta)\n\n        # Initialize tensors for pairwise features\n        m_inv = torch.zeros((batch_size, num_objects, num_objects))\n        delta_r = torch.zeros((batch_size, num_objects, num_objects))\n\n        for i in range(num_objects):\n            for j in range(i+1, num_objects):\n                # Compute invariant mass\n                p_i = torch.stack((E[:, i], px[:, i], py[:, i], pz[:, i]), dim=1)\n                p_j = torch.stack((E[:, j], px[:, j], py[:, j], pz[:, j]), dim=1)\n                p_sum = p_i + p_j\n                m2 = (p_sum[:, 0]**2 - p_sum[:, 1]**2 - p_sum[:, 2]**2 - p_sum[:, 3]**2).clamp(min=0)\n                m_inv[:, i, j] = torch.sqrt(m2)\n                m_inv[:, j, i] = m_inv[:, i, j]\n\n                # Compute delta R\n                deta = eta[:, i] - eta[:, j]\n                dphi = phi[:, i] - phi[:, j]\n                dphi = torch.where(dphi > math.pi, dphi - 2*math.pi, \n                                 torch.where(dphi < -math.pi, dphi + 2*math.pi, dphi))\n                delta_r[:, i, j] = torch.sqrt(deta**2 + dphi**2)\n                delta_r[:, j, i] = delta_r[:, i, j]\n\n        return m_inv, delta_r\n\n    def fit(self, X, y=None):\n        X_reshaped = self._raw_reshape(X)\n\n        # Compute global feature statistics\n        self.global_mean = X_reshaped[:, :self.global_features].mean(dim=0)\n        self.global_std = X_reshaped[:, :self.global_features].std(dim=0)\n\n        # Compute object feature statistics\n        objects = self._get_objects(X_reshaped)\n        self.object_mean = objects.mean(dim=(0, 1))  # (object_features,)\n        self.object_std = objects.std(dim=(0, 1))\n\n        return self\n\n    def transform(self, X):\n        X_reshaped = self._raw_reshape(X)\n        batch_size = X_reshaped.shape[0]\n\n        # Normalize global features\n        X_global = (X_reshaped[:, :self.global_features] - self.global_mean) / (self.global_std + 1e-8)\n\n        # Normalize object features\n        objects = self._get_objects(X_reshaped)\n        objects_norm = (objects - self.object_mean) / (self.object_std + 1e-8)\n\n        # Compute pairwise features\n        m_inv, delta_r = self._compute_pairwise_features(objects_norm)\n\n        # Combine all features: global + objects + pairwise\n        # Flatten pairwise features\n        pairwise_features = torch.cat([\n            m_inv.flatten(start_dim=1), \n            delta_r.flatten(start_dim=1)\n        ], dim=1)\n\n        # Combine all features\n        objects_flattened = objects_norm.flatten(start_dim=1)\n        X_transformed = torch.cat([X_global, objects_flattened, pairwise_features], dim=1)\n\n        # Add some engineered features\n        pt_sum = objects[:, :, 2].sum(dim=1)  # Sum of pT\n        e_sum = objects[:, :, 1].sum(dim=1)   # Sum of energy\n        eta_max = torch.max(torch.abs(objects[:, :, 3]), dim=1)[0]  # Maximum |eta|\n\n        engineered_features = torch.stack([pt_sum, e_sum, eta_max], dim=1)\n        X_transformed = torch.cat([X_transformed, engineered_features], dim=1)\n\n        return X_transformed\n\n# 2. ---------- MODEL DEFINITION ----------\nclass BinaryClassifier(nn.Module):\n    def __init__(self, sample_object):\n        super().__init__()\n        input_size = sample_object.size(1)\n\n        # Define transformer-based architecture\n        self.transformer_layer = nn.TransformerEncoderLayer(\n            d_model=128, nhead=8, dim_feedforward=512, dropout=0.1, batch_first=True\n        )\n\n        # Project input to transformer dimension\n        self.input_proj = nn.Linear(input_size, 128)\n\n        # Transformer encoder\n        self.transformer = nn.TransformerEncoder(self.transformer_layer, num_layers=4)\n\n        # Output layers\n        self.classifier = nn.Sequential(\n            nn.Linear(128, 64),\n            nn.ReLU(),\n            nn.Dropout(0.2),\n            nn.Linear(64, 32),\n            nn.ReLU(),\n            nn.Dropout(0.1),\n            nn.Linear(32, 1),\n            nn.Sigmoid()\n        )\n\n    def forward(self, x):\n        # Project inputs\n        x = self.input_proj(x)  # (batch_size, seq_len=1, 128)\n\n        # Transformer expects sequence dimension\n        x = x.unsqueeze(1)  # (batch_size, 1, 128)\n\n        # Transformer processing\n        x = self.transformer(x)\n\n        # Classifier\n        x = x.squeeze(1)  # (batch_size, 128)\n        return self.classifier(x)\n\n# 3. ---------- MODEL TRAINING ----------\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    device = torch.device(\"cuda\" if torch.cuda.is_available() else \"cpu\")\n    model.to(device)\n\n    criterion = nn.BCELoss()\n    optimizer = optim.AdamW(model.parameters(), lr=5e-4, weight_decay=1e-4)\n    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=2)\n\n    train_loss = []\n    val_loss = []\n    train_acc = []\n    val_acc = []\n    best_val_loss = float('inf')\n    best_model_state = None\n\n    for epoch in range(epochs):\n        # Training phase\n        model.train()\n        running_loss = 0.0\n        correct = 0\n        total = 0\n        y_true_train = []\n        y_pred_train = []\n\n        for inputs, labels in train_loader:\n            inputs, labels = inputs.to(device), labels.float().to(device)\n\n            optimizer.zero_grad()\n\n            outputs = model(inputs).squeeze()\n            loss = criterion(outputs, labels)\n\n            loss.backward()\n            optimizer.step()\n\n            running_loss += loss.item() * inputs.size(0)\n            predicted = (outputs > 0.5).float()\n            correct += (predicted == labels).sum().item()\n            total += labels.size(0)\n\n            y_true_train.extend(labels.cpu().numpy())\n            y_pred_train.extend(outputs.detach().cpu().numpy())\n\n        epoch_loss = running_loss / total\n        epoch_acc = correct / total\n        epoch_auc = roc_auc_score(y_true_train, y_pred_train)\n\n        train_loss.append(epoch_loss)\n        train_acc.append(epoch_acc)\n\n        # Validation phase\n        model.eval()\n        val_running_loss = 0.0\n        val_correct = 0\n        val_total = 0\n        y_true_val = []\n        y_pred_val = []\n\n        with torch.no_grad():\n            for inputs, labels in val_loader:\n                inputs, labels = inputs.to(device), labels.float().to(device)\n\n                outputs = model(inputs).squeeze()\n                loss = criterion(outputs, labels)\n\n                val_running_loss += loss.item() * inputs.size(0)\n                predicted = (outputs > 0.5).float()\n                val_correct += (predicted == labels).sum().item()\n                val_total += labels.size(0)\n\n                y_true_val.extend(labels.cpu().numpy())\n                y_pred_val.extend(outputs.cpu().numpy())\n\n        val_epoch_loss = val_running_loss / val_total\n        val_epoch_acc = val_correct / val_total\n        val_epoch_auc = roc_auc_score(y_true_val, y_pred_val)\n\n        val_loss.append(val_epoch_loss)\n        val_acc.append(val_epoch_acc)\n\n        # Update learning rate\n        scheduler.step(val_epoch_loss)\n\n        # Early stopping check\n        if val_epoch_loss < best_val_loss:\n            best_val_loss = val_epoch_loss\n            best_model_state = model.state_dict()\n            patience_counter = 0\n        else:\n            patience_counter += 1\n            if patience_counter >= 3:\n                print(f\"Early stopping at epoch {epoch}\")\n                break\n\n        print(f\"Epoch {epoch+1}/{epochs}\")\n        print(f\"Train Loss: {epoch_loss:.4f} | Train Acc: {epoch_acc:.4f} | Train AUC: {epoch_auc:.4f}\")\n        print(f\"Val Loss: {val_epoch_loss:.4f} | Val Acc: {val_epoch_acc:.4f} | Val AUC: {val_epoch_auc:.4f}\")\n        print(\"-\" * 60)\n\n    # Load best model\n    model.load_state_dict(best_model_state)\n\n    return model, train_loss, val_loss, train_acc, val_acc",
+    "reasoning": "",
+    "Outer_attempt": 2
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-06-26T09:58:49Z",
+    "PyLint": {
+      "passed": false,
+      "messages": [
+        {
+          "type": "error",
+          "module": "script_deepseek_deepseek-chat-v3-0324_1158_2",
+          "obj": "_run",
+          "line": 359,
+          "column": 14,
+          "endLine": 359,
+          "endColumn": 31,
+          "path": "outputs\\26-06\\FOURTOPS\\Q2\\script_deepseek_deepseek-chat-v3-0324_1158_2.py",
+          "symbol": "undefined-variable",
+          "message": "Undefined variable 'make_preprocessor'",
+          "message-id": "E0602"
+        },
+        {
+          "type": "error",
+          "module": "script_deepseek_deepseek-chat-v3-0324_1158_2",
+          "obj": "_run",
+          "line": 374,
+          "column": 21,
+          "endLine": 374,
+          "endColumn": 31,
+          "path": "outputs\\26-06\\FOURTOPS\\Q2\\script_deepseek_deepseek-chat-v3-0324_1158_2.py",
+          "symbol": "undefined-variable",
+          "message": "Undefined variable 'make_model'",
+          "message-id": "E0602"
+        }
+      ]
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-06-26T09:58:49Z",
+        "metrics": {
+          ".\\./outputs/26-06/FOURTOPS/Q2/script_deepseek_deepseek-chat-v3-0324_1158_2.py": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 287,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 287,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  }
+}

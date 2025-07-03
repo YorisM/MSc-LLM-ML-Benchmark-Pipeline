@@ -26,18 +26,15 @@ logging.basicConfig(
 )
 
 # Models - Needs at least two models 
-models = ["openai/o4-mini-high",
-          "openai/o3-pro",
-          "anthropic/claude-sonnet-4",
-          "google/gemini-2.5-pro",
-          "x-ai/grok-3-beta",
-          "deepseek/deepseek-chat-v3-0324"
+models = [
+          "openai/o4-mini-high-2025-04-16",
+          "google/gemini-2.5-pro"
           ] 
 
 """
-models = ["openai/o4-mini-high",
-          "openai/o3-pro",
-          "anthropic/claude-sonnet-4",
+models = ["openai/o4-mini-high-2025-04-16",
+          "openai/o3-pro-2025-06-10",
+          "anthropic/claude-4-sonnet-20250522",
           "google/gemini-2.5-pro",
           "x-ai/grok-3-beta",
           "deepseek/deepseek-chat-v3-0324"
@@ -62,7 +59,7 @@ MEMORY_LIMIT_GB = 0     #32
 PIDS_LIMIT      = 0     #1024
 
 # All the challenges in the pipeline
-challenges = [fourtop_challenge] #[trackformers_challenge] #
+challenges = [trackformers_challenge] #[fourtop_challenge]
 
 # Docker Image
 DOCKER_IMAGE = "llm-script-sandbox:latest"

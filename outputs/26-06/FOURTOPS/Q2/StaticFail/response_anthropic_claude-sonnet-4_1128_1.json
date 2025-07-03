@@ -1,0 +1,75 @@
+{
+  "LLMGeneration": {
+    "model": "anthropic/claude-sonnet-4",
+    "endpoint": "https://openrouter.ai/api/v1/completions",
+    "prompt_tokens": 4636,
+    "prompt_chars": 15237,
+    "response_tokens": 19585,
+    "response_chars": 11405,
+    "reasoning_tokens": null,
+    "reasoning_chars": 1528,
+    "Inner attempt": 1,
+    "cost_usd": 0.307683,
+    "generation_ms": 206786,
+    "code": "# 0. ---------- IMPORTS ----------\nfrom sklearn.metrics import roc_auc_score\nimport torch.nn.functional as F\nfrom torch.optim import AdamW\nfrom torch.optim.lr_scheduler import ReduceLROnPlateau\nimport math\n\n# 2. ---------- PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.feature_mean = None\n        self.feature_std = None\n\n    def _raw_reshape(self, X):           \n        return X\n\n    def fit(self, X, y=None):\n        # Compute normalization statistics\n        self.feature_mean = X.mean(dim=0)\n        self.feature_std = X.std(dim=0) + 1e-8\n        return self\n\n    def transform(self, X):\n        # Normalize all original features\n        X_norm = (X - self.feature_mean) / self.feature_std\n\n        batch_size = X.shape[0]\n\n        # Parse missing ET features\n        met_mag = X[:, 0]  # [batch_size]\n        met_phi = X[:, 1]  # [batch_size]\n\n        # Parse object features: reshape to [batch_size, 18, 5]\n        obj_data = X[:, 2:].reshape(batch_size, 18, 5)  # [batch_size, 18, 5]\n\n        # Extract object properties\n        obj_energies = obj_data[:, :, 1]  # [batch_size, 18]\n        obj_pt = obj_data[:, :, 2]        # [batch_size, 18]\n        obj_eta = obj_data[:, :, 3]       # [batch_size, 18]\n        obj_phi = obj_data[:, :, 4]       # [batch_size, 18]\n\n        # Create mask for valid objects (energy > 0)\n        obj_mask = obj_energies > 0  # [batch_size, 18]\n\n        # === Basic aggregate features ===\n        n_objects = obj_mask.sum(dim=1, keepdim=True).float()  # [batch_size, 1]\n\n        # Masked aggregations\n        masked_energies = torch.where(obj_mask, obj_energies, torch.zeros_like(obj_energies))\n        masked_pt = torch.where(obj_mask, obj_pt, torch.zeros_like(obj_pt))\n\n        total_energy = masked_energies.sum(dim=1, keepdim=True)  # [batch_size, 1]\n        total_pt = masked_pt.sum(dim=1, keepdim=True)            # [batch_size, 1]\n\n        # Avoid division by zero\n        mean_energy = torch.where(n_objects > 0, total_energy / n_objects, torch.zeros_like(total_energy))\n        mean_pt = torch.where(n_objects > 0, total_pt / n_objects, torch.zeros_like(total_pt))\n\n        max_energy = masked_energies.max(dim=1, keepdim=True)[0]  # [batch_size, 1]\n        max_pt = masked_pt.max(dim=1, keepdim=True)[0]            # [batch_size, 1]\n\n        # === Pairwise angular distance features for top objects ===\n        # Get top 6 objects by pT\n        top_k = 6\n        _, top_indices = torch.topk(masked_pt, k=min(top_k, masked_pt.shape[1]), dim=1)  # [batch_size, k]\n\n        pairwise_features = []\n        k = min(top_k, masked_pt.shape[1])\n\n        for i in range(k):\n            for j in range(i+1, k):\n                # Initialize with zeros\n                delta_R = torch.zeros(batch_size, device=X.device)\n\n                # Only compute for valid pairs\n                valid_samples = (top_indices.shape[1] > max(i, j))\n                if valid_samples:\n                    batch_idx = torch.arange(batch_size, device=X.device)\n                    idx_i = top_indices[:, i]\n                    idx_j = top_indices[:, j]\n\n                    # Check if both objects are valid\n                    mask_i = obj_mask[batch_idx, idx_i]\n                    mask_j = obj_mask[batch_idx, idx_j]\n                    pair_valid = mask_i & mask_j\n\n                    # Compute delta R for valid pairs\n                    eta_i = obj_eta[batch_idx, idx_i]\n                    phi_i = obj_phi[batch_idx, idx_i]\n                    eta_j = obj_eta[batch_idx, idx_j]\n                    phi_j = obj_phi[batch_idx, idx_j]\n\n                    deta = eta_i - eta_j\n                    dphi = phi_i - phi_j\n                    # Handle phi wraparound\n                    dphi = torch.remainder(dphi + math.pi, 2*math.pi) - math.pi\n                    delta_R_computed = torch.sqrt(deta**2 + dphi**2)\n\n                    # Only keep valid pairs\n                    delta_R = torch.where(pair_valid, delta_R_computed, delta_R)\n\n                pairwise_features.append(delta_R.unsqueeze(1))  # [batch_size, 1]\n\n        # Combine all features\n        engineered_features = [\n            n_objects,     # [batch_size, 1]\n            total_energy,  # [batch_size, 1] \n            total_pt,      # [batch_size, 1]\n            mean_energy,   # [batch_size, 1]\n            mean_pt,       # [batch_size, 1]\n            max_energy,    # [batch_size, 1]\n            max_pt         # [batch_size, 1]\n        ]\n        engineered_features.extend(pairwise_features)  # Add pairwise features\n\n        engineered_tensor = torch.cat(engineered_features, dim=1)  # [batch_size, num_features]\n\n        # Combine normalized original features with engineered features\n        combined_features = torch.cat([\n            X_norm,             # [batch_size, 92]\n            engineered_tensor   # [batch_size, 7 + 15] = [batch_size, 22]\n        ], dim=1)  # [batch_size, 114]\n\n        return combined_features\n\n    def fit_transform(self, X, y=None):\n        self.fit(X, y)\n        return self.transform(X)\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# 2. ---------- MODEL DEFINITION ----------\nclass BinaryClassifier(nn.Module):\n    def __init__(self, sample_object):\n        super().__init__()\n        if isinstance(sample_object, (tuple, list)):\n            input_dim = sample_object[0].shape[-1]\n        else:\n            input_dim = sample_object.shape[-1]\n\n        self.input_norm = nn.LayerNorm(input_dim)\n\n        # Deep network with batch normalization and residual connections\n        self.fc1 = nn.Linear(input_dim, 512)\n        self.bn1 = nn.BatchNorm1d(512)\n        self.fc2 = nn.Linear(512, 512)\n        self.bn2 = nn.BatchNorm1d(512)\n        self.fc3 = nn.Linear(512, 256)\n        self.bn3 = nn.BatchNorm1d(256)\n        self.fc4 = nn.Linear(256, 128)\n        self.bn4 = nn.BatchNorm1d(128)\n        self.fc5 = nn.Linear(128, 64)\n        self.bn5 = nn.BatchNorm1d(64)\n        self.fc_out = nn.Linear(64, 1)\n\n        self.dropout = nn.Dropout(0.3)\n\n    def forward(self, x):\n        if isinstance(x, (tuple, list)):\n            x = x[0]\n\n        x = self.input_norm(x)  # [batch_size, input_dim]\n\n        # Forward pass with residual connections\n        h1 = F.relu(self.bn1(self.fc1(x)))      # [batch_size, 512]\n        h1 = self.dropout(h1)\n\n        h2 = F.relu(self.bn2(self.fc2(h1)))     # [batch_size, 512]\n        h2 = self.dropout(h2 + h1)  # residual connection\n\n        h3 = F.relu(self.bn3(self.fc3(h2)))     # [batch_size, 256]\n        h3 = self.dropout(h3)\n\n        h4 = F.relu(self.bn4(self.fc4(h3)))     # [batch_size, 128]\n        h4 = self.dropout(h4)\n\n        h5 = F.relu(self.bn5(self.fc5(h4)))     # [batch_size, 64]\n        h5 = self.dropout(h5)\n\n        logits = self.fc_out(h5)  # [batch_size, 1]\n\n        return logits.squeeze(-1)  # [batch_size]\n\ndef make_model(example_object):\n    return BinaryClassifier(example_object)\n\n# 3. ---------- MODEL TRAINING ----------\nEPOCHS = 30\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')\n    model = model.to(device)\n\n    optimizer = AdamW(model.parameters(), lr=0.001, weight_decay=0.01)\n    scheduler = ReduceLROnPlateau(optimizer, mode='max', factor=0.7, patience=3, min_lr=1e-6)\n    criterion = nn.BCEWithLogitsLoss()\n\n    train_loss_history = []\n    val_loss_history = []\n    train_acc_history = []\n    val_acc_history = []\n\n    best_val_auc = 0\n    patience_counter = 0\n    patience = 8\n\n    for epoch in range(epochs):\n        # Training phase\n        model.train()\n        train_loss = 0\n        train_correct = 0\n        train_total = 0\n        train_probs = []\n        train_targets = []\n\n        for batch_x, batch_y in train_loader:\n            if isinstance(batch_x, (tuple, list)):\n                batch_x = batch_x[0]\n\n            batch_x = batch_x.to(device)\n            batch_y = batch_y.to(device).float()\n\n            optimizer.zero_grad()\n            outputs = model(batch_x)\n            loss = criterion(outputs, batch_y)\n            loss.backward()\n            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)\n            optimizer.step()\n\n            train_loss += loss.item()\n            probs = torch.sigmoid(outputs)\n            predicted = (probs > 0.5).float()\n            train_correct += (predicted == batch_y).sum().item()\n            train_total += batch_y.size(0)\n\n            train_probs.extend(probs.detach().cpu().numpy())\n            train_targets.extend(batch_y.detach().cpu().numpy())\n\n        # Validation phase\n        model.eval()\n        val_loss = 0\n        val_correct = 0\n        val_total = 0\n        val_probs = []\n        val_targets = []\n\n        with torch.no_grad():\n            for batch_x, batch_y in val_loader:\n                if isinstance(batch_x, (tuple, list)):\n                    batch_x = batch_x[0]\n\n                batch_x = batch_x.to(device)\n                batch_y = batch_y.to(device).float()\n\n                outputs = model(batch_x)\n                loss = criterion(outputs, batch_y)\n\n                val_loss += loss.item()\n                probs = torch.sigmoid(outputs)\n                predicted = (probs > 0.5).float()\n                val_correct += (predicted == batch_y).sum().item()\n                val_total += batch_y.size(0)\n\n                val_probs.extend(probs.detach().cpu().numpy())\n                val_targets.extend(batch_y.detach().cpu().numpy())\n\n        # Calculate metrics\n        train_loss_avg = train_loss / len(train_loader)\n        val_loss_avg = val_loss / len(val_loader)\n        train_acc = train_correct / train_total\n        val_acc = val_correct / val_total\n\n        train_auc = roc_auc_score(train_targets, train_probs)\n        val_auc = roc_auc_score(val_targets, val_probs)\n\n        train_loss_history.append(train_loss_avg)\n        val_loss_history.append(val_loss_avg)\n        train_acc_history.append(train_acc)\n        val_acc_history.append(val_acc)\n\n        print(f'Epoch {epoch+1}/{epochs}: Train Loss: {train_loss_avg:.4f}, Val Loss: {val_loss_avg:.4f}, '\n              f'Train Acc: {train_acc:.4f}, Val Acc: {val_acc:.4f}, Train AUC: {train_auc:.4f}, Val AUC: {val_auc:.4f}')\n\n        # Learning rate scheduling\n        scheduler.step(val_auc)\n\n        # Early stopping based on validation AUC\n        if val_auc > best_val_auc:\n            best_val_auc = val_auc\n            patience_counter = 0\n            best_model_state = model.state_dict().copy()\n        else:\n            patience_counter += 1\n\n        if patience_counter >= patience:\n            print(f'Early stopping at epoch {epoch+1}')\n            model.load_state_dict(best_model_state)\n            break\n\n    return model, train_loss_history, val_loss_history, train_acc_history, val_acc_history",
+    "reasoning": "Let me analyze this problem step by step:\n\n1. This is a binary classification task for particle physics data\n2. The goal is to distinguish between signal (4 top quark events) and background processes\n3. The evaluation metric is AUC (area under ROC curve)\n4. The data format is:\n   - Index 0: missing ET magnitude\n   - Index 1: missing ET azimuth  \n   - Indices 2-6: object 1 (obj_1, E_1, p_T1, eta_1, phi_1)\n   - Indices 7-11: object 2 (obj_2, E_2, p_T2, eta_2, phi_2)\n   - ...\n   - Up to 18 objects total\n   - Total length: 92 features\n\nThe key insights mentioned are:\n- Pairwise particle features like invariant mass and angular distance ΔR\n- Transformer models and Graph Neural Networks work well\n\nLet me think about the approach:\n\n1. **Preprocessing**: \n   - Parse the variable-length object sequences\n   - Compute pairwise features (invariant mass, ΔR)\n   - Handle zero-padding properly\n   - Normalize features\n\n2. **Model Architecture**:\n   - Since Transformers and GNNs are recommended, I'll go with a Transformer\n   - Use attention to focus on important particle interactions\n   - Include the global features (missing ET)\n\n3. **Training**:\n   - Use appropriate loss function (BCE with logits)\n   - Implement early stopping\n   - Use a good optimizer like AdamW\n   - Track AUC during training\n\nLet me implement this:\n\n```python\n# 0. ---------- IMPORTS ----------\nfrom sklearn.metrics import roc_auc_score\nimport torch.nn.functional as F\nfrom torch.optim import AdamW\nfrom torch.optim.lr_scheduler import ReduceLROnPlateau\n",
+    "Outer_attempt": 1
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-06-26T09:29:09Z",
+    "PyLint": {
+      "passed": false,
+      "messages": [
+        {
+          "type": "error",
+          "module": "script_anthropic_claude-sonnet-4_1128_1",
+          "obj": "train_model",
+          "line": 369,
+          "column": 34,
+          "endLine": 369,
+          "endColumn": 50,
+          "path": "outputs\\26-06\\FOURTOPS\\Q2\\script_anthropic_claude-sonnet-4_1128_1.py",
+          "symbol": "possibly-used-before-assignment",
+          "message": "Possibly using variable 'best_model_state' before assignment",
+          "message-id": "E0606"
+        }
+      ]
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-06-26T09:29:09Z",
+        "metrics": {
+          ".\\./outputs/26-06/FOURTOPS/Q2/script_anthropic_claude-sonnet-4_1128_1.py": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 319,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 319,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  }
+}

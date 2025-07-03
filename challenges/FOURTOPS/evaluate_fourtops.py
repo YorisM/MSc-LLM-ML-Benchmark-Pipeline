@@ -29,9 +29,9 @@ def load_FOURTOPS_test(model_path):
         from torch.utils.data import DataLoader as LoaderCls
 
     # raw test tensors
-    X = pd.read_csv("./challenges/FOURTOPS/data/X_test.csv",
+    X = pd.read_csv("./challenges/FOURTOPS/data/test/X_test.csv",
                     dtype=np.float32).to_numpy(copy=False)
-    Y = pd.read_csv("./challenges/FOURTOPS/data/Y_test.csv",
+    Y = pd.read_csv("./challenges/FOURTOPS/data/test/Y_test.csv",
                     dtype=np.int64 ).to_numpy(copy=False).ravel()
     X = torch.from_numpy(X).float()
     Y = torch.from_numpy(Y).long()
