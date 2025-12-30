@@ -25,13 +25,42 @@ logging.basicConfig(
     format=LOG_FORMAT
 )
 
-# Models - Needs at least two models 
+# Models
 models = [
-          "openai/o4-mini-high-2025-04-16",
-          "google/gemini-2.5-pro"
-          ] 
+    "x-ai/grok-code-fast-1",
+    "deepseek/deepseek-v3.2",
+    "anthropic/claude-sonnet-4.5",
+    "google/gemini-3-pro-preview",
+    "openai/gpt-5.1-codex-max",
+    "openai/gpt-5.2-pro"
+    ]
 
 """
+    Newer run on 28 and 29/12/2025
+models = [
+    "mistralai/devstral-2512:free",
+    "mistralai/mistral-large-2512",
+    "x-ai/grok-code-fast-1",
+    "deepseek/deepseek-v3.2",
+    "anthropic/claude-sonnet-4.5",
+    "google/gemini-3-pro-preview",
+    "openai/gpt-5.1-codex-max",
+    "openai/gpt-5.2-pro"
+    ]
+
+    New run on 23/12/2025
+models = [
+    "anthropic/claude-sonnet-4.5",
+    "x-ai/grok-code-fast-1",
+    "google/gemini-3-pro-preview",
+    "mistralai/devstral-2512:free",
+    "mistralai/mistral-large-2512",
+    "deepseek/deepseek-v3.2",
+    "openai/gpt-5.1-codex-max",
+    "openai/gpt-5.2-pro"
+    ]
+
+    Run on 23/06
 models = ["openai/o4-mini-high-2025-04-16",
           "openai/o3-pro-2025-06-10",
           "anthropic/claude-4-sonnet-20250522",
@@ -40,6 +69,10 @@ models = ["openai/o4-mini-high-2025-04-16",
           "deepseek/deepseek-chat-v3-0324"
           ] 
 """
+
+# All the challenges in the pipeline
+# Currently implemented: trackformers_challenge, fourtop_challenge   
+challenges = [trackformers_challenge]
 
 # Number of attempts to retrieve correct response
 num_attempts = 5
@@ -50,19 +83,13 @@ REASONING_MAX_TOKENS = 2*4096
 
 # Timeouts in seconds
 DRYRUN_TIMEOUT_S = 3600
-TRAIN_TIMEOUT_S  = 99999999
+TRAIN_TIMEOUT_S  = 99999
 EVAL_TIMEOUT_S   = 3600
 
 # Resources - set to 0 to remove resource constraints
-CPU_LIMIT       = 0     #4 
-MEMORY_LIMIT_GB = 0     #32
-PIDS_LIMIT      = 0     #1024
-
-# All the challenges in the pipeline
-challenges = [trackformers_challenge] #[fourtop_challenge]
+CPU_LIMIT       = 0     # 4 
+MEMORY_LIMIT_GB = 0     # 32s
+PIDS_LIMIT      = 0     # 1024
 
 # Docker Image
-DOCKER_IMAGE = "llm-script-sandbox:latest"
-DOCKER_TRAINING_IMAGE = "llm-training-sandbox:latest"
-DOCKER_EVAL_IMAGE = "llm-evaluation-sandbox:latest"
-
+DOCKER_IMAGE = "llm-sandbox:latest"

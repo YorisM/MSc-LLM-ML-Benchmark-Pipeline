@@ -1,0 +1,89 @@
+{
+  "LLMGeneration": {
+    "model": "x-ai/grok-code-fast-1",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 4090,
+    "prompt_chars": 16762,
+    "response_tokens": 6742,
+    "response_chars": 7097,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.01020524,
+    "generation_ms": 62910,
+    "code": "# ---------- IMPORTS ----------\nimport torch.nn.functional as F\n\n# ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.mins = None\n        self.maxs = None\n        self.max_tracks = 51  # 1 for noise + 50 max tracks\n\n    def make_loader_cfg(self) -> dict:\n        return {\n            \"dataset_builder\": \"utils.llm_io:EventDataset\",\n            \"dataset_kwargs\": {},\n            \"loader_class\": \"torch.utils.data:DataLoader\",\n            \"batch_size\": 64,\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": False,\n            \"collate\": \"ragged_xy\",\n            \"extra_loader_kwargs\": {},\n            \"eval_overrides\": {\"shuffle\": False}\n        }\n\n    def fit(self, Xs):\n        # Xs: list of per-event X, each [N_hits_i, 4]\n        all_X = torch.cat(Xs, dim=0)  # [total_hits, 4]\n        self.mins = all_X.min(dim=0).values  # [4]\n        self.maxs = all_X.max(dim=0).values  # [4]\n        # Handle constant features to avoid division by zero\n        self.ranges = self.maxs - self.mins\n        self.ranges[self.ranges == 0] = 1.0\n        return self\n\n    def transform(self, X):\n        # X: one event array/tensor [N_hits, 4]\n        # Apply min-max normalization: (X - min) / (max - min)\n        X_norm = (X - self.mins) / self.ranges\n        return X_norm  # [N_hits, 4]\n\n# ---------- MODEL ARCHITECTURE ----------\nclass HitClassifier(nn.Module):\n    def __init__(self, example_batch_x):\n        super().__init__()\n        self.d_model = 64\n        self.num_classes = 51  # 1 (noise) + 50 max tracks\n        self.num_layers_emb = 21  # Assume layer_id from 0 to 20\n        self.layer_emb = nn.Embedding(self.num_layers_emb, self.d_model)\n        self.pos_emb = nn.Linear(3, self.d_model)  # r, theta, z\n        self.encoder = nn.TransformerEncoder(\n            nn.TransformerEncoderLayer(\n                d_model=self.d_model,\n                nhead=8,\n                dim_feedforward=256,\n                dropout=0.1,\n                batch_first=True\n            ),\n            num_layers=3\n        )\n        self.head = nn.Linear(self.d_model, self.num_classes)\n\n    def forward(self, batch_x):\n        # batch_x: list of [N_hits_i, 4]\n        outs = []\n        for X in batch_x:\n            if X.size(0) == 0:\n                outs.append(torch.empty(0, dtype=torch.long, device=device))\n                continue\n            # Extract features: r, theta, z -> [N, 3]; layer_id -> [N]\n            other = X[:, :3]  # [N, 3]\n            layer = X[:, 3].long()  # [N], cast to long for embedding\n            # Embed and combine\n            emb_layer = self.layer_emb(layer)  # [N, d_model]\n            emb_pos = self.pos_emb(other)  # [N, d_model]\n            emb = emb_pos + emb_layer  # [N, d_model]\n            # Apply Transformer Encoder: add batch dim, encode, remove batch dim\n            encoded = self.encoder(emb.unsqueeze(0)).squeeze(0)  # [N, d_model]\n            # Predict logits: [N, num_classes]\n            logits = self.head(encoded)\n            # Argmax for predicted labels: 0 (noise), 1 to num_classes-1 (tracks)\n            pred = torch.argmax(logits, dim=-1).long()  # [N]\n            outs.append(pred)\n        return outs\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 10\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)\n    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.1)\n    train_losses, val_losses, train_accs, val_accs = [], [], [], []\n\n    for epoch in range(epochs):\n        # Training\n        model.train()\n        total_loss, total_acc, total_hits = 0.0, 0.0, 0\n        for batch in train_loader:\n            view = normalise_batch(batch, device=device)\n            xb, yb = view.batch_x, view.batch_y\n            out = model(xb)  # list of pred tensors\n            loss_sum = 0.0\n            acc_sum = 0.0\n            event_hits = 0\n            for i, (pred, true_y) in enumerate(zip(out, yb)):\n                # Remap true_y: 0 for noise, 1 to M for unique tracks\n                true_unique = torch.unique(true_y[true_y > 0])\n                true_mapped = torch.zeros_like(true_y, dtype=torch.long)\n                for idx, tid in enumerate(true_unique):\n                    true_mapped[true_y == tid] = idx + 1  # 1 to len(true_unique)\n                valid_mask = true_y > 0\n                if valid_mask.sum() > 0:\n                    # Compute cross-entropy, ignoring noise (mapped to 0)\n                    loss = F.cross_entropy(out[i], true_mapped, ignore_index=0)\n                    loss_sum += loss.item()\n                    # Compute accuracy: fraction correct on valid hits\n                    correct = (pred == true_mapped)[valid_mask].sum().item()\n                    acc_sum += correct\n                    event_hits += valid_mask.sum().item()\n            if event_hits > 0:\n                batch_loss = loss_sum / len(xb)\n                batch_acc = acc_sum / event_hits\n                total_loss += batch_loss\n                total_acc += batch_acc\n            # Backprop\n            optimizer.zero_grad()\n            loss.backward()\n            optimizer.step()\n        scheduler.step()\n        train_loss = total_loss / len(train_loader)\n        train_acc = total_acc / len(train_loader)\n\n        # Validation\n        model.eval()\n        with torch.no_grad():\n            val_loss, val_acc, val_hits = 0.0, 0.0, 0\n            for batch in val_loader:\n                view = normalise_batch(batch, device=device)\n                xb, yb = view.batch_x, view.batch_y\n                out = model(xb)\n                loss_sum, acc_sum, event_hits = 0.0, 0.0, 0\n                for i, (pred, true_y) in enumerate(zip(out, yb)):\n                    true_unique = torch.unique(true_y[true_y > 0])\n                    true_mapped = torch.zeros_like(true_y, dtype=torch.long)\n                    for idx, tid in enumerate(true_unique):\n                        true_mapped[true_y == tid] = idx + 1\n                    valid_mask = true_y > 0\n                    if valid_mask.sum() > 0:\n                        loss = F.cross_entropy(out[i], true_mapped, ignore_index=0)\n                        loss_sum += loss.item()\n                        correct = (pred == true_mapped)[valid_mask].sum().item()\n                        acc_sum += correct\n                        event_hits += valid_mask.sum().item()\n                if event_hits > 0:\n                    val_loss += loss_sum / len(xb)\n                    val_acc += acc_sum / event_hits\n                val_hits += event_hits\n            val_loss /= len(val_loader)\n            val_acc /= len(val_loader)\n\n        train_losses.append(train_loss)\n        val_losses.append(val_loss)\n        train_accs.append(train_acc)\n        val_accs.append(val_acc)\n\n        print(f\"Epoch {epoch+1:2d} | Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | Train Acc: {train_acc:.4f} | Val Acc: {val_acc:.4f}\")\n\n    return model, train_losses, val_losses, train_accs, val_accs",
+    "reasoning": "",
+    "Outer_attempt": 5
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-12-29T14:00:04Z",
+    "PyLint": {
+      "passed": false,
+      "messages": [
+        {
+          "type": "error",
+          "module": "script_x-ai_grok-code-fast-1_1459_5",
+          "obj": "_run",
+          "line": 229,
+          "column": 10,
+          "endLine": 229,
+          "endColumn": 27,
+          "path": "outputs\\12-29\\TRACKFORMERS\\Q1\\script_x-ai_grok-code-fast-1_1459_5.py",
+          "symbol": "undefined-variable",
+          "message": "Undefined variable 'make_preprocessor'",
+          "message-id": "E0602"
+        },
+        {
+          "type": "error",
+          "module": "script_x-ai_grok-code-fast-1_1459_5",
+          "obj": "_run",
+          "line": 244,
+          "column": 18,
+          "endLine": 244,
+          "endColumn": 28,
+          "path": "outputs\\12-29\\TRACKFORMERS\\Q1\\script_x-ai_grok-code-fast-1_1459_5.py",
+          "symbol": "undefined-variable",
+          "message": "Undefined variable 'make_model'",
+          "message-id": "E0602"
+        }
+      ]
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-12-29T14:00:04Z",
+        "metrics": {
+          ".\\outputs\\12-29\\TRACKFORMERS\\Q1\\script_x-ai_grok-code-fast-1_1459_5.py": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 223,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 223,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  }
+}

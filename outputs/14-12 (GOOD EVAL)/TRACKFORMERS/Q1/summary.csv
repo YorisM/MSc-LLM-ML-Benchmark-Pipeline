@@ -1,0 +1,155 @@
+script,success,return_code,stdout,stderr,duration_s,max_rss_kb
+C:\Users\yoris\projects\Benchmark\outputs\14-12\TRACKFORMERS\Q1\google_gemini-2.5-pro\script_google_gemini-2.5-pro_1030_1.py,True,0,"argv0=/usr/local/bin/train.sh
+argv1=outputs/14-12/TRACKFORMERS/Q1/google_gemini-2.5-pro/script_google_gemini-2.5-pro_1030_1.py
+argv2=
+","+ exec
++ PY=outputs/14-12/TRACKFORMERS/Q1/google_gemini-2.5-pro/script_google_gemini-2.5-pro_1030_1.py
++ shift
+++ echo ''
+++ tr -d '\r\n'
+++ xargs
++ DRY=
++ [[ outputs/14-12/TRACKFORMERS/Q1/google_gemini-2.5-pro/script_google_gemini-2.5-pro_1030_1.py == \/\u\s\r\/\l\o\c\a\l\/\b\i\n\/\t\r\a\i\n\.\s\h ]]
++ [[ '' =~ (--dryrun|--dry-run) ]]
++ TIMEOUT=99999
++ : 0
++ : 0
++ ulimit -t 99999
++ ((  MEMORY_LIMIT_GB > 0  ))
++ ((  PIDS_LIMIT > 0  ))
++ timeout --signal=KILL 99999s python outputs/14-12/TRACKFORMERS/Q1/google_gemini-2.5-pro/script_google_gemini-2.5-pro_1030_1.py
+mkdir -p failed for path /home/sandbox/.config/matplotlib: [Errno 30] Read-only file system: '/home/sandbox/.config'
+Matplotlib created a temporary cache directory at /tmp/matplotlib-wc6fzggl because there was an issue with the default path (/home/sandbox/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.
+Epoch 1/40: Train Loss: 0.0276, Val Loss: 0.0152, Val Acc: 0.2439
+Epoch 2/40: Train Loss: 0.0147, Val Loss: 0.0143, Val Acc: 0.2603
+Epoch 3/40: Train Loss: 0.0139, Val Loss: 0.0135, Val Acc: 0.2696
+Epoch 4/40: Train Loss: 0.0135, Val Loss: 0.0129, Val Acc: 0.2719
+Epoch 5/40: Train Loss: 0.0127, Val Loss: 0.0120, Val Acc: 0.2643
+Epoch 6/40: Train Loss: 0.0113, Val Loss: 0.0103, Val Acc: 0.2709
+Epoch 7/40: Train Loss: 0.0091, Val Loss: 0.0080, Val Acc: 0.4293
+Epoch 8/40: Train Loss: 0.0055, Val Loss: 0.0034, Val Acc: 0.8208
+Epoch 9/40: Train Loss: 0.0027, Val Loss: 0.0022, Val Acc: 0.8898
+Epoch 10/40: Train Loss: 0.0021, Val Loss: 0.0019, Val Acc: 0.9117
+Epoch 11/40: Train Loss: 0.0018, Val Loss: 0.0017, Val Acc: 0.9197
+Epoch 12/40: Train Loss: 0.0016, Val Loss: 0.0016, Val Acc: 0.9301
+Epoch 13/40: Train Loss: 0.0015, Val Loss: 0.0015, Val Acc: 0.9344
+Epoch 14/40: Train Loss: 0.0014, Val Loss: 0.0014, Val Acc: 0.9405
+Epoch 15/40: Train Loss: 0.0013, Val Loss: 0.0013, Val Acc: 0.9492
+Epoch 16/40: Train Loss: 0.0012, Val Loss: 0.0012, Val Acc: 0.9524
+Epoch 17/40: Train Loss: 0.0011, Val Loss: 0.0011, Val Acc: 0.9552
+Epoch 18/40: Train Loss: 0.0011, Val Loss: 0.0011, Val Acc: 0.9583
+Epoch 19/40: Train Loss: 0.0010, Val Loss: 0.0010, Val Acc: 0.9619
+Epoch 20/40: Train Loss: 0.0009, Val Loss: 0.0009, Val Acc: 0.9619
+Epoch 21/40: Train Loss: 0.0009, Val Loss: 0.0009, Val Acc: 0.9644
+Epoch 22/40: Train Loss: 0.0009, Val Loss: 0.0009, Val Acc: 0.9660
+Epoch 23/40: Train Loss: 0.0008, Val Loss: 0.0008, Val Acc: 0.9658
+Epoch 24/40: Train Loss: 0.0008, Val Loss: 0.0008, Val Acc: 0.9682
+Epoch 25/40: Train Loss: 0.0008, Val Loss: 0.0008, Val Acc: 0.9697
+Epoch 26/40: Train Loss: 0.0008, Val Loss: 0.0009, Val Acc: 0.9672
+Epoch 27/40: Train Loss: 0.0008, Val Loss: 0.0008, Val Acc: 0.9703
+Epoch 28/40: Train Loss: 0.0007, Val Loss: 0.0008, Val Acc: 0.9719
+Epoch 29/40: Train Loss: 0.0007, Val Loss: 0.0006, Val Acc: 0.9713
+Epoch 30/40: Train Loss: 0.0007, Val Loss: 0.0008, Val Acc: 0.9732
+Epoch 31/40: Train Loss: 0.0007, Val Loss: 0.0007, Val Acc: 0.9716
+Epoch 32/40: Train Loss: 0.0007, Val Loss: 0.0006, Val Acc: 0.9728
+Epoch 33/40: Train Loss: 0.0006, Val Loss: 0.0006, Val Acc: 0.9728
+Epoch 34/40: Train Loss: 0.0006, Val Loss: 0.0006, Val Acc: 0.9765
+Epoch 35/40: Train Loss: 0.0006, Val Loss: 0.0006, Val Acc: 0.9746
+Epoch 36/40: Train Loss: 0.0006, Val Loss: 0.0005, Val Acc: 0.9767
+Epoch 37/40: Train Loss: 0.0006, Val Loss: 0.0006, Val Acc: 0.9763
+Epoch 38/40: Train Loss: 0.0006, Val Loss: 0.0006, Val Acc: 0.9768
+Epoch 39/40: Train Loss: 0.0006, Val Loss: 0.0005, Val Acc: 0.9767
+Epoch 40/40: Train Loss: 0.0005, Val Loss: 0.0006, Val Acc: 0.9772
+#TRAIN_METRICS#{""epochs"": 40, ""train_loss"": [0.027639744363725186, 0.014739987529814244, 0.013923943765461445, 0.013480550460517406, 0.012657130159437657, 0.011328152514994144, 0.009101741034537553, 0.005465924248099327, 0.00267449607513845, 0.0021010583033785222, 0.0017639821590855718, 0.0016306401183828713, 0.0014853769266046583, 0.0013747545001097023, 0.0012957148170098663, 0.0011832683812826872, 0.0011288964343257248, 0.0010820477064698935, 0.0009941857242956758, 0.0009459440978243947, 0.0009090431830845773, 0.0008815688013564795, 0.0008351039150729776, 0.0008291020591277629, 0.0007811571240890771, 0.0007763592421542854, 0.0007551523831207305, 0.0007143241073936224, 0.00072802142216824, 0.0007150407012086362, 0.0007009906835155562, 0.0006770182806067168, 0.000637842669384554, 0.0005843889589887113, 0.0005836933837272227, 0.0005734283917117863, 0.0005671152824070305, 0.0005652190614491701, 0.0005542246492113918, 0.0005422242360655218], ""val_loss"": [0.015159422415308654, 0.014293574902694672, 0.013487698917742819, 0.012916980020236224, 0.011982957716099918, 0.010340629261918366, 0.007970599370310083, 0.003379699628567323, 0.00215791702066781, 0.001929647747601848, 0.0017073021372198127, 0.001594114954059478, 0.001485963373852428, 0.0013953138513898011, 0.0012715594348264858, 0.001174778397398768, 0.0011023574152204674, 0.0010951569529424887, 0.0010153113908017986, 0.0009382603439007653, 0.0009285677297157235, 0.0009370824991492555, 0.0007806966586940689, 0.0007787890026520472, 0.0007742627713014372, 0.0008661045394546818, 0.0007598808697366621, 0.000765731543651782, 0.0006013956844981294, 0.000772703489928972, 0.0006747310271748574, 0.0006280367706494872, 0.000626354199994239, 0.0006004662500345148, 0.000590650161029771, 0.0005422947760962415, 0.0005825863445352297, 0.0005921893407503376, 0.0005089819187560352, 0.000566276259633014], ""train_acc"": [0.9723602556362748, 0.9852600124701858, 0.9860760562345385, 0.9865194495394826, 0.9873428698405623, 0.9886718474850058, 0.9908982589654625, 0.9945340757519007, 0.9973255039248615, 0.9978989416966215, 0.9982360178409144, 0.9983693598816171, 0.9985146230733953, 0.9986252454998903, 0.9987042851829901, 0.9988167316187173, 0.9988711035656743, 0.9989179522935301, 0.9990058142757043, 0.9990540559021756, 0.9990909568169154, 0.9991184311986435, 0.999164896084927, 0.9991708979408722, 0.9992188428759109, 0.9992236407578458, 0.9992448476168793, 0.9992856758926064, 0.9992719785778318, 0.9992849592987914, 0.9992990093164844, 0.9993229817193933, 0.9993621573306154, 0.9994156110410113, 0.9994163066162728, 0.9994265716082882, 0.999432884717593, 0.9994347809385509, 0.9994457753507886, 0.9994577757639345], ""val_acc"": [0.24392304354824082, 0.26030107812759506, 0.269586095207771, 0.27189450981649455, 0.2643071565068533, 0.27092079945416947, 0.42930362081928947, 0.8208049886370495, 0.8897605574490862, 0.911668316871847, 0.9196631783319176, 0.9301050620175275, 0.934351754041174, 0.9405132552220513, 0.9491923195524823, 0.9523687147600183, 0.95522839273149, 0.9583029068835272, 0.961898175773832, 0.9618582035329042, 0.9643786367362824, 0.9660285469540286, 0.9657868215407396, 0.9682475924766873, 0.9697180978841293, 0.9672299160715822, 0.9702842486639642, 0.971861785991977, 0.9712741919856274, 0.973152617718315, 0.9715796340606054, 0.9728270923765424, 0.9727745643414537, 0.9765116703420156, 0.9746131761712897, 0.9767281300775296, 0.9763425238368486, 0.9768257796842706, 0.9766503999987384, 0.9772115171984981]}
++ python_rc=0
++ [[ 0 -ne 0 ]]
++ [[ '' =~ (--dryrun|--dry-run) ]]
+++ dirname outputs/14-12/TRACKFORMERS/Q1/google_gemini-2.5-pro/script_google_gemini-2.5-pro_1030_1.py
++ MODEL_DIR=outputs/14-12/TRACKFORMERS/Q1/google_gemini-2.5-pro
++ pushd outputs/14-12/TRACKFORMERS/Q1/google_gemini-2.5-pro
++ shopt -s nullglob
++ ref=
++ for cand in *_model.pkl *_state.pt *_preproc.pkl
++ [[ -e google_gemini-2.5-pro_1030_1_model.pkl ]]
++ ref=google_gemini-2.5-pro_1030_1_model.pkl
++ break
++ [[ -z google_gemini-2.5-pro_1030_1_model.pkl ]]
++ stem=google_gemini-2.5-pro_1030_1_model.pkl
++ case ""$ref"" in
++ stem=google_gemini-2.5-pro_1030_1
++ MANIFEST=google_gemini-2.5-pro_1030_1_manifest.sha256
++ files=(""${stem}_state.pt"" ""${stem}_model.pkl"" ""${stem}_preproc.pkl"")
++ have=()
++ for f in ""${files[@]}""
++ [[ -e google_gemini-2.5-pro_1030_1_state.pt ]]
++ have+=(""$f"")
++ for f in ""${files[@]}""
++ [[ -e google_gemini-2.5-pro_1030_1_model.pkl ]]
++ have+=(""$f"")
++ for f in ""${files[@]}""
++ [[ -e google_gemini-2.5-pro_1030_1_preproc.pkl ]]
++ have+=(""$f"")
++ (( 3==0 ))
++ sha256sum google_gemini-2.5-pro_1030_1_state.pt google_gemini-2.5-pro_1030_1_model.pkl google_gemini-2.5-pro_1030_1_preproc.pkl
++ shopt -u nullglob
++ echo 'Hash manifest written â†’ google_gemini-2.5-pro_1030_1_manifest.sha256'
+Hash manifest written â†’ google_gemini-2.5-pro_1030_1_manifest.sha256
++ popd
+",8468.214212099992,-386704
+C:\Users\yoris\projects\Benchmark\outputs\14-12\TRACKFORMERS\Q1\openai_o4-mini-high-2025-04-16\script_openai_o4-mini-high-2025-04-16_1028_1.py,True,0,"argv0=/usr/local/bin/train.sh
+argv1=outputs/14-12/TRACKFORMERS/Q1/openai_o4-mini-high-2025-04-16/script_openai_o4-mini-high-2025-04-16_1028_1.py
+argv2=
+","+ exec
++ PY=outputs/14-12/TRACKFORMERS/Q1/openai_o4-mini-high-2025-04-16/script_openai_o4-mini-high-2025-04-16_1028_1.py
++ shift
+++ echo ''
+++ tr -d '\r\n'
+++ xargs
++ DRY=
++ [[ outputs/14-12/TRACKFORMERS/Q1/openai_o4-mini-high-2025-04-16/script_openai_o4-mini-high-2025-04-16_1028_1.py == \/\u\s\r\/\l\o\c\a\l\/\b\i\n\/\t\r\a\i\n\.\s\h ]]
++ [[ '' =~ (--dryrun|--dry-run) ]]
++ TIMEOUT=99999
++ : 0
++ : 0
++ ulimit -t 99999
++ ((  MEMORY_LIMIT_GB > 0  ))
++ ((  PIDS_LIMIT > 0  ))
++ timeout --signal=KILL 99999s python outputs/14-12/TRACKFORMERS/Q1/openai_o4-mini-high-2025-04-16/script_openai_o4-mini-high-2025-04-16_1028_1.py
+mkdir -p failed for path /home/sandbox/.config/matplotlib: [Errno 30] Read-only file system: '/home/sandbox/.config'
+Matplotlib created a temporary cache directory at /tmp/matplotlib-owtlq4mh because there was an issue with the default path (/home/sandbox/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.
+#TRAIN_METRICS#{""epochs"": 10, ""train_loss"": null, ""val_loss"": null, ""train_acc"": null, ""val_acc"": null}
++ python_rc=0
++ [[ 0 -ne 0 ]]
++ [[ '' =~ (--dryrun|--dry-run) ]]
+++ dirname outputs/14-12/TRACKFORMERS/Q1/openai_o4-mini-high-2025-04-16/script_openai_o4-mini-high-2025-04-16_1028_1.py
++ MODEL_DIR=outputs/14-12/TRACKFORMERS/Q1/openai_o4-mini-high-2025-04-16
++ pushd outputs/14-12/TRACKFORMERS/Q1/openai_o4-mini-high-2025-04-16
++ shopt -s nullglob
++ ref=
++ for cand in *_model.pkl *_state.pt *_preproc.pkl
++ [[ -e openai_o4-mini-high-2025-04-16_1028_1_model.pkl ]]
++ ref=openai_o4-mini-high-2025-04-16_1028_1_model.pkl
++ break
++ [[ -z openai_o4-mini-high-2025-04-16_1028_1_model.pkl ]]
++ stem=openai_o4-mini-high-2025-04-16_1028_1_model.pkl
++ case ""$ref"" in
++ stem=openai_o4-mini-high-2025-04-16_1028_1
++ MANIFEST=openai_o4-mini-high-2025-04-16_1028_1_manifest.sha256
++ files=(""${stem}_state.pt"" ""${stem}_model.pkl"" ""${stem}_preproc.pkl"")
++ have=()
++ for f in ""${files[@]}""
++ [[ -e openai_o4-mini-high-2025-04-16_1028_1_state.pt ]]
++ have+=(""$f"")
++ for f in ""${files[@]}""
++ [[ -e openai_o4-mini-high-2025-04-16_1028_1_model.pkl ]]
++ have+=(""$f"")
++ for f in ""${files[@]}""
++ [[ -e openai_o4-mini-high-2025-04-16_1028_1_preproc.pkl ]]
++ have+=(""$f"")
++ (( 3==0 ))
++ sha256sum openai_o4-mini-high-2025-04-16_1028_1_state.pt openai_o4-mini-high-2025-04-16_1028_1_model.pkl openai_o4-mini-high-2025-04-16_1028_1_preproc.pkl
++ shopt -u nullglob
++ echo 'Hash manifest written â†’ openai_o4-mini-high-2025-04-16_1028_1_manifest.sha256'
+Hash manifest written â†’ openai_o4-mini-high-2025-04-16_1028_1_manifest.sha256
++ popd
+",24.027912400008063,1468

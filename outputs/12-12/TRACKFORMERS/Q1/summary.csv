@@ -1,0 +1,58 @@
+script,success,return_code,stdout,stderr,duration_s,max_rss_kb
+C:\Users\yoris\projects\Benchmark\outputs\12-12\TRACKFORMERS\Q1\openai_o4-mini-high-2025-04-16\script_openai_o4-mini-high-2025-04-16_2006_1.py,True,0,"argv0=/usr/local/bin/train.sh
+argv1=outputs/12-12/TRACKFORMERS/Q1/openai_o4-mini-high-2025-04-16/script_openai_o4-mini-high-2025-04-16_2006_1.py
+argv2=
+","+ exec
++ PY=outputs/12-12/TRACKFORMERS/Q1/openai_o4-mini-high-2025-04-16/script_openai_o4-mini-high-2025-04-16_2006_1.py
++ shift
+++ echo ''
+++ tr -d '\r\n'
+++ xargs
++ DRY=
++ [[ outputs/12-12/TRACKFORMERS/Q1/openai_o4-mini-high-2025-04-16/script_openai_o4-mini-high-2025-04-16_2006_1.py == \/\u\s\r\/\l\o\c\a\l\/\b\i\n\/\t\r\a\i\n\.\s\h ]]
++ [[ '' =~ (--dryrun|--dry-run) ]]
++ TIMEOUT=99999
++ : 0
++ : 0
++ ulimit -t 99999
++ ((  MEMORY_LIMIT_GB > 0  ))
++ ((  PIDS_LIMIT > 0  ))
++ timeout --signal=KILL 99999s python outputs/12-12/TRACKFORMERS/Q1/openai_o4-mini-high-2025-04-16/script_openai_o4-mini-high-2025-04-16_2006_1.py
+mkdir -p failed for path /home/sandbox/.config/matplotlib: [Errno 30] Read-only file system: '/home/sandbox/.config'
+Matplotlib created a temporary cache directory at /tmp/matplotlib-giq56t47 because there was an issue with the default path (/home/sandbox/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.
+#TRAIN_METRICS#{""epochs"": 10, ""train_loss"": null, ""val_loss"": null, ""train_acc"": null, ""val_acc"": null}
++ python_rc=0
++ [[ 0 -ne 0 ]]
++ [[ '' =~ (--dryrun|--dry-run) ]]
+++ dirname outputs/12-12/TRACKFORMERS/Q1/openai_o4-mini-high-2025-04-16/script_openai_o4-mini-high-2025-04-16_2006_1.py
++ MODEL_DIR=outputs/12-12/TRACKFORMERS/Q1/openai_o4-mini-high-2025-04-16
++ pushd outputs/12-12/TRACKFORMERS/Q1/openai_o4-mini-high-2025-04-16
++ shopt -s nullglob
++ ref=
++ for cand in *_model.pkl *_state.pt *_preproc.pkl
++ [[ -e openai_o4-mini-high-2025-04-16_2006_1_model.pkl ]]
++ ref=openai_o4-mini-high-2025-04-16_2006_1_model.pkl
++ break
++ [[ -z openai_o4-mini-high-2025-04-16_2006_1_model.pkl ]]
++ stem=openai_o4-mini-high-2025-04-16_2006_1_model.pkl
++ case ""$ref"" in
++ stem=openai_o4-mini-high-2025-04-16_2006_1
++ MANIFEST=openai_o4-mini-high-2025-04-16_2006_1_manifest.sha256
++ files=(""${stem}_state.pt"" ""${stem}_model.pkl"" ""${stem}_preproc.pkl"")
++ have=()
++ for f in ""${files[@]}""
++ [[ -e openai_o4-mini-high-2025-04-16_2006_1_state.pt ]]
++ have+=(""$f"")
++ for f in ""${files[@]}""
++ [[ -e openai_o4-mini-high-2025-04-16_2006_1_model.pkl ]]
++ have+=(""$f"")
++ for f in ""${files[@]}""
++ [[ -e openai_o4-mini-high-2025-04-16_2006_1_preproc.pkl ]]
++ have+=(""$f"")
++ (( 3==0 ))
++ sha256sum openai_o4-mini-high-2025-04-16_2006_1_state.pt openai_o4-mini-high-2025-04-16_2006_1_model.pkl openai_o4-mini-high-2025-04-16_2006_1_preproc.pkl
++ shopt -u nullglob
++ echo 'Hash manifest written â†’ openai_o4-mini-high-2025-04-16_2006_1_manifest.sha256'
+Hash manifest written â†’ openai_o4-mini-high-2025-04-16_2006_1_manifest.sha256
++ popd
+",11.087918899997021,4

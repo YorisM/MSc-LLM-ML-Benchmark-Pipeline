@@ -1,0 +1,71 @@
+{
+  "LLMGeneration": {
+    "model": "mistralai/devstral-2512:free",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 3894,
+    "prompt_chars": 15878,
+    "response_tokens": 2395,
+    "response_chars": 9818,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0,
+    "generation_ms": 36994,
+    "code": "# ---------- IMPORTS ----------\nimport torch\nimport torch.nn as nn\nimport torch.nn.functional as F\nfrom torch_geometric.nn import GCNConv, global_mean_pool\nfrom torch_geometric.data import Data, Batch\nimport numpy as np\nfrom sklearn.preprocessing import StandardScaler\nfrom sklearn.cluster import DBSCAN\nimport pickle\n\n# -------- (OPTIONAL) CUSTOM DATASET  --------\ndef make_dataset(events, pre, train: bool, **kwargs):\n    return EventDataset(events, pre, train=train)\n\n# ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.scaler = StandardScaler()\n        self.layer_means = None\n        self.layer_stds = None\n\n    def make_loader_cfg(self) -> dict:\n        return {\n            \"dataset_builder\": \"llm_script:make_dataset\",\n            \"dataset_kwargs\": {},\n\n            \"loader_class\": \"torch_geometric.loader:DataLoader\",\n            \"batch_size\": 32,\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": False,\n\n            \"collate\": \"identity\",\n\n            \"extra_loader_kwargs\": {},\n\n            \"eval_overrides\": {\"shuffle\": False}\n        }\n\n    def fit(self, Xs):\n        # Xs: list of per-event X, each [N_hits_i, 4]\n        all_data = np.concatenate(Xs, axis=0)\n        self.scaler.fit(all_data[:, :3])  # Scale r, theta, z\n\n        # Compute layer-wise statistics\n        layer_stats = {}\n        for X in Xs:\n            for layer_id in np.unique(X[:, 3]):\n                mask = X[:, 3] == layer_id\n                if layer_id not in layer_stats:\n                    layer_stats[layer_id] = []\n                layer_stats[layer_id].append(X[mask, :3])\n\n        self.layer_means = {}\n        self.layer_stds = {}\n        for layer_id, data_list in layer_stats.items():\n            layer_data = np.concatenate(data_list, axis=0)\n            self.layer_means[layer_id] = np.mean(layer_data, axis=0)\n            self.layer_stds[layer_id] = np.std(layer_data, axis=0)\n\n        return self\n\n    def transform(self, X):\n        # X: one event array/tensor [N_hits, 4]\n        X = X.numpy() if isinstance(X, torch.Tensor) else X\n        scaled_features = self.scaler.transform(X[:, :3])\n\n        # Layer-wise normalization\n        normalized_features = np.zeros_like(scaled_features)\n        for layer_id in np.unique(X[:, 3]):\n            mask = X[:, 3] == layer_id\n            if layer_id in self.layer_means:\n                mean = self.layer_means[layer_id]\n                std = self.layer_stds[layer_id]\n                normalized_features[mask] = (scaled_features[mask] - mean) / (std + 1e-8)\n            else:\n                normalized_features[mask] = scaled_features[mask]\n\n        # Add layer_id as one-hot encoding\n        layer_ids = X[:, 3].astype(int)\n        num_layers = len(self.layer_means) if self.layer_means else 10\n        one_hot = np.zeros((len(layer_ids), num_layers))\n        one_hot[np.arange(len(layer_ids)), layer_ids % num_layers] = 1\n\n        # Combine features\n        processed_X = np.concatenate([\n            normalized_features,\n            one_hot\n        ], axis=1)\n\n        return torch.from_numpy(processed_X).float()\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# ---------- MODEL ARCHITECTURE ----------\nclass HitClassifier(nn.Module):\n    def __init__(self, example_batch_x):\n        super().__init__()\n        # Infer input features from example batch\n        self.in_features = example_batch_x[0].shape[1] if isinstance(example_batch_x, list) else example_batch_x.shape[1]\n\n        # Graph convolution layers\n        self.conv1 = GCNConv(self.in_features, 128)\n        self.conv2 = GCNConv(128, 64)\n        self.conv3 = GCNConv(64, 32)\n\n        # Attention mechanism\n        self.attention = nn.Sequential(\n            nn.Linear(32, 16),\n            nn.Tanh(),\n            nn.Linear(16, 1)\n        )\n\n        # Output layer\n        self.out = nn.Linear(32, 1)\n\n        # Cluster embedding\n        self.cluster_embed = nn.Embedding(100, 32)  # Max 100 clusters per event\n\n    def forward(self, batch_x):\n        # Handle both ragged list and single tensor\n        if isinstance(batch_x, list):\n            # Process each event separately\n            all_preds = []\n            for x in batch_x:\n                preds = self._forward_single(x)\n                all_preds.append(preds)\n            return all_preds\n        else:\n            return self._forward_single(batch_x)\n\n    def _forward_single(self, x):\n        # x: [N_hits, F]\n        n_hits = x.shape[0]\n\n        # Create graph structure (complete graph for simplicity)\n        edge_index = torch.combinations(torch.arange(n_hits), r=2).t().contiguous()\n\n        # Graph convolutions\n        h = F.relu(self.conv1(x, edge_index))\n        h = F.relu(self.conv2(h, edge_index))\n        h = F.relu(self.conv3(h, edge_index))\n\n        # Attention scores\n        attn_scores = self.attention(h).squeeze()\n        attn_weights = F.softmax(attn_scores, dim=0)\n\n        # Weighted features\n        weighted_h = h * attn_weights.unsqueeze(1)\n\n        # Predict cluster assignments\n        logits = self.out(weighted_h).squeeze()\n\n        # DBSCAN clustering on learned features\n        features = h.detach().cpu().numpy()\n        clustering = DBSCAN(eps=0.5, min_samples=4).fit(features)\n        labels = torch.from_numpy(clustering.labels_).to(x.device)\n\n        # Map cluster labels to positive integers (noise = -1)\n        unique_labels = torch.unique(labels)\n        label_map = torch.zeros_like(unique_labels) - 1\n        label_map[unique_labels != -1] = torch.arange(1, len(unique_labels[unique_labels != -1]) + 1)\n        preds = label_map[labels]\n\n        return preds\n\ndef make_model(example_batch_x):\n    return HitClassifier(example_batch_x)\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 20\n\ndef train_model(model, train_loader, val_loader, epochs):\n    device = torch.device(\"cuda\" if torch.cuda.is_available() else \"cpu\")\n    model = model.to(device)\n\n    # Loss and optimizer\n    criterion = nn.CrossEntropyLoss()\n    optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-5)\n    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=3, factor=0.5)\n\n    # Early stopping\n    best_val_loss = float('inf')\n    patience = 5\n    patience_counter = 0\n\n    train_loss_history = []\n    val_loss_history = []\n    train_acc_history = []\n    val_acc_history = []\n\n    for epoch in range(epochs):\n        model.train()\n        epoch_train_loss = 0\n        epoch_train_acc = 0\n        train_samples = 0\n\n        for batch in train_loader:\n            # Normalize batch\n            view = normalise_batch(batch, device=device)\n            x = view.batch_x\n            y = view.batch_y\n\n            optimizer.zero_grad()\n\n            # Forward pass\n            if isinstance(x, list):\n                preds = [model(xi.unsqueeze(0)) for xi in x]\n                loss = 0\n                for pred, yi in zip(preds, y):\n                    loss += criterion(pred, yi)\n                loss /= len(x)\n            else:\n                preds = model(x)\n                loss = criterion(preds, y)\n\n            # Backward pass\n            loss.backward()\n            optimizer.step()\n\n            epoch_train_loss += loss.item() * len(y)\n            train_samples += len(y)\n\n            # Accuracy calculation\n            if isinstance(preds, list):\n                correct = sum((pred.argmax(dim=1) == yi).sum().item() for pred, yi in zip(preds, y))\n            else:\n                correct = (preds.argmax(dim=1) == y).sum().item()\n            epoch_train_acc += correct\n\n        # Validation\n        model.eval()\n        epoch_val_loss = 0\n        epoch_val_acc = 0\n        val_samples = 0\n\n        with torch.no_grad():\n            for batch in val_loader:\n                view = normalise_batch(batch, device=device)\n                x = view.batch_x\n                y = view.batch_y\n\n                if isinstance(x, list):\n                    preds = [model(xi.unsqueeze(0)) for xi in x]\n                    loss = 0\n                    for pred, yi in zip(preds, y):\n                        loss += criterion(pred, yi)\n                    loss /= len(x)\n                else:\n                    preds = model(x)\n                    loss = criterion(preds, y)\n\n                epoch_val_loss += loss.item() * len(y)\n                val_samples += len(y)\n\n                if isinstance(preds, list):\n                    correct = sum((pred.argmax(dim=1) == yi).sum().item() for pred, yi in zip(preds, y))\n                else:\n                    correct = (preds.argmax(dim=1) == y).sum().item()\n                epoch_val_acc += correct\n\n        # Update metrics\n        train_loss = epoch_train_loss / train_samples\n        val_loss = epoch_val_loss / val_samples\n        train_acc = epoch_train_acc / train_samples\n        val_acc = epoch_val_acc / val_samples\n\n        train_loss_history.append(train_loss)\n        val_loss_history.append(val_loss)\n        train_acc_history.append(train_acc)\n        val_acc_history.append(val_acc)\n\n        # Early stopping and learning rate scheduling\n        scheduler.step(val_loss)\n\n        if val_loss < best_val_loss:\n            best_val_loss = val_loss\n            patience_counter = 0\n            best_model = model.state_dict()\n        else:\n            patience_counter += 1\n            if patience_counter >= patience:\n                print(f\"Early stopping at epoch {epoch+1}\")\n                model.load_state_dict(best_model)\n                break\n\n        print(f\"Epoch {epoch+1}/{epochs} - Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}, Train Acc: {train_acc:.4f}, Val Acc: {val_acc:.4f}\")\n\n    return model, train_loss_history, val_loss_history, train_acc_history, val_acc_history",
+    "reasoning": "",
+    "Outer_attempt": 2
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-12-19T09:51:37Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-12-19T09:51:37Z",
+        "metrics": {
+          ".\\outputs\\12-19\\TRACKFORMERS\\Q1\\script_mistralai_devstral-2512_free_1051_2.py": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 289,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 289,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2025-12-19T09:51:57Z",
+    "passed": false,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/12-19/TRACKFORMERS/Q1/script_mistralai_devstral-2512_free_1051_2.py\nargv2=--dryrun\n",
+      "stderr": "+ exec\n+ PY=outputs/12-19/TRACKFORMERS/Q1/script_mistralai_devstral-2512_free_1051_2.py\n+ shift\n++ echo --dryrun\n++ tr -d '\\r\\n'\n++ xargs\n+ DRY=--dryrun\n+ [[ outputs/12-19/TRACKFORMERS/Q1/script_mistralai_devstral-2512_free_1051_2.py == \\/\\u\\s\\r\\/\\l\\o\\c\\a\\l\\/\\b\\i\\n\\/\\t\\r\\a\\i\\n\\.\\s\\h ]]\n+ [[ --dryrun =~ (--dryrun|--dry-run) ]]\n+ TIMEOUT=3600\n+ : 0\n+ : 0\n+ ulimit -t 3600\n+ ((  MEMORY_LIMIT_GB > 0  ))\n+ ((  PIDS_LIMIT > 0  ))\n+ timeout --signal=KILL 3600s python outputs/12-19/TRACKFORMERS/Q1/script_mistralai_devstral-2512_free_1051_2.py --dryrun\nmkdir -p failed for path /home/sandbox/.config/matplotlib: [Errno 30] Read-only file system: '/home/sandbox/.config'\nMatplotlib created a temporary cache directory at /tmp/matplotlib-24uf53bh because there was an issue with the default path (/home/sandbox/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.\nTraceback (most recent call last):\n  File \"/workspace/outputs/12-19/TRACKFORMERS/Q1/script_mistralai_devstral-2512_free_1051_2.py\", line 418, in <module>\n    _run(dryrun=\"--dryrun\" in sys.argv)\n  File \"/workspace/outputs/12-19/TRACKFORMERS/Q1/script_mistralai_devstral-2512_free_1051_2.py\", line 359, in _run\n    spec = enforce_pyg_policy(spec)\n           ^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/utils/loaderspec.py\", line 293, in enforce_pyg_policy\n    raise ValueError(\"PyG DataLoader requires collate=None in make_loader_cfg().\")\nValueError: PyG DataLoader requires collate=None in make_loader_cfg().\n"
+    },
+    "return_code": 1
+  }
+}

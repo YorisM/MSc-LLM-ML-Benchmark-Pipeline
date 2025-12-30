@@ -1,0 +1,71 @@
+{
+  "LLMGeneration": {
+    "model": "mistralai/devstral-2512:free",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 4174,
+    "prompt_chars": 16762,
+    "response_tokens": 2347,
+    "response_chars": 9280,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0,
+    "generation_ms": 146864,
+    "code": "# ---------- IMPORTS ----------\nimport torch.nn.functional as F\nfrom torch_geometric.data import Data, Batch\nfrom torch_geometric.nn import GCNConv, global_mean_pool\nfrom sklearn.preprocessing import StandardScaler\nfrom scipy.spatial.distance import cdist\nimport hdbscan\n\n# ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.scaler = StandardScaler()\n        self.layer_means = None\n        self.layer_stds = None\n\n    def make_loader_cfg(self) -> dict:\n        return {\n            \"dataset_builder\": \"utils.llm_io:EventDataset\",\n            \"dataset_kwargs\": {},\n            \"loader_class\": \"torch.utils.data:DataLoader\",\n            \"batch_size\": 32,\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": False,\n            \"collate\": \"ragged_xy\",\n            \"extra_loader_kwargs\": {},\n            \"eval_overrides\": {\"shuffle\": False}\n        }\n\n    def fit(self, Xs):\n        # Concatenate all events for global scaling\n        all_hits = torch.cat(Xs, dim=0).numpy()\n        self.scaler.fit(all_hits[:, :3])  # Scale r, theta, z\n\n        # Compute per-layer statistics\n        layer_stats = {}\n        for X in Xs:\n            layers = X[:, 3].numpy()\n            for i, layer in enumerate(layers):\n                if layer not in layer_stats:\n                    layer_stats[layer] = []\n                layer_stats[layer].append(X[i, :3].numpy())\n\n        self.layer_means = {}\n        self.layer_stds = {}\n        for layer, hits in layer_stats.items():\n            hits = np.array(hits)\n            self.layer_means[layer] = np.mean(hits, axis=0)\n            self.layer_stds[layer] = np.std(hits, axis=0)\n\n        return self\n\n    def transform(self, X):\n        # Scale features\n        X_np = X.numpy()\n        X_np[:, :3] = self.scaler.transform(X_np[:, :3])\n\n        # Layer-wise normalization\n        for i in range(len(X)):\n            layer = X_np[i, 3]\n            if layer in self.layer_means:\n                X_np[i, :3] = (X_np[i, :3] - self.layer_means[layer]) / (self.layer_stds[layer] + 1e-8)\n\n        return torch.from_numpy(X_np).float()\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# ---------- MODEL ARCHITECTURE ----------\nclass HitClassifier(nn.Module):\n    def __init__(self, example_batch_x):\n        super().__init__()\n        # Graph-based architecture\n        self.conv1 = GCNConv(4, 64)\n        self.conv2 = GCNConv(64, 128)\n        self.conv3 = GCNConv(128, 64)\n        self.fc1 = nn.Linear(64, 32)\n        self.fc2 = nn.Linear(32, 16)\n        self.fc3 = nn.Linear(16, 1)  # Predict cluster assignment\n\n        # Positional encoding\n        self.pos_encoder = nn.Linear(4, 32)\n\n        # Attention mechanism\n        self.attention = nn.MultiheadAttention(embed_dim=64, num_heads=4)\n\n        # Dropout for regularization\n        self.dropout = nn.Dropout(0.2)\n\n    def build_graph(self, X):\n        # X: [N_hits, 4] tensor\n        N = X.size(0)\n        pos = X[:, :3]  # Use spatial coordinates for edge weights\n\n        # Compute pairwise distances\n        dist = torch.cdist(pos, pos)\n        sigma = 0.1 * torch.median(dist)\n        adj = torch.exp(-dist / sigma)\n\n        # Create edge index\n        edge_index = torch.nonzero(adj > 0.1).t()\n        edge_weight = adj[edge_index[0], edge_index[1]]\n\n        return Data(x=X, edge_index=edge_index, edge_weight=edge_weight)\n\n    def forward(self, batch_x):\n        # batch_x is list of tensors [N_hits_i, 4]\n        all_preds = []\n        for X in batch_x:\n            # Build graph for this event\n            data = self.build_graph(X).to(device)\n\n            # Graph convolution layers\n            x = F.relu(self.conv1(data.x, data.edge_index, data.edge_weight))\n            x = self.dropout(x)\n            x = F.relu(self.conv2(x, data.edge_index, data.edge_weight))\n            x = self.dropout(x)\n            x = F.relu(self.conv3(x, data.edge_index, data.edge_weight))\n\n            # Global context\n            global_ctx = global_mean_pool(x, torch.zeros(data.num_nodes, dtype=torch.long, device=device))\n\n            # Combine local and global features\n            x = torch.cat([x, global_ctx.expand(x.size(0), -1)], dim=1)\n\n            # Attention mechanism\n            x, _ = self.attention(x.unsqueeze(0), x.unsqueeze(0), x.unsqueeze(0))\n            x = x.squeeze(0)\n\n            # Final prediction\n            x = F.relu(self.fc1(x))\n            x = self.dropout(x)\n            x = F.relu(self.fc2(x))\n            x = self.fc3(x).squeeze(-1)\n\n            # Convert to cluster assignments\n            preds = torch.argmax(x, dim=0) + 1  # +1 to avoid 0 (noise)\n            all_preds.append(preds)\n\n        return all_preds\n\ndef make_model(example_batch_x):\n    return HitClassifier(example_batch_x)\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 20\n\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    optimizer = torch.optim.AdamW(model.parameters(), lr=0.001, weight_decay=1e-4)\n    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=3, factor=0.5)\n    criterion = nn.CrossEntropyLoss()\n\n    train_losses, val_losses = [], []\n    train_accs, val_accs = [], []\n\n    best_val_loss = float('inf')\n    best_model = None\n\n    for epoch in range(epochs):\n        model.train()\n        epoch_train_loss = 0.0\n        correct_train = 0\n        total_train = 0\n\n        for batch in train_loader:\n            view = normalise_batch(batch, device=device)\n            Xs, ys = view.batch_x, view.batch_y\n\n            optimizer.zero_grad()\n\n            # Process each event in batch\n            loss = 0\n            for X, y in zip(Xs, ys):\n                # Build graph and forward pass\n                data = model.build_graph(X).to(device)\n                out = model.conv1(data.x, data.edge_index, data.edge_weight)\n                out = F.relu(out)\n                out = model.conv2(out, data.edge_index, data.edge_weight)\n                out = F.relu(out)\n                out = model.conv3(out, data.edge_index, data.edge_weight)\n\n                # Global pooling and final layers\n                global_ctx = global_mean_pool(out, torch.zeros(data.num_nodes, dtype=torch.long, device=device))\n                out = torch.cat([out, global_ctx.expand(out.size(0), -1)], dim=1)\n                out, _ = model.attention(out.unsqueeze(0), out.unsqueeze(0), out.unsqueeze(0))\n                out = out.squeeze(0)\n                out = F.relu(model.fc1(out))\n                out = model.fc2(out)\n                out = model.fc3(out).squeeze(-1)\n\n                # Compute loss\n                loss += criterion(out, y.to(device))\n\n            loss.backward()\n            optimizer.step()\n            epoch_train_loss += loss.item()\n\n            # Compute accuracy\n            with torch.no_grad():\n                preds = model(Xs)\n                for pred, y in zip(preds, ys):\n                    correct_train += (pred == y.to(device)).sum().item()\n                    total_train += y.size(0)\n\n        # Validation\n        model.eval()\n        epoch_val_loss = 0.0\n        correct_val = 0\n        total_val = 0\n\n        with torch.no_grad():\n            for batch in val_loader:\n                view = normalise_batch(batch, device=device)\n                Xs, ys = view.batch_x, view.batch_y\n\n                loss = 0\n                for X, y in zip(Xs, ys):\n                    data = model.build_graph(X).to(device)\n                    out = model.conv1(data.x, data.edge_index, data.edge_weight)\n                    out = F.relu(out)\n                    out = model.conv2(out, data.edge_index, data.edge_weight)\n                    out = F.relu(out)\n                    out = model.conv3(out, data.edge_index, data.edge_weight)\n\n                    global_ctx = global_mean_pool(out, torch.zeros(data.num_nodes, dtype=torch.long, device=device))\n                    out = torch.cat([out, global_ctx.expand(out.size(0), -1)], dim=1)\n                    out, _ = model.attention(out.unsqueeze(0), out.unsqueeze(0), out.unsqueeze(0))\n                    out = out.squeeze(0)\n                    out = F.relu(model.fc1(out))\n                    out = model.fc2(out)\n                    out = model.fc3(out).squeeze(-1)\n\n                    loss += criterion(out, y.to(device))\n\n                epoch_val_loss += loss.item()\n\n                preds = model(Xs)\n                for pred, y in zip(preds, ys):\n                    correct_val += (pred == y.to(device)).sum().item()\n                    total_val += y.size(0)\n\n        # Update learning rate\n        scheduler.step(epoch_val_loss)\n\n        # Store metrics\n        train_losses.append(epoch_train_loss / len(train_loader))\n        val_losses.append(epoch_val_loss / len(val_loader))\n        train_accs.append(correct_train / total_train)\n        val_accs.append(correct_val / total_val)\n\n        # Early stopping\n        if epoch_val_loss < best_val_loss:\n            best_val_loss = epoch_val_loss\n            best_model = model.state_dict()\n            torch.save(best_model, 'best_model.pth')\n\n    # Load best model\n    if best_model is not None:\n        model.load_state_dict(best_model)\n\n    return model, train_losses, val_losses, train_accs, val_accs",
+    "reasoning": "",
+    "Outer_attempt": 1
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-12-29T13:23:59Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-12-29T13:23:59Z",
+        "metrics": {
+          ".\\outputs\\12-29\\TRACKFORMERS\\Q1\\script_mistralai_devstral-2512_free_1423_1.py": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 266,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 266,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2025-12-29T13:24:24Z",
+    "passed": false,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/12-29/TRACKFORMERS/Q1/script_mistralai_devstral-2512_free_1423_1.py\nargv2=--dryrun\nERROR during training: was expecting embedding dimension of 64, but got 128\n",
+      "stderr": "mkdir -p failed for path /home/sandbox/.config/matplotlib: [Errno 30] Read-only file system: '/home/sandbox/.config'\nMatplotlib created a temporary cache directory at /tmp/matplotlib-di4lhad7 because there was an issue with the default path (/home/sandbox/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.\nTraceback (most recent call last):\n  File \"/workspace/outputs/12-29/TRACKFORMERS/Q1/script_mistralai_devstral-2512_free_1423_1.py\", line 387, in <module>\n    _run(dryrun=\"--dryrun\" in sys.argv)\n  File \"/workspace/outputs/12-29/TRACKFORMERS/Q1/script_mistralai_devstral-2512_free_1423_1.py\", line 344, in _run\n    trained_model, tr_loss, va_loss, tr_acc, va_acc = train_model(\n                                                      ^^^^^^^^^^^^\n  File \"/workspace/outputs/12-29/TRACKFORMERS/Q1/script_mistralai_devstral-2512_free_1423_1.py\", line 236, in train_model\n    out, _ = model.attention(out.unsqueeze(0), out.unsqueeze(0), out.unsqueeze(0))\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py\", line 1739, in _wrapped_call_impl\n    return self._call_impl(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py\", line 1750, in _call_impl\n    return forward_call(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/torch/nn/modules/activation.py\", line 1373, in forward\n    attn_output, attn_output_weights = F.multi_head_attention_forward(\n                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/torch/nn/functional.py\", line 6203, in multi_head_attention_forward\n    embed_dim == embed_dim_to_check\nAssertionError: was expecting embedding dimension of 64, but got 128\n"
+    },
+    "return_code": 1
+  }
+}

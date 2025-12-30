@@ -6,8 +6,9 @@ import logging
 from generate_and_dryrun import generate_and_dryrun
 from run_scripts import execute_scripts_in_batch
 from evaluate_scripts import evaluate_results
-from datetime import datetime
+from docker.run_docker import ensure_docker_running
 from config import challenges
+from utils.run_id import get_or_create_run_id
 
 
 # - - - - - Usage Examples  - - - - -
@@ -45,17 +46,16 @@ def parse_args():
 
     return parser.parse_args()
 
-def get_default_output_dir():
-    day_month = datetime.now().strftime("%d-%m")
-    # Assuming single challenge/question for simplicity here (expandable later)
-    challenge = challenges[0].name
-    question = challenges[0].questions[0].question_id
-    return f"./outputs/{day_month}/{challenge}/{question}/"
+def get_default_output_dir(*, create_new: bool = False):
+    run_id = get_or_create_run_id(create_new=create_new)
+    return f"./outputs/{run_id}/"
 
 def main():
     args = parse_args()
 
-    logging.info("\n\n\nStarted LLM Challenge Pipeline")
+    logging.info("--------------------------------------------------------------------------------------------------------\n------------------------------------ Started LLM Challenge Pipeline ------------------------------------\n--------------------------------------------------------------------------------------------------------")
+
+    ensure_docker_running()
 
     if args.gen:
         logging.info("Mode: Generate scripts and dry-run validation.")
@@ -90,7 +90,7 @@ def main():
         logging.info("Start model evaluation.")
         evaluate_results(input_dir)
 
-    logging.info("Completed LLM Challenge Pipeline.")
+    logging.info("\n\n\n----------------------------------------------------\n--------- Completed LLM Challenge Pipeline ---------\n----------------------------------------------------")
 
 if __name__ == "__main__":
     main()

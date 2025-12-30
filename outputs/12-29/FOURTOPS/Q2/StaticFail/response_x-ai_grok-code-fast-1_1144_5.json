@@ -1,0 +1,73 @@
+{
+  "LLMGeneration": {
+    "model": "x-ai/grok-code-fast-1",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 4037,
+    "prompt_chars": 15845,
+    "response_tokens": 3696,
+    "response_chars": 10081,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.00562564,
+    "generation_ms": 22187,
+    "code": "from torch_geometric.data import Data\nfrom torch_geometric.nn import global_mean_pool\nimport torch.nn.functional as F\nfrom sklearn.metrics import roc_auc_score\n\nclass MyPreprocessor:\n    def __init__(self):\n        self.mean = None\n        self.std = None\n\n    def make_loader_cfg(self) -> dict:\n        return {\n            \"dataset_builder\": \"llm_script:FourTopsDataset\",\n            \"dataset_kwargs\": {},\n\n            \"loader_class\": \"torch_geometric.loader:DataLoader\",\n            \"batch_size\": 512,\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": False,\n\n            \"collate\": None,\n            \"extra_loader_kwargs\": {},\n            \"eval_overrides\": {\"shuffle\": False},\n        }\n\n    def fit(self, X, y=None):\n        X_np = X.numpy() if isinstance(X, torch.Tensor) else X\n        # Fit on visible particles: assume padded with 0\n        visible_mask = X_np[:, 2::5] > 1e-3  # E > 1e-3, shape [batch, 18]\n        visible_X = X_np[visible_mask.any(axis=1)]\n        # Normalize per particle: obj_id, log(E), log(pT), eta, phi\n        # But obj_id is categorical, skip normalization for it\n        feats_to_norm = []\n        for i in range(18):\n            start = 2 + i*5\n            feats = visible_X[:, start:start+5]  # obj_id, E, pT, eta, phi\n            E_pt = np.log(np.clip(feats[:, 1:3], 1e-3, None))  # log E, log pT\n            eta_phi = feats[:, 3:5]\n            feats_to_norm.append(np.concatenate([feats[:, 0:1], E_pt, eta_phi], axis=1))\n        all_feats = np.concatenate(feats_to_norm, axis=0)\n        self.mean = np.mean(all_feats, axis=0)\n        self.std = np.std(all_feats, axis=0) + 1e-8\n        return self\n\n    def transform(self, X):\n        X_np = X.numpy() if isinstance(X, torch.Tensor) else X\n        data_list = []\n        for event in X_np:\n            # Extract globals: ET_miss, phi_ET_miss\n            globals = event[:2].astype(np.float32)  # [2]\n\n            # Extract particles\n            particles = []\n            for i in range(18):\n                start = 2 + i*5\n                obj_id, E, pT, eta, phi = event[start:start+5]\n                if E < 1e-3:  # Skip padding\n                    continue\n                # Compute log(E), log(pT), eta, phi; obj_id as is\n                logE = np.log(max(E, 1e-3))\n                logpT = np.log(max(pT, 1e-3))\n                particles.append([obj_id, logE, logpT, eta, phi])\n            particles = np.array(particles)\n            n_particles = len(particles)\n            if n_particles == 0:\n                # Handle empty events, but assume not\n                node_features = torch.zeros(1, 5)\n                edge_index = torch.zeros(2, 0, dtype=torch.long)\n                edge_attr = torch.zeros(0, 2)\n                global_feat = torch.tensor(globals, dtype=torch.float32)\n            else:\n                # Normalize\n                particle_norm = (particles - self.mean) / self.std\n                node_features = torch.tensor(particle_norm, dtype=torch.float32)  # [n_particles, 5]\n\n                # Edges: all pairs i<j\n                edge_index_list = []\n                edge_attr_list = []\n                for i in range(n_particles):\n                    for j in range(i+1, n_particles):\n                        edge_index_list.append([i, j])\n                        edge_index_list.append([j, i])  # Undirected\n                        # Compute ΔR\n                        eta_i, eta_j = particles[i, 3], particles[j, 3]\n                        phi_i, phi_j = particles[i, 4], particles[j, 4]\n                        delta_eta = eta_i - eta_j\n                        delta_phi = torch.atan2(torch.sin(phi_i - phi_j), torch.cos(phi_i - phi_j)).numpy()\n                        delta_R = np.sqrt(delta_eta**2 + delta_phi**2)\n\n                        # Invariant mass\n                        # First, compute four-momenta\n                        E_i, E_j = particles[i, 1], particles[j, 1]  # E\n                        pT_i, pT_j = particles[i, 2], particles[j, 2]  # pT\n                        eta_i, eta_j = particles[i, 3], particles[j, 3]\n                        phi_i, phi_j = particles[i, 4], particles[j, 4]\n                        # Assume massless, but compute properly\n                        p_x_i = pT_i * np.cos(phi_i)\n                        p_y_i = pT_i * np.sin(phi_i)\n                        p_z_i = pT_i * np.sinh(eta_i)\n                        p_x_j = pT_j * np.cos(phi_j)\n                        p_y_j = pT_j * np.sin(phi_j)\n                        p_z_j = pT_j * np.sinh(eta_j)\n                        E_tot = E_i + E_j\n                        p_x_tot = p_x_i + p_x_j\n                        p_y_tot = p_y_i + p_y_j\n                        p_z_tot = p_z_i + p_z_j\n                        m_ij_squared = E_tot**2 - (p_x_tot**2 + p_y_tot**2 + p_z_tot**2)\n                        m_ij = np.sqrt(max(m_ij_squared, 0))\n\n                        edge_attr_list.append([delta_R, m_ij])\n                        edge_attr_list.append([delta_R, m_ij])\n\n                edge_index = torch.tensor(np.array(edge_index_list).T, dtype=torch.long) if edge_index_list else torch.zeros(2, 0, dtype=torch.long)\n                edge_attr = torch.tensor(np.array(edge_attr_list), dtype=torch.float32) if edge_attr_list else torch.zeros(0, 2, dtype=torch.float32)\n\n                global_feat = torch.tensor(globals, dtype=torch.float32)\n\n            data = Data(x=node_features, edge_index=edge_index, edge_attr=edge_attr, global_feat=global_feat)\n            data_list.append(data)\n        return data_list  # List of Data objects\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\nclass BinaryClassifier(nn.Module):\n    def __init__(self, sample_object):\n        super().__init__()\n        from torch_geometric.nn import GINConv, GraphConv\n        self.conv1 = GINConv(nn.Sequential(nn.Linear(5, 64), nn.ReLU(), nn.Linear(64, 64)))\n        self.conv2 = GINConv(nn.Sequential(nn.Linear(64, 64), nn.ReLU(), nn.Linear(64, 64)))\n        self.pool = global_mean_pool\n        self.global_mlp = nn.Sequential(nn.Linear(64 + 2, 64), nn.ReLU(), nn.Linear(64, 32), nn.ReLU(), nn.Linear(32, 1))\n\n    def forward(self, batch_x):\n        # batch_x is a Batch\n        out = self.conv1(batch_x.x, batch_x.edge_index, batch_x.edge_attr)\n        out = F.relu(out)\n        out = self.conv2(out, batch_x.edge_index, batch_x.edge_attr)\n        out = F.relu(out)\n        pooled = self.pool(out, batch_x.batch)  # [batch_size, 64]\n        # Concat global features: assume batch_x.global_feat is batched\n        if hasattr(batch_x, 'global_feat') and batch_x.global_feat is not None:\n            global_in = torch.cat([pooled, batch_x.global_feat], dim=1)  # [batch_size, 66]\n        else:\n            global_in = pooled\n        logits = self.global_mlp(global_in).squeeze(-1)\n        return logits\n\ndef make_model(example_object):\n    return BinaryClassifier(example_object)\n\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)\n    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=2, factor=0.5, mode='max')\n    criterion = nn.BCEWithLogitsLoss()\n\n    best_auc = 0\n    best_model_state = None\n    patience = 5\n    counter = 0\n\n    train_loss_list = []\n    val_loss_list = []\n    train_acc_list = []\n    val_acc_list = []\n\n    for epoch in range(epochs):\n        model.train()\n        train_loss = 0\n        train_correct = 0\n        train_total = 0\n        train_logits = []\n        train_ys = []\n        for batch in train_loader:\n            view = normalise_batch(batch, device=device)\n            xb, yb = view.batch_x, view.batch_y\n            optimizer.zero_grad()\n            out = model(xb)\n            loss = criterion(out, yb.float())\n            loss.backward()\n            optimizer.step()\n            train_loss += loss.item() * yb.size(0)\n            preds = torch.sigmoid(out) > 0.5\n            train_correct += (preds == yb).sum().item()\n            train_total += yb.size(0)\n            train_logits.extend(out.cpu().detach().numpy())\n            train_ys.extend(yb.cpu().numpy())\n        train_loss = train_loss / train_total\n        train_acc = train_correct / train_total\n        train_auc = roc_auc_score(train_ys, train_logits)\n\n        model.eval()\n        val_loss = 0\n        val_correct = 0\n        val_total = 0\n        val_logits = []\n        val_ys = []\n        with torch.no_grad():\n            for batch in val_loader:\n                view = normalise_batch(batch, device=device)\n                xb, yb = view.batch_x, view.batch_y\n                out = model(xb)\n                loss = criterion(out, yb.float())\n                val_loss += loss.item() * yb.size(0)\n                preds = torch.sigmoid(out) > 0.5\n                val_correct += (preds == yb).sum().item()\n                val_total += yb.size(0)\n                val_logits.extend(out.cpu().numpy())\n                val_ys.extend(yb.cpu().numpy())\n        val_loss = val_loss / val_total\n        val_acc = val_correct / val_total\n        val_auc = roc_auc_score(val_ys, val_logits)\n\n        train_loss_list.append(train_loss)\n        val_loss_list.append(val_loss)\n        train_acc_list.append(train_acc)\n        val_acc_list.append(val_acc)\n\n        scheduler.step(val_auc)\n\n        print(f\"Epoch {epoch+1}: Train Loss {train_loss:.4f}, Train Acc {train_acc:.4f}, Train AUC {train_auc:.4f}, Val Loss {val_loss:.4f}, Val Acc {val_acc:.4f}, Val AUC {val_auc:.4f}\")\n\n        if val_auc > best_auc:\n            best_auc = val_auc\n            best_model_state = model.state_dict()\n            counter = 0\n        else:\n            counter += 1\n            if counter >= patience:\n                print(\"Early stopping triggered\")\n                break\n\n    if best_model_state is not None:\n        model.load_state_dict(best_model_state)\n\n    return model, train_loss_list, val_loss_list, train_acc_list, val_acc_list\n```",
+    "reasoning": "",
+    "Outer_attempt": 5
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-12-29T10:44:39Z",
+    "PyLint": {
+      "passed": false,
+      "messages": [
+        {
+          "type": "error",
+          "module": "script_x-ai_grok-code-fast-1_1144_5",
+          "obj": "",
+          "line": 288,
+          "column": 1,
+          "endLine": null,
+          "endColumn": null,
+          "path": "outputs\\12-29\\FOURTOPS\\Q2\\script_x-ai_grok-code-fast-1_1144_5.py",
+          "symbol": "syntax-error",
+          "message": "Parsing failed: 'invalid syntax (script_x-ai_grok-code-fast-1_1144_5, line 288)'",
+          "message-id": "E0001"
+        }
+      ]
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [
+          {
+            "filename": ".\\outputs\\12-29\\FOURTOPS\\Q2\\script_x-ai_grok-code-fast-1_1144_5.py",
+            "reason": "syntax error while parsing AST from file"
+          }
+        ],
+        "generated_at": "2025-12-29T10:44:39Z",
+        "metrics": {
+          ".\\outputs\\12-29\\FOURTOPS\\Q2\\script_x-ai_grok-code-fast-1_1144_5.py": {
+            "loc": 281,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 281,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  }
+}

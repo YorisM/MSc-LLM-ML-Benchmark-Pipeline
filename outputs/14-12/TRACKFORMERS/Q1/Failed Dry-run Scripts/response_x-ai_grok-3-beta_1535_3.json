@@ -1,0 +1,71 @@
+{
+  "LLMGeneration": {
+    "model": "x-ai/grok-3-beta",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 3731,
+    "prompt_chars": 16011,
+    "response_tokens": 1734,
+    "response_chars": 7479,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.0288105,
+    "generation_ms": 34246,
+    "code": "# 0. ---------- IMPORTS ----------\nfrom sklearn.preprocessing import StandardScaler\nimport torch.nn.functional as F\nfrom torch_geometric.nn import GCNConv, global_mean_pool\n\n# 1.1 -------- OPTIONAL: CUSTOM DATASET / DATA-CLASS --------\n# Not implemented, using default EventDataset\n\n# 1.2 ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.scaler = StandardScaler()\n\n    def _raw_reshape(self, data):\n        return data\n\n    def make_loader_cfg(self):\n        return {\n            \"loader_class\": \"torch.utils.data.DataLoader\",\n            \"batch_size\": 128,\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": True\n        }\n\n    def fit(self, data):\n        # Concatenate all events' data for fitting the scaler\n        all_data = []\n        for evt in data:\n            X, _ = _split_X_y(evt)\n            all_data.append(X.numpy())\n        all_data = np.concatenate(all_data, axis=0)\n        self.scaler.fit(all_data)\n        return self\n\n    def transform(self, data):\n        # Apply scaling to the data\n        data_np = data.numpy()\n        scaled_data = self.scaler.transform(data_np)\n        return torch.from_numpy(scaled_data).float()  # Shape: [N_hits, 4]\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# 2. ---------- MODEL ARCHITECTURE ----------\nclass HitClassifier(nn.Module):\n    def __init__(self, example_batch_x):\n        super().__init__()\n        # Infer input features from example_batch_x\n        in_features = example_batch_x[0].shape[-1]  # 4 features (r, theta, z, layer_id)\n        self.hidden_dim = 64\n        self.conv1 = GCNConv(in_features, self.hidden_dim)\n        self.conv2 = GCNConv(self.hidden_dim, self.hidden_dim)\n        self.lin1 = nn.Linear(self.hidden_dim, 128)\n        self.lin2 = nn.Linear(128, 50)  # Assuming max 50 tracks per event for classification\n\n    def _build_graph(self, x):\n        # Simple nearest neighbor graph construction for each event\n        # This is a placeholder; in practice, more sophisticated edge construction based on detector geometry could be used\n        num_nodes = x.size(0)\n        if num_nodes < 2:\n            edge_index = torch.tensor([[], []], dtype=torch.long, device=x.device)\n        else:\n            # Connect each node to its nearest neighbors based on spatial proximity\n            from sklearn.neighbors import NearestNeighbors\n            nbrs = NearestNeighbors(n_neighbors=min(5, num_nodes-1)).fit(x.cpu().numpy())\n            distances, indices = nbrs.kneighbors(x.cpu().numpy())\n            edge_index = []\n            for i in range(num_nodes):\n                for j in indices[i]:\n                    if i != j:\n                        edge_index.append([i, j])\n            if len(edge_index) == 0:\n                edge_index = torch.tensor([[], []], dtype=torch.long, device=x.device)\n            else:\n                edge_index = torch.tensor(edge_index, dtype=torch.long, device=x.device).t().contiguous()\n        return edge_index\n\n    def forward(self, batch_x):\n        batch_size = len(batch_x)\n        preds = []\n\n        for i in range(batch_size):\n            x = batch_x[i]  # Shape: [N_hits, 4]\n            edge_index = self._build_graph(x)  # Shape: [2, E]\n\n            # Graph Convolution layers\n            x = self.conv1(x, edge_index)  # Shape: [N_hits, hidden_dim]\n            x = F.relu(x)\n            x = self.conv2(x, edge_index)  # Shape: [N_hits, hidden_dim]\n            x = F.relu(x)\n\n            # MLP for classification\n            x = self.lin1(x)  # Shape: [N_hits, 128]\n            x = F.relu(x)\n            x = self.lin2(x)  # Shape: [N_hits, 50]\n\n            # Predict track ID (0 to 49, -1 for noise if needed)\n            pred = torch.argmax(x, dim=-1)  # Shape: [N_hits,]\n            preds.append(pred)\n\n        return preds\n\ndef make_model(example_batch_x):\n    return HitClassifier(example_batch_x)\n\n# 3. ---------- MODEL TRAINING ----------\nEPOCHS = 20\ndef train_model(model, train_loader, val_loader, epochs):\n    optimizer = torch.optim.Adam(model.parameters(), lr=0.01)\n    criterion = nn.CrossEntropyLoss(ignore_index=-1)  # Ignore noise labels if any\n    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=3)\n\n    train_loss, val_loss = [], []\n    train_acc, val_acc = [], []\n    best_val_acc = 0.0\n    patience = 5\n    early_stop_counter = 0\n\n    for epoch in range(epochs):\n        # Training\n        model.train()\n        total_loss = 0.0\n        correct, total = 0, 0\n\n        for batch in train_loader:\n            view = normalise_batch(batch, device=device)\n            batch_x, batch_y = view.batch_x, view.batch_y\n\n            optimizer.zero_grad()\n            preds = model(batch_x)  # List of [N_hits,]\n\n            loss = 0.0\n            for i in range(len(preds)):\n                if batch_y[i].max() >= 50:  # Adjust output dimension if needed\n                    batch_y[i] = torch.clamp(batch_y[i], 0, 49)\n                loss += criterion(preds[i].unsqueeze(0).float(), batch_y[i])\n\n            loss.backward()\n            optimizer.step()\n            total_loss += loss.item()\n\n            # Accuracy (simplified, per hit)\n            for i in range(len(preds)):\n                correct += (preds[i] == batch_y[i]).sum().item()\n                total += batch_y[i].size(0)\n\n        avg_train_loss = total_loss / len(train_loader)\n        train_accuracy = correct / total if total > 0 else 0.0\n        train_loss.append(avg_train_loss)\n        train_acc.append(train_accuracy)\n\n        # Validation\n        model.eval()\n        total_val_loss = 0.0\n        correct_val, total_val = 0, 0\n\n        with torch.no_grad():\n            for batch in val_loader:\n                view = normalise_batch(batch, device=device)\n                batch_x, batch_y = view.batch_x, view.batch_y\n\n                preds = model(batch_x)\n\n                loss = 0.0\n                for i in range(len(preds)):\n                    if batch_y[i].max() >= 50:\n                        batch_y[i] = torch.clamp(batch_y[i], 0, 49)\n                    loss += criterion(preds[i].unsqueeze(0).float(), batch_y[i])\n\n                total_val_loss += loss.item()\n\n                for i in range(len(preds)):\n                    correct_val += (preds[i] == batch_y[i]).sum().item()\n                    total_val += batch_y[i].size(0)\n\n        avg_val_loss = total_val_loss / len(val_loader)\n        val_accuracy = correct_val / total_val if total_val > 0 else 0.0\n        val_loss.append(avg_val_loss)\n        val_acc.append(val_accuracy)\n\n        scheduler.step(val_accuracy)\n\n        # Early stopping\n        if val_accuracy > best_val_acc:\n            best_val_acc = val_accuracy\n            early_stop_counter = 0\n        else:\n            early_stop_counter += 1\n            if early_stop_counter >= patience:\n                print(f\"Early stopping triggered at epoch {epoch+1}\")\n                break\n\n        print(f\"Epoch {epoch+1}/{epochs}, Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}, Train Acc: {train_accuracy:.4f}, Val Acc: {val_accuracy:.4f}\")\n\n    return model, train_loss, val_loss, train_acc, val_acc",
+    "reasoning": "",
+    "Outer_attempt": 3
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-12-14T14:35:53Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-12-14T14:35:53Z",
+        "metrics": {
+          ".\\./outputs/14-12/TRACKFORMERS/Q1/script_x-ai_grok-3-beta_1535_3.py": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 262,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 262,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2025-12-14T14:36:07Z",
+    "passed": false,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/14-12/TRACKFORMERS/Q1/script_x-ai_grok-3-beta_1535_3.py\nargv2=--dryrun\n",
+      "stderr": "+ exec\n+ PY=outputs/14-12/TRACKFORMERS/Q1/script_x-ai_grok-3-beta_1535_3.py\n+ shift\n++ echo --dryrun\n++ tr -d '\\r\\n'\n++ xargs\n+ DRY=--dryrun\n+ [[ outputs/14-12/TRACKFORMERS/Q1/script_x-ai_grok-3-beta_1535_3.py == \\/\\u\\s\\r\\/\\l\\o\\c\\a\\l\\/\\b\\i\\n\\/\\t\\r\\a\\i\\n\\.\\s\\h ]]\n+ [[ --dryrun =~ (--dryrun|--dry-run) ]]\n+ TIMEOUT=3600\n+ : 0\n+ : 0\n+ ulimit -t 3600\n+ ((  MEMORY_LIMIT_GB > 0  ))\n+ ((  PIDS_LIMIT > 0  ))\n+ timeout --signal=KILL 3600s python outputs/14-12/TRACKFORMERS/Q1/script_x-ai_grok-3-beta_1535_3.py --dryrun\nmkdir -p failed for path /home/sandbox/.config/matplotlib: [Errno 30] Read-only file system: '/home/sandbox/.config'\nMatplotlib created a temporary cache directory at /tmp/matplotlib-8fdimtdr because there was an issue with the default path (/home/sandbox/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.\nERROR during training: Expected input batch_size (1) to match target batch_size (401).\nTraceback (most recent call last):\n  File \"/workspace/outputs/14-12/TRACKFORMERS/Q1/script_x-ai_grok-3-beta_1535_3.py\", line 362, in <module>\n    _run(dryrun=\"--dryrun\" in sys.argv)\n  File \"/workspace/outputs/14-12/TRACKFORMERS/Q1/script_x-ai_grok-3-beta_1535_3.py\", line 313, in _run\n    trained_model, tr_loss, va_loss, tr_acc, va_acc = train_model(\n                                                      ^^^^^^^^^^^^\n  File \"/workspace/outputs/14-12/TRACKFORMERS/Q1/script_x-ai_grok-3-beta_1535_3.py\", line 213, in train_model\n    loss += criterion(preds[i].unsqueeze(0).float(), batch_y[i])\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py\", line 1739, in _wrapped_call_impl\n    return self._call_impl(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py\", line 1750, in _call_impl\n    return forward_call(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/torch/nn/modules/loss.py\", line 1295, in forward\n    return F.cross_entropy(\n           ^^^^^^^^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/torch/nn/functional.py\", line 3494, in cross_entropy\n    return torch._C._nn.cross_entropy_loss(\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nValueError: Expected input batch_size (1) to match target batch_size (401).\n"
+    },
+    "return_code": 1
+  }
+}

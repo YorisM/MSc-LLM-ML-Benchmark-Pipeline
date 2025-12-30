@@ -1,0 +1,71 @@
+{
+  "LLMGeneration": {
+    "model": "mistralai/devstral-2512:free",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 4174,
+    "prompt_chars": 16762,
+    "response_tokens": 2254,
+    "response_chars": 9356,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0,
+    "generation_ms": 129872,
+    "code": "# ---------- IMPORTS ----------\nimport torch.nn.functional as F\nfrom torch_geometric.nn import GCNConv, global_mean_pool\nfrom torch_geometric.data import Data, Batch\nfrom sklearn.preprocessing import StandardScaler\nfrom scipy.spatial.distance import pdist, squareform\nimport networkx as nx\n\n# ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.scaler = StandardScaler()\n        self.layer_encoder = None\n        self.layer_scaler = StandardScaler()\n\n    def make_loader_cfg(self) -> dict:\n        return {\n            \"dataset_builder\": \"utils.llm_io:EventDataset\",\n            \"dataset_kwargs\": {},\n            \"loader_class\": \"torch_geometric.loader:DataLoader\",\n            \"batch_size\": 32,\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": False,\n            \"collate\": None,\n            \"extra_loader_kwargs\": {},\n            \"eval_overrides\": {\"shuffle\": False}\n        }\n\n    def fit(self, Xs):\n        # Collect all hits for scaling\n        all_hits = np.concatenate(Xs, axis=0)\n        self.scaler.fit(all_hits[:, :3])  # Scale r, theta, z\n\n        # Layer encoding\n        unique_layers = np.unique(all_hits[:, 3])\n        self.layer_encoder = {l: i for i, l in enumerate(unique_layers)}\n        layer_values = np.array([self.layer_encoder[l] for l in all_hits[:, 3]])\n        self.layer_scaler.fit(layer_values.reshape(-1, 1))\n        return self\n\n    def transform(self, X):\n        # X: [N_hits, 4] numpy array\n        X = X.numpy() if isinstance(X, torch.Tensor) else X\n        scaled_features = self.scaler.transform(X[:, :3])\n        layer_encoded = self.layer_scaler.transform(\n            np.array([self.layer_encoder[l] for l in X[:, 3]]).reshape(-1, 1)\n        )\n        return torch.FloatTensor(np.hstack([scaled_features, layer_encoded]))\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# ---------- MODEL ARCHITECTURE ----------\nclass HitClassifier(nn.Module):\n    def __init__(self, example_batch_x):\n        super().__init__()\n        # example_batch_x is a list of tensors [N_hits_i, 4]\n        # We'll use the first event to determine input dimensions\n        input_dim = example_batch_x[0].shape[1]\n\n        # Graph construction parameters\n        self.k = 8  # Number of nearest neighbors for graph construction\n\n        # Model architecture\n        self.conv1 = GCNConv(input_dim, 64)\n        self.conv2 = GCNConv(64, 128)\n        self.conv3 = GCNConv(128, 256)\n        self.fc1 = nn.Linear(256, 128)\n        self.fc2 = nn.Linear(128, 64)\n        self.fc3 = nn.Linear(64, 1)  # Predict track ID as continuous value\n\n        # Cluster assignment head\n        self.cluster_head = nn.Sequential(\n            nn.Linear(64, 32),\n            nn.ReLU(),\n            nn.Linear(32, 1)\n        )\n\n    def build_graph(self, x, batch=None):\n        # x: [N_hits, 4] tensor\n        # Build k-NN graph\n        dist = squareform(pdist(x.numpy()))\n        knn_indices = np.argpartition(dist, self.k, axis=1)[:, :self.k+1]\n        knn_indices = knn_indices[:, 1:]  # Exclude self\n\n        # Create edge index\n        edge_index = []\n        for i in range(x.shape[0]):\n            for j in knn_indices[i]:\n                edge_index.append([i, j])\n        edge_index = torch.LongTensor(edge_index).t().contiguous()\n\n        # Create PyG Data object\n        if batch is None:\n            batch = torch.zeros(x.shape[0], dtype=torch.long)\n        return Data(x=x, edge_index=edge_index, batch=batch)\n\n    def forward(self, batch_x):\n        # batch_x is a list of tensors [N_hits_i, 4]\n        # We need to process each event separately\n        all_predictions = []\n\n        for event_x in batch_x:\n            # Build graph for this event\n            data = self.build_graph(event_x)\n\n            # GCN layers\n            x = F.relu(self.conv1(data.x, data.edge_index))\n            x = F.relu(self.conv2(x, data.edge_index))\n            x = F.relu(self.conv3(x, data.edge_index))\n\n            # Global pooling to get event-level features\n            event_features = global_mean_pool(x, data.batch)\n\n            # Expand event features to each hit\n            event_features = event_features.repeat(x.shape[0], 1)\n\n            # Combine with local features\n            combined = torch.cat([x, event_features], dim=1)\n\n            # Predict track features\n            track_features = F.relu(self.fc1(combined))\n            track_features = F.relu(self.fc2(track_features))\n\n            # Predict cluster assignment\n            cluster_logits = self.cluster_head(track_features).squeeze()\n\n            # Convert to track IDs (simple thresholding for now)\n            # In practice, we'd want to use a clustering algorithm here\n            # For now, we'll just use the continuous prediction\n            predictions = cluster_logits\n\n            # Convert to integer labels (this is a simplified approach)\n            # In a real implementation, we'd use a proper clustering algorithm\n            unique_preds = torch.unique(predictions)\n            label_mapping = {v.item(): i+1 for i, v in enumerate(unique_preds)}\n            int_labels = torch.tensor([label_mapping.get(p.item(), -1) for p in predictions],\n                                    dtype=torch.long)\n\n            all_predictions.append(int_labels)\n\n        # Return concatenated predictions for all events\n        return torch.cat(all_predictions)\n\ndef make_model(example_batch_x):\n    return HitClassifier(example_batch_x)\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 20\n\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)\n    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=3)\n    criterion = nn.MSELoss()  # Using MSE for continuous prediction\n\n    train_losses = []\n    val_losses = []\n    train_accs = []\n    val_accs = []\n\n    for epoch in range(epochs):\n        model.train()\n        epoch_train_loss = 0\n        epoch_train_acc = 0\n        train_samples = 0\n\n        for batch in train_loader:\n            view = normalise_batch(batch, device=device)\n            xb, yb = view.batch_x, view.batch_y\n\n            # Convert labels to continuous values for training\n            # This is a simplified approach - in practice we'd want proper clustering\n            unique_labels = torch.unique(yb)\n            label_mapping = {l.item(): float(i) for i, l in enumerate(unique_labels)}\n            y_continuous = torch.tensor([label_mapping.get(l.item(), -1.0) for l in yb],\n                                      dtype=torch.float32, device=device)\n\n            optimizer.zero_grad()\n            out = model(xb)\n\n            # Calculate loss\n            loss = criterion(out.float(), y_continuous)\n            loss.backward()\n            optimizer.step()\n\n            epoch_train_loss += loss.item() * len(yb)\n            train_samples += len(yb)\n\n            # Calculate accuracy (simplified)\n            # Convert predictions to labels\n            unique_preds = torch.unique(out)\n            pred_mapping = {v.item(): i+1 for i, v in enumerate(unique_preds)}\n            pred_labels = torch.tensor([pred_mapping.get(p.item(), -1) for p in out],\n                                     dtype=torch.long, device=device)\n\n            # Compare with ground truth\n            correct = (pred_labels == yb).float().sum()\n            epoch_train_acc += correct.item()\n\n        # Validation\n        model.eval()\n        epoch_val_loss = 0\n        epoch_val_acc = 0\n        val_samples = 0\n\n        with torch.no_grad():\n            for batch in val_loader:\n                view = normalise_batch(batch, device=device)\n                xb, yb = view.batch_x, view.batch_y\n\n                # Convert labels to continuous values\n                unique_labels = torch.unique(yb)\n                label_mapping = {l.item(): float(i) for i, l in enumerate(unique_labels)}\n                y_continuous = torch.tensor([label_mapping.get(l.item(), -1.0) for l in yb],\n                                          dtype=torch.float32, device=device)\n\n                out = model(xb)\n                loss = criterion(out.float(), y_continuous)\n\n                epoch_val_loss += loss.item() * len(yb)\n                val_samples += len(yb)\n\n                # Calculate accuracy\n                unique_preds = torch.unique(out)\n                pred_mapping = {v.item(): i+1 for i, v in enumerate(unique_preds)}\n                pred_labels = torch.tensor([pred_mapping.get(p.item(), -1) for p in out],\n                                         dtype=torch.long, device=device)\n\n                correct = (pred_labels == yb).float().sum()\n                epoch_val_acc += correct.item()\n\n        # Update scheduler\n        scheduler.step(epoch_val_loss)\n\n        # Store metrics\n        train_losses.append(epoch_train_loss / train_samples)\n        val_losses.append(epoch_val_loss / val_samples)\n        train_accs.append(epoch_train_acc / train_samples)\n        val_accs.append(epoch_val_acc / val_samples)\n\n        print(f\"Epoch {epoch+1}/{epochs} - Train Loss: {train_losses[-1]:.4f}, Val Loss: {val_losses[-1]:.4f}, \"\n              f\"Train Acc: {train_accs[-1]:.4f}, Val Acc: {val_accs[-1]:.4f}\")\n\n    return model, train_losses, val_losses, train_accs, val_accs",
+    "reasoning": "",
+    "Outer_attempt": 4
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-12-29T13:33:34Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-12-29T13:33:34Z",
+        "metrics": {
+          ".\\outputs\\12-29\\TRACKFORMERS\\Q1\\script_mistralai_devstral-2512_free_1433_4.py": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 244,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 244,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2025-12-29T13:33:57Z",
+    "passed": false,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/12-29/TRACKFORMERS/Q1/script_mistralai_devstral-2512_free_1433_4.py\nargv2=--dryrun\n",
+      "stderr": "mkdir -p failed for path /home/sandbox/.config/matplotlib: [Errno 30] Read-only file system: '/home/sandbox/.config'\nMatplotlib created a temporary cache directory at /tmp/matplotlib-pbd47nd0 because there was an issue with the default path (/home/sandbox/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.\nTraceback (most recent call last):\n  File \"/workspace/outputs/12-29/TRACKFORMERS/Q1/script_mistralai_devstral-2512_free_1433_4.py\", line 371, in <module>\n    _run(dryrun=\"--dryrun\" in sys.argv)\n  File \"/workspace/outputs/12-29/TRACKFORMERS/Q1/script_mistralai_devstral-2512_free_1433_4.py\", line 321, in _run\n    first_batch = next(iter(train_loader))\n                  ^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/torch/utils/data/dataloader.py\", line 708, in __next__\n    data = self._next_data()\n           ^^^^^^^^^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/torch/utils/data/dataloader.py\", line 764, in _next_data\n    data = self._dataset_fetcher.fetch(index)  # may raise StopIteration\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/torch/utils/data/_utils/fetch.py\", line 55, in fetch\n    return self.collate_fn(data)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/torch_geometric/loader/dataloader.py\", line 47, in __call__\n    return [self(s) for s in zip(*batch)]\n            ^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/torch_geometric/loader/dataloader.py\", line 33, in __call__\n    return default_collate(batch)\n           ^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/torch/utils/data/_utils/collate.py\", line 398, in default_collate\n    return collate(batch, collate_fn_map=default_collate_fn_map)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/torch/utils/data/_utils/collate.py\", line 155, in collate\n    return collate_fn_map[elem_type](batch, collate_fn_map=collate_fn_map)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/torch/utils/data/_utils/collate.py\", line 272, in collate_tensor_fn\n    return torch.stack(batch, 0, out=out)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nRuntimeError: stack expects each tensor to be equal size, but got [351, 4] at entry 0 and [390, 4] at entry 1\n"
+    },
+    "return_code": 1
+  }
+}

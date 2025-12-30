@@ -1,0 +1,71 @@
+{
+  "LLMGeneration": {
+    "model": "mistralai/mistral-large-2512",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 4015,
+    "prompt_chars": 15289,
+    "response_tokens": 1906,
+    "response_chars": 7487,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.0048665,
+    "generation_ms": 29763,
+    "code": "# ---------- IMPORTS ----------\nfrom sklearn.preprocessing import RobustScaler\nfrom sklearn.metrics import roc_auc_score\nimport torch.nn.functional as F\nfrom torch.optim import AdamW\nfrom torch.optim.lr_scheduler import ReduceLROnPlateau\nfrom tqdm import tqdm\n\n# ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.scaler = RobustScaler()\n        self.obj_ids = [0, 1, 2, 3, 4, 5, 6]  # Common object IDs in particle physics\n        self.n_objects = 18\n        self.n_features_per_object = 5\n        self.global_features = 2\n\n    def make_loader_cfg(self) -> dict:\n        return {\n            \"dataset_builder\": \"llm_script:FourTopsDataset\",\n            \"dataset_kwargs\": {},\n            \"loader_class\": \"torch.utils.data:DataLoader\",\n            \"batch_size\": 512,\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": False,\n            \"collate\": None,\n            \"extra_loader_kwargs\": {},\n            \"eval_overrides\": {\"shuffle\": False},\n        }\n\n    def fit(self, X, y=None):\n        # Extract global features (E_T_miss, phi_Et_miss)\n        global_features = X[:, :2].numpy()  # [n_events, 2]\n        self.scaler.fit(global_features)\n        return self\n\n    def transform(self, X):\n        # Convert to numpy for sklearn\n        X_np = X.numpy()\n\n        # Scale global features\n        global_features = X_np[:, :2]  # [n_events, 2]\n        global_features_scaled = self.scaler.transform(global_features)\n\n        # Process object features\n        object_features = []\n        for i in range(self.n_objects):\n            start_idx = self.global_features + i * self.n_features_per_object\n            end_idx = start_idx + self.n_features_per_object\n            obj_slice = X_np[:, start_idx:end_idx]  # [n_events, 5]\n\n            # One-hot encode object ID (first feature in each object)\n            obj_id = obj_slice[:, 0].astype(int)\n            obj_id_onehot = np.zeros((obj_id.shape[0], len(self.obj_ids)))\n            for j, id_val in enumerate(self.obj_ids):\n                obj_id_onehot[:, j] = (obj_id == id_val).astype(float)\n\n            # Scale kinematic features (E, p_T, eta, phi)\n            kinematic_features = obj_slice[:, 1:]  # [n_events, 4]\n            kinematic_scaled = RobustScaler().fit_transform(kinematic_features)\n\n            # Combine one-hot and scaled kinematic features\n            obj_processed = np.hstack([obj_id_onehot, kinematic_scaled])  # [n_events, 4 + len(obj_ids)]\n            object_features.append(obj_processed)\n\n        # Stack all processed features\n        object_features_stacked = np.stack(object_features, axis=1)  # [n_events, 18, 4 + len(obj_ids)]\n        global_features_stacked = np.tile(global_features_scaled[:, np.newaxis, :], (1, 18, 1))  # [n_events, 18, 2]\n\n        # Combine global and object features\n        combined_features = np.concatenate([global_features_stacked, object_features_stacked], axis=-1)  # [n_events, 18, 6 + len(obj_ids)]\n\n        # Reshape to [n_events, 18 * (6 + len(obj_ids))]\n        processed_X = combined_features.reshape(X_np.shape[0], -1)  # [n_events, 18 * (6 + len(obj_ids))]\n\n        return torch.from_numpy(processed_X).float()\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# ---------- MODEL DEFINITION ----------\nclass BinaryClassifier(nn.Module):\n    def __init__(self, sample_object):\n        super().__init__()\n\n        # Determine input size from sample\n        input_size = sample_object.shape[1]\n        hidden_size = 512\n        dropout = 0.3\n\n        # Feature extraction layers\n        self.feature_extractor = nn.Sequential(\n            nn.Linear(input_size, hidden_size),\n            nn.BatchNorm1d(hidden_size),\n            nn.ReLU(),\n            nn.Dropout(dropout),\n\n            nn.Linear(hidden_size, hidden_size),\n            nn.BatchNorm1d(hidden_size),\n            nn.ReLU(),\n            nn.Dropout(dropout),\n\n            nn.Linear(hidden_size, hidden_size // 2),\n            nn.BatchNorm1d(hidden_size // 2),\n            nn.ReLU(),\n            nn.Dropout(dropout)\n        )\n\n        # Classification head\n        self.classifier = nn.Sequential(\n            nn.Linear(hidden_size // 2, hidden_size // 4),\n            nn.BatchNorm1d(hidden_size // 4),\n            nn.ReLU(),\n            nn.Dropout(dropout),\n\n            nn.Linear(hidden_size // 4, 1)\n        )\n\n    def forward(self, batch_x):\n        # batch_x shape: [batch_size, input_size]\n        features = self.feature_extractor(batch_x)  # [batch_size, hidden_size // 2]\n        logits = self.classifier(features)  # [batch_size, 1]\n        return logits.squeeze(-1)  # [batch_size]\n\ndef make_model(example_object):\n    return BinaryClassifier(example_object)\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 30\n\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    optimizer = AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)\n    scheduler = ReduceLROnPlateau(optimizer, 'max', patience=3, factor=0.5, verbose=True)\n    criterion = nn.BCEWithLogitsLoss()\n\n    best_auc = 0.0\n    best_model_state = None\n    train_losses = []\n    val_losses = []\n    train_aucs = []\n    val_aucs = []\n\n    for epoch in range(epochs):\n        model.train()\n        train_loss = 0.0\n        train_preds = []\n        train_targets = []\n\n        for batch in tqdm(train_loader, desc=f\"Epoch {epoch + 1}/{epochs}\"):\n            view = normalise_batch(batch, device=device)\n            xb, yb = view.batch_x, view.batch_y\n\n            optimizer.zero_grad()\n            logits = model(xb)\n            loss = criterion(logits, yb.float())\n            loss.backward()\n            optimizer.step()\n\n            train_loss += loss.item()\n            train_preds.extend(torch.sigmoid(logits).detach().cpu().numpy())\n            train_targets.extend(yb.cpu().numpy())\n\n        train_loss /= len(train_loader)\n        train_auc = roc_auc_score(train_targets, train_preds)\n        train_losses.append(train_loss)\n        train_aucs.append(train_auc)\n\n        # Validation\n        model.eval()\n        val_loss = 0.0\n        val_preds = []\n        val_targets = []\n\n        with torch.no_grad():\n            for batch in val_loader:\n                view = normalise_batch(batch, device=device)\n                xb, yb = view.batch_x, view.batch_y\n\n                logits = model(xb)\n                loss = criterion(logits, yb.float())\n\n                val_loss += loss.item()\n                val_preds.extend(torch.sigmoid(logits).detach().cpu().numpy())\n                val_targets.extend(yb.cpu().numpy())\n\n        val_loss /= len(val_loader)\n        val_auc = roc_auc_score(val_targets, val_preds)\n        val_losses.append(val_loss)\n        val_aucs.append(val_auc)\n\n        print(f\"Epoch {epoch + 1}: Train Loss: {train_loss:.4f}, Train AUC: {train_auc:.4f}, \"\n              f\"Val Loss: {val_loss:.4f}, Val AUC: {val_auc:.4f}\")\n\n        # Early stopping and model checkpointing\n        if val_auc > best_auc:\n            best_auc = val_auc\n            best_model_state = model.state_dict()\n            patience_counter = 0\n        else:\n            patience_counter += 1\n            if patience_counter >= 5:\n                print(\"Early stopping triggered\")\n                break\n\n        scheduler.step(val_auc)\n\n    # Load best model\n    if best_model_state is not None:\n        model.load_state_dict(best_model_state)\n\n    return model, train_losses, val_losses, train_aucs, val_aucs",
+    "reasoning": "",
+    "Outer_attempt": 3
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-12-26T16:35:29Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-12-26T16:35:29Z",
+        "metrics": {
+          ".\\outputs\\12-26\\FOURTOPS\\Q1\\script_mistralai_mistral-large-2512_1735_3.py": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 236,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 236,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2025-12-26T16:35:51Z",
+    "passed": true,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/12-26/FOURTOPS/Q1/script_mistralai_mistral-large-2512_1735_3.py\nargv2=--dryrun\nEpoch 1: Train Loss: 0.6979, Train AUC: 0.5477, Val Loss: 0.6791, Val AUC: 0.5606\nDry-run: skipping artefact manifest\n",
+      "stderr": "mkdir -p failed for path /home/sandbox/.config/matplotlib: [Errno 30] Read-only file system: '/home/sandbox/.config'\nMatplotlib created a temporary cache directory at /tmp/matplotlib-8aaurqhe because there was an issue with the default path (/home/sandbox/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.\n/opt/venv/lib/python3.12/site-packages/torch/optim/lr_scheduler.py:62: UserWarning: The verbose parameter is deprecated. Please use get_last_lr() to access the learning rate.\n  warnings.warn(\n\nEpoch 1/1:   0%|          | 0/1 [00:00<?, ?it/s]\nEpoch 1/1: 100%|â–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆ| 1/1 [00:00<00:00,  1.82it/s]\nEpoch 1/1: 100%|â–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆ| 1/1 [00:00<00:00,  1.82it/s]\n"
+    },
+    "return_code": 0
+  }
+}

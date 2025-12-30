@@ -1,0 +1,71 @@
+{
+  "LLMGeneration": {
+    "model": "x-ai/grok-code-fast-1",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 3591,
+    "prompt_chars": 14077,
+    "response_tokens": 5267,
+    "response_chars": 8696,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.00858414,
+    "generation_ms": 50888,
+    "code": "# <start code template>\n# ---------- IMPORTS ----------\n# NOTE: Some imports (torch, nn, numpy, DataLoader) are already available (see prefix).\n# Only import extra std-lib modules or modules available in the environment, i.e: torch, scipy, sklearn (sub-)modules you actually use.\n# <LLM: Import modules>\nfrom sklearn.preprocessing import StandardScaler\n\n#  -------- (OPTIONAL) CUSTOM DATASET  --------\n# class CustomDataset(Dataset):\n#  REQUIREMENT: If you want a custom dataset: in make_loader_cfg set dataset_builder to \"llm_script:CustomDataSet\"\n#    def __init__(self, events, pre, train: bool = True, **kwargs):\n#        X, y = events\n#        self.X = pre.transform(X) if pre is not None else X\n#        self.y = y\n#    def __len__(self):\n#        return int(self.y.shape[0])\n#    def __getitem__(self, idx):\n#        return self.X[idx], self.y[idx]\n\n# ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    # Must implement:\n    #   - fit() \n    #   - transform()\n\n    # DATA SPECIFICS\n    # Total flat length per event (X_train & X_val): 92\n    # Index  0 :  missing-ET magnitude  (E_T_miss)\n    # Index  1 :  missing-ET azimuth    (phi_Et_miss)\n    # Indices  2-6  : object 1  ->  obj_1, E_1, p_T1, eta_1, phi_1\n    # Indices  7-11 : object 2  ->  obj_2, E_2 , p_T_2 , eta_2 , phi_2\n    # ...\n    # Indices 87-91 : object 18 ->  obj_18, E_18 , p_T_18 , eta_18 , phi_18\n    # Global features       = 2\n    # Per-object slice size = 5\n    # Max objects encoded   = 18\n\n    # TIPS\n    # When modifying data features or feature engineering: annotate tensor size as comments after \n    # each tensor operation to reduce dimension mismatches.\n\n    # REQUIREMENTS\n    # IMPORTANT: All state must be picklable with the std-lib pickle module.\n    # May allocate NumPy arrays or Torch tensors internally, but:\n    # transform() must be deterministic.\n    # Store only derived parameters needed for transform i.e. do not store the raw data\n    # itself in the preprocessor object.\n\n    # <LLM: Write code to preprocess the data> \n\n    def __init__(self):\n        # <LLM: Define and initialize any stateful components here>\n        self.scaler = StandardScaler()\n\n    def make_loader_cfg(self) -> dict:\n        # LoaderSpec-first: evaluator rebuilds loaders from this.\n        return {\n            \"dataset_builder\": \"llm_script:FourTopsDataset\",   # default harness dataset\n            \"dataset_kwargs\": {},\n\n            \"loader_class\": \"torch.utils.data:DataLoader\",     # or torch_geometric.loader:DataLoader\n            \"batch_size\": 512,\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": False,\n\n            # NO custom collate callables allowed. Choose one: \n            \"collate\": None, # (or \"ragged_xy\" or \"identity\" - If loader_class is torch_geometric.loader:DataLoader, set \"collate\": None.)\n\n            \"extra_loader_kwargs\": {},\n\n            # evaluation overrides (optional):\n            \"eval_overrides\": {\"shuffle\": False},\n        }\n\n    def fit(self, X, y=None):\n        # <LLM: Extract statistics for transform>\n        self.scaler.fit(X.numpy())\n        return self\n\n    def transform(self, X):\n        # <LLM: Apply pre-processing logic>\n        X = torch.from_numpy(self.scaler.transform(X.numpy())).float()\n        N, _ = X.shape\n        global_feat = X[:, :2]  # [N, 2]\n        obj_feat = X[:, 2:].view(N, 18, 5)  # [N, 18, 5]\n        # Sort objects by pT (index 2 in 0-based: obj, E, pT, eta, phi -> index 2 is pT)\n        sort_idx = torch.argsort(obj_feat[:, :, 2], dim=1, descending=True)  # [N, 18]\n        obj_feat_sorted = obj_feat[torch.arange(N).unsqueeze(1), sort_idx]  # [N, 18, 5]\n        obj_feat_flat = obj_feat_sorted.flatten(1)  # [N, 90]\n        return torch.cat([global_feat, obj_feat_flat], dim=1)  # [N, 92]\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# ---------- MODEL DEFINITION ----------\nclass BinaryClassifier(nn.Module):\n    def __init__(self, sample_object):\n        super().__init__()\n        # <LLM: Define and initialize any stateful components here>\n        # Assuming input shape [batch, 92], after reshape to globals [batch,2] and objects [batch,18,5]\n        self.objects_seq = nn.Sequential(\n            nn.Conv1d(5, 64, kernel_size=3, padding=1),  # in [batch,5,18] -> [batch,64,18]\n            nn.ReLU(),\n            nn.Conv1d(64, 128, kernel_size=3, padding=1),  # [batch,128,18]\n            nn.ReLU(),\n            nn.AdaptiveAvgPool1d(1),  # [batch,128,1]\n            nn.Flatten()  # [batch,128]\n        )\n        self.fc = nn.Sequential(\n            nn.Linear(128 + 2, 256),  # 128 obj + 2 global\n            nn.ReLU(),\n            nn.Dropout(0.3),\n            nn.Linear(256, 128),\n            nn.ReLU(),\n            nn.Dropout(0.3),\n            nn.Linear(128, 1)  # logits\n        )\n\n    # <LLM: optionally build extra layers here>\n\n    def forward(self, batch_x):\n        # batch_x: [batch, 92]\n        global_feat = batch_x[:, :2]  # [batch, 2]\n        obj_feat = batch_x[:, 2:].view(batch_x.size(0), 18, 5)  # [batch, 18, 5]\n        obj_feat = obj_feat.transpose(1, 2)  # [batch, 5, 18] for Conv1d\n        obj_feat_out = self.objects_seq(obj_feat)  # [batch, 128]\n        combined = torch.cat([obj_feat_out, global_feat], dim=1)  # [batch, 130]\n        return self.fc(combined)  # [batch, 1] logits\n\ndef make_model(example_object):\n    return BinaryClassifier(example_object)\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 50   # <LLM: adjust if you wish>\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    # REQUIREMENTS \n    #   Do NOT pass \"verbose=\" to any PyTorch scheduler (not supported in this image).\n    #   Must return trained_model, train_loss, val_loss, train_acc, val_acc\n    #   Use CUDA - torch.cuda.is_available()\n    #   Implement early-stopping.\n    #   Forward signature must match.\n\n    # <LLM: Write code to define training loop>\n    # <LLM: Implement early stopping if possible>\n    model.to(device)\n    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)\n    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', patience=3, factor=0.5)\n    criterion = nn.BCEWithLogitsLoss()\n\n    best_val_loss = float('inf')\n    patience = 5\n    early_stop_counter = 0\n\n    train_losses, val_losses, train_accs, val_accs = [], [], [], []\n\n    for epoch in range(epochs):\n        model.train()\n        train_loss = 0.0\n        train_correct = 0\n        train_total = 0\n        for batch_x, batch_y in train_loader:\n            batch_x, batch_y = batch_x.to(device), batch_y.to(device).float()\n            optimizer.zero_grad()\n            outputs = model(batch_x).squeeze()\n            loss = criterion(outputs, batch_y)\n            loss.backward()\n            optimizer.step()\n            train_loss += loss.item() * batch_x.size(0)\n            preds = (torch.sigmoid(outputs) > 0.5).float()\n            train_correct += (preds == batch_y).sum().item()\n            train_total += batch_x.size(0)\n        train_loss /= len(train_loader.dataset)\n        train_acc = train_correct / train_total\n        train_losses.append(train_loss)\n        train_accs.append(train_acc)\n\n        model.eval()\n        val_loss = 0.0\n        val_correct = 0\n        val_total = 0\n        with torch.no_grad():\n            for batch_x, batch_y in val_loader:\n                batch_x, batch_y = batch_x.to(device), batch_y.to(device).float()\n                outputs = model(batch_x).squeeze()\n                loss = criterion(outputs, batch_y)\n                val_loss += loss.item() * batch_x.size(0)\n                preds = (torch.sigmoid(outputs) > 0.5).float()\n                val_correct += (preds == batch_y).sum().item()\n                val_total += batch_x.size(0)\n        val_loss /= len(val_loader.dataset)\n        val_acc = val_correct / val_total\n        val_losses.append(val_loss)\n        val_accs.append(val_acc)\n\n        scheduler.step(val_loss)\n\n        print(f'Epoch {epoch+1}/{epochs}, Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}, Train Acc: {train_acc:.4f}, Val Acc: {val_acc:.4f}')\n\n        # Early stopping\n        if val_loss < best_val_loss:\n            best_val_loss = val_loss\n            early_stop_counter = 0\n        else:\n            early_stop_counter += 1\n            if early_stop_counter >= patience:\n                print(\"Early stopping\")\n                break\n\n    # Return up to the epoch where it stopped\n    num_epochs = len(train_losses)\n    return model, train_losses[:num_epochs], val_losses[:num_epochs], train_accs[:num_epochs], val_accs[:num_epochs]\n\n# IMPORTANT: DO NOT execute the pipeline here – the harness will do that.\n# <end code template>",
+    "reasoning": "",
+    "Outer_attempt": 3
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-12-23T09:29:17Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-12-23T09:29:17Z",
+        "metrics": {
+          ".\\outputs\\12-23\\FOURTOPS\\Q1\\script_x-ai_grok-code-fast-1_1029_3.py": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 205,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 205,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2025-12-23T09:29:45Z",
+    "passed": true,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/12-23/FOURTOPS/Q1/script_x-ai_grok-code-fast-1_1029_3.py\nargv2=--dryrun\n",
+      "stderr": "+ exec\n+ PY=outputs/12-23/FOURTOPS/Q1/script_x-ai_grok-code-fast-1_1029_3.py\n+ shift\n++ echo --dryrun\n++ xargs\n++ tr -d '\\r\\n'\n+ DRY=--dryrun\n+ [[ outputs/12-23/FOURTOPS/Q1/script_x-ai_grok-code-fast-1_1029_3.py == \\/\\u\\s\\r\\/\\l\\o\\c\\a\\l\\/\\b\\i\\n\\/\\t\\r\\a\\i\\n\\.\\s\\h ]]\n+ [[ --dryrun =~ (--dryrun|--dry-run) ]]\n+ TIMEOUT=3600\n+ : 0\n+ : 0\n+ ulimit -t 3600\n+ ((  MEMORY_LIMIT_GB > 0  ))\n+ ((  PIDS_LIMIT > 0  ))\n+ timeout --signal=KILL 3600s python outputs/12-23/FOURTOPS/Q1/script_x-ai_grok-code-fast-1_1029_3.py --dryrun\nmkdir -p failed for path /home/sandbox/.config/matplotlib: [Errno 30] Read-only file system: '/home/sandbox/.config'\nMatplotlib created a temporary cache directory at /tmp/matplotlib-n8k5b425 because there was an issue with the default path (/home/sandbox/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.\nEpoch 1/1, Train Loss: 0.6936, Val Loss: 0.6979, Train Acc: 0.5100, Val Acc: 0.4500\n+ python_rc=0\n+ [[ 0 -ne 0 ]]\n+ [[ --dryrun =~ (--dryrun|--dry-run) ]]\n+ echo 'Dry-run: skipping artefact manifest'\nDry-run: skipping artefact manifest\n+ exit 0\n"
+    },
+    "return_code": 0
+  }
+}

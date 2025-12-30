@@ -1,0 +1,89 @@
+{
+  "LLMGeneration": {
+    "model": "x-ai/grok-code-fast-1",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 3699,
+    "prompt_chars": 14633,
+    "response_tokens": 3588,
+    "response_chars": 8489,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.00608724,
+    "generation_ms": 23818,
+    "code": "# ---------- IMPORTS ----------\nimport torch\nimport torch.nn as nn\nfrom torch_geometric.data import Data, Batch\nfrom torch_geometric.nn import MessagePassing, global_mean_pool\nfrom torch_geometric.loader import DataLoader as PyGDataLoader\nfrom sklearn.preprocessing import StandardScaler\nimport numpy as np\n\n# ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.scaler = StandardScaler()  # For global features ET_miss and phiET_miss, but keep object params intact\n\n    def make_loader_cfg(self) -> dict:\n        return {\n            \"dataset_builder\": \"llm_script:FourTopsDataset\",\n            \"dataset_kwargs\": {},\n            \"loader_class\": \"torch_geometric.loader:DataLoader\",\n            \"batch_size\": 512,\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": False,\n            \"collate\": None,\n            \"extra_loader_kwargs\": {},\n            \"eval_overrides\": {\"shuffle\": False},\n        }\n\n    def fit(self, X, y=None):\n        # Extract global features for scaling\n        global_features = X[:, :2].numpy()\n        self.scaler.fit(global_features)\n        return self\n\n    def transform(self, X):\n        data_list = []\n        for event in X:\n            event = event.numpy()\n            global_feat = self.scaler.transform(event[:2].reshape(1, -1)).ravel()  # [2]\n            nodes = []\n            node_features = []\n            edges = []\n            edge_features = []\n\n            for i in range(18):\n                start = 2 + i * 5\n                obj_id = int(event[start])\n                if obj_id == 0:  # Assume padding\n                    continue\n                E, pt, eta, phi = event[start+1:start+5]\n                nodes.append(i)\n                # Node features: obj_id (one-hot? but simplistic, just numerical), E, pt, eta, phi -> [5]\n                # Obj_id is categorical, but I'll keep as is, later model can handle\n                node_features.append([obj_id, E, pt, eta, phi])\n\n            # Add global node\n            nodes.append(len(nodes))\n            node_features.append([0, 0, 0, global_feat[0], global_feat[1]])  # Dummy, then globals as eta-like, phi\n            global_idx = len(nodes) - 1\n\n            # Build edges: full connected among objects, and each object to global\n            num_obj = len(nodes) - 1  # excluding global\n            for i in range(num_obj):\n                for j in range(i+1, num_obj):\n                    edges.append([i,j])\n                    # Compute m_ij and delta R\n                    E1, pt1, eta1, phi1 = node_features[i][1:]\n                    E2, pt2, eta2, phi2 = node_features[j][1:]\n                    # Reconstruct momenta\n                    px1 = pt1 * np.cos(phi1)\n                    py1 = pt1 * np.sin(phi1)\n                    pz1 = pt1 * np.sinh(eta1)\n                    px2 = pt2 * np.cos(phi2)\n                    py2 = pt2 * np.sin(phi2)\n                    pz2 = pt2 * np.sinh(eta2)\n                    # Invariant mass: m^2 = (E1+E2)^2 - (px1+px2)^2 - (py1+py2)^2 - (pz1+pz2)^2\n                    m2_ij = (E1 + E2)**2 - (px1 + px2)**2 - (py1 + py2)**2 - (pz1 + pz2)**2\n                    m_ij = np.sqrt(np.maximum(0, m2_ij)) / 1000  # Scale to GeV or something, but arbitrary\n                    delta_eta = eta1 - eta2\n                    delta_phi = np.arctan2(np.sin(phi1 - phi2), np.cos(phi1 - phi2))  # Wrap around\n                    delta_R = np.sqrt(delta_eta**2 + delta_phi**2)\n                    edge_features.append([m_ij, delta_R])\n                # Edge to global\n                edges.append([i, global_idx])\n                edge_features.append([0, 0])  # Dummy edge features to global\n                edges.append([global_idx, i])\n                edge_features.append([0, 0])\n\n            if nodes:\n                node_features = torch.tensor(node_features, dtype=torch.float32)  # [num_nodes, 5]\n                edges = torch.tensor(edges, dtype=torch.long).t()  # [2, num_edges]\n                edge_features = torch.tensor(edge_features, dtype=torch.float32)  # [num_edges, 2]\n                data = Data(x=node_features, edge_index=edges, edge_attr=edge_features)\n                data_list.append(data)\n            else:\n                # Empty, but shouldn't happen\n                data_list.append(Data(x=torch.empty(1,5), edge_index=torch.empty(2,0), edge_attr=torch.empty(0,2)))\n\n        return data_list  # List of Data\n\n# ---------- MODEL DEFINITION ----------\nclass EdgeAwareMPNN(MessagePassing):\n    def __init__(self, in_channels, out_channels, edge_dim, heads=1):\n        super().__init__(aggr='mean')\n        self.conv1 = nn.Linear(in_channels + edge_dim, out_channels)\n        self.conv2 = nn.Linear(in_channels, out_channels)\n\n    def forward(self, x, edge_index, edge_attr):\n        row, col = edge_index\n        msg = torch.cat([x[row], edge_attr], dim=1)  # [num_edges, in+edge_dim]\n        msg = self.conv1(msg).relu()\n        out = self.message(msg, col=col)\n        out = self.conv2(out).relu()\n        return out\n\nclass BinaryClassifier(nn.Module):\n    def __init__(self, sample_object):\n        super().__init__()\n        num_node_features = sample_object.x.shape[1]  # 5\n        num_edge_features = sample_object.edge_attr.shape[1]  # 2\n        self.gnn1 = EdgeAwareMPNN(num_node_features, 64, num_edge_features)\n        self.gnn2 = EdgeAwareMPNN(64, 128, num_edge_features)\n        self.lin1 = nn.Linear(128, 64)\n        self.lin2 = nn.Linear(64, 1)\n\n    def forward(self, data):\n        x, edge_index, edge_attr = data.x, data.edge_index, data.edge_attr\n        x = self.gnn1(x, edge_index, edge_attr)\n        x = self.gnn2(x, edge_index, edge_attr)\n        x = global_mean_pool(x, data.batch) if hasattr(data, 'batch') else x.mean(dim=0, keepdim=True)\n        x = self.lin1(x).relu()\n        x = self.lin2(x)\n        return torch.sigmoid(x)\n\ndef make_model(example_object):\n    return BinaryClassifier(example_object)\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 20\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)\n    criterion = nn.BCELoss()\n    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.5)\n\n    train_loss, val_loss, train_acc, val_acc = [], [], [], []\n    best_val_auc = 0.0\n    patience = 5\n    counter = 0\n\n    for epoch in range(epochs):\n        model.train()\n        epoch_loss = 0\n        epoch_acc = 0\n        for data in train_loader:\n            data = data.to(device)\n            optimizer.zero_grad()\n            out = model(data)\n            loss = criterion(out.squeeze(), data.y.float())\n            loss.backward()\n            optimizer.step()\n            epoch_loss += loss.item()\n            pred = (out > 0.5).long()\n            epoch_acc += (pred.squeeze() == data.y).sum().item()\n        epoch_loss /= len(train_loader)\n        epoch_acc /= len(train_loader.dataset)\n        train_loss.append(epoch_loss)\n        train_acc.append(epoch_acc)\n\n        model.eval()\n        epoch_val_loss = 0\n        epoch_val_acc = 0\n        all_preds = []\n        all_targets = []\n        with torch.no_grad():\n            for data in val_loader:\n                data = data.to(device)\n                out = model(data)\n                loss = criterion(out.squeeze(), data.y.float())\n                epoch_val_loss += loss.item()\n                pred = (out > 0.5).long()\n                epoch_val_acc += (pred.squeeze() == data.y).sum().item()\n                all_preds.append(out.cpu())\n                all_targets.append(data.y.cpu())\n        epoch_val_loss /= len(val_loader)\n        epoch_val_acc /= len(val_loader.dataset)\n        val_loss.append(epoch_val_loss)\n        val_acc.append(epoch_val_acc)\n\n        # Compute AUC\n        from sklearn.metrics import roc_auc_score\n        preds = torch.cat(all_preds).numpy()\n        targets = torch.cat(all_targets).numpy()\n        val_auc = roc_auc_score(targets, preds)\n\n        scheduler.step()\n\n        # Early stopping based on val AUC\n        if val_auc > best_val_auc:\n            best_val_auc = val_auc\n            counter = 0\n            torch.save(model.state_dict(), 'best_model.pth')\n        else:\n            counter += 1\n            if counter >= patience:\n                break\n\n    # Load best model\n    model.load_state_dict(torch.load('best_model.pth'))\n    return model, train_loss, val_loss, train_acc, val_acc",
+    "reasoning": "",
+    "Outer_attempt": 1
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-12-23T16:31:48Z",
+    "PyLint": {
+      "passed": false,
+      "messages": [
+        {
+          "type": "error",
+          "module": "script_x-ai_grok-code-fast-1_1731_1",
+          "obj": "EdgeAwareMPNN.forward",
+          "line": 163,
+          "column": 14,
+          "endLine": 163,
+          "endColumn": 40,
+          "path": "outputs\\12-23\\FOURTOPS\\Q2\\script_x-ai_grok-code-fast-1_1731_1.py",
+          "symbol": "unexpected-keyword-arg",
+          "message": "Unexpected keyword argument 'col' in method call",
+          "message-id": "E1123"
+        },
+        {
+          "type": "error",
+          "module": "script_x-ai_grok-code-fast-1_1731_1",
+          "obj": "_run",
+          "line": 275,
+          "column": 14,
+          "endLine": 275,
+          "endColumn": 31,
+          "path": "outputs\\12-23\\FOURTOPS\\Q2\\script_x-ai_grok-code-fast-1_1731_1.py",
+          "symbol": "undefined-variable",
+          "message": "Undefined variable 'make_preprocessor'",
+          "message-id": "E0602"
+        }
+      ]
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-12-23T16:31:48Z",
+        "metrics": {
+          ".\\outputs\\12-23\\FOURTOPS\\Q2\\script_x-ai_grok-code-fast-1_1731_1.py": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 256,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 256,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  }
+}

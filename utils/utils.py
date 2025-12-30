@@ -11,68 +11,70 @@ SKIP_DIRS: set[str] = {"Failed Dry-run Scripts", "StaticFail"}
 
 class _NpEncoder(json.JSONEncoder):
     def default(self, obj):
-        import numpy as np
-        if isinstance(obj, np.ndarray):
-            return obj.tolist()          
-        if isinstance(obj, (np.floating,)):
-            return float(obj)
-        if isinstance(obj, (np.integer,)):
-            return int(obj)
+        # Local imports to avoid hard deps at module import time
+        try:
+            import numpy as np
+        except Exception:
+            np = None
+        try:
+            import torch
+        except Exception:
+            torch = None
+        try:
+            from pathlib import Path
+        except Exception:
+            Path = None
+        try:
+            from enum import Enum
+        except Exception:
+            Enum = None
+
+        # ----- numpy scalars/arrays -----
+        if np is not None:
+            if isinstance(obj, np.integer):
+                return int(obj)
+            if isinstance(obj, np.floating):
+                return float(obj)
+            if isinstance(obj, np.ndarray):
+                return obj.tolist()
+
+        # ----- torch tensors -----
+        if torch is not None and isinstance(obj, torch.Tensor):
+            return obj.detach().cpu().tolist()
+
+        # ----- pathlib -----
+        if Path is not None and isinstance(obj, Path):
+            return str(obj)
+
+        # ----- enums -----
+        if Enum is not None and isinstance(obj, Enum):
+            return obj.value
+
+        # ----- exceptions (e.g., FileNotFoundError) -----
+        if isinstance(obj, BaseException):
+            return {"error": obj.__class__.__name__, "message": str(obj)}
+
+        # ----- containers not handled by default -----
+        # sets/frozensets: convert to list with stable, comparable keys
+        if isinstance(obj, (set, frozenset)):
+            def _coerce(e):
+                # Keep JSON-native scalars as-is; stringify everything else
+                if isinstance(e, (str, int, float, bool)) or e is None:
+                    return e
+                if isinstance(e, BaseException):
+                    return {"error": e.__class__.__name__, "message": str(e)}
+                # Avoid deep recursion for arbitrary objects
+                return str(e)
+            items = [_coerce(e) for e in obj]
+            # Deterministic order without comparing unlike types
+            return sorted(items, key=lambda x: json.dumps(x, sort_keys=True, ensure_ascii=False))
+
+        # tuples: represent as JSON arrays
+        if isinstance(obj, tuple):
+            return list(obj)
+
+        # Fallback
         return super().default(obj)
-
-def print_repo_tree(
-    root: Union[str, pathlib.Path] = ".",
-    max_depth: int = 2,
-    show_files: bool = True,
-    ignore_hidden: bool = True,
-    out: Optional[TextIO] = None,
-) -> None:
-    """
-    Pretty–prints the folder / file hierarchy of a repository.
-
-    Parameters
-    ----------
-    root : str | Path, default "."
-        Directory to start from.  Relative paths are resolved against CWD.
-    max_depth : int, default 2
-        How many directory levels to descend (0 = just `root`).
-    show_files : bool, default True
-        If False, only directories are listed.
-    ignore_hidden : bool, default True
-        Skip entries whose names start with '.'.
-    out : TextIO | None, default None
-        Stream to write to (e.g. open file handle).  `None` → `sys.stdout`.
-    """
-    
-    root = pathlib.Path(root).resolve()
-    if not root.is_dir():
-        raise NotADirectoryError(root)
-
-    out_stream = out or stdout
-    spacer = "    "
-
-    def _is_hidden(p: pathlib.Path) -> bool:
-        return p.name.startswith(".")
-
-    def _recurse(dir_path: pathlib.Path, depth: int) -> None:
-        if depth > max_depth:
-            return
-
-        entries = sorted(dir_path.iterdir(), key=lambda p: (p.is_file(), p.name.lower()))
-        for entry in entries:
-            if ignore_hidden and _is_hidden(entry):
-                continue
-
-            prefix = spacer * depth + ("└── " if depth else "")
-            print(f"{prefix}{entry.name}{'/' if entry.is_dir() else ''}", file=out_stream)
-
-            if entry.is_dir():
-                _recurse(entry, depth + 1)
-            elif not show_files:
-                continue
-
-    print(f"{root.name}/", file=out_stream)
-    _recurse(root, 1)
 
 def WSL_path(host_path: str) -> str:
     """

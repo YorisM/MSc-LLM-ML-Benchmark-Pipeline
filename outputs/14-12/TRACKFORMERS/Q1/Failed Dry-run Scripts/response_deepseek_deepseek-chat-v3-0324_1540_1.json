@@ -1,0 +1,71 @@
+{
+  "LLMGeneration": {
+    "model": "deepseek/deepseek-chat-v3-0324",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 4038,
+    "prompt_chars": 16011,
+    "response_tokens": 1323,
+    "response_chars": 5398,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.00197184,
+    "generation_ms": 111864,
+    "code": "import torch.nn.functional as F\nfrom torch_geometric.nn import GATConv, global_mean_pool\nfrom torch_geometric.data import Batch, Data\nfrom sklearn.preprocessing import StandardScaler\nfrom collections import defaultdict\n\nclass MyPreprocessor:\n    def __init__(self):\n        self.scaler = StandardScaler()\n        self.layer_stats = defaultdict(list)\n\n    def _raw_reshape(self, data):\n        return data\n\n    def make_loader_cfg(self):\n        return {\n            \"loader_class\": \"torch.utils.data.DataLoader\",\n            \"batch_size\": 128,\n            \"shuffle\": True,\n            \"num_workers\": 4,\n            \"pin_memory\": True\n        }\n\n    def fit(self, data):\n        all_features = []\n        for event in data:\n            X, _ = _split_X_y(event)\n            all_features.append(X)\n        self.scaler.fit(torch.cat(all_features))\n        return self\n\n    def transform(self, data):\n        if isinstance(data, torch.Tensor):\n            return self.scaler.transform(data)\n        return torch.from_numpy(self.scaler.transform(data.numpy())).float()\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\nclass HitClassifier(nn.Module):\n    def __init__(self, example_batch_x):\n        super().__init__()\n        in_features = example_batch_x[0].shape[1]  # [N_hits, F]\n\n        self.conv1 = GATConv(in_features, 64, heads=4)\n        self.conv2 = GATConv(64*4, 64, heads=4)\n        self.conv3 = GATConv(64*4, 64, heads=4)\n\n        self.lin1 = nn.Linear(64*4, 64)\n        self.lin2 = nn.Linear(64, 64)\n        self.lin3 = nn.Linear(64, 64)\n\n        self.out = nn.Linear(64, 1)\n\n    def forward(self, batch_x):\n        if isinstance(batch_x, list):\n            batch = self._create_batch(batch_x)\n        else:\n            batch = batch_x\n\n        x = batch.x\n        edge_index = batch.edge_index\n\n        x = F.elu(self.conv1(x, edge_index))\n        x = F.elu(self.conv2(x, edge_index))\n        x = F.elu(self.conv3(x, edge_index))\n\n        x = F.elu(self.lin1(x))\n        x = F.elu(self.lin2(x))\n        x = F.elu(self.lin3(x))\n\n        logits = self.out(x).squeeze(-1)\n\n        if isinstance(batch_x, list):\n            return self._split_output(logits, batch.batch)\n        return logits\n\n    def _create_batch(self, batch_x):\n        data_list = []\n        for i, x in enumerate(batch_x):\n            edge_index = self._create_edges(x)\n            data = Data(x=x, edge_index=edge_index)\n            data_list.append(data)\n        return Batch.from_data_list(data_list).to(device)\n\n    def _create_edges(self, x):\n        # Create fully connected edges\n        num_nodes = x.size(0)\n        row = torch.arange(num_nodes).repeat_interleave(num_nodes)\n        col = torch.arange(num_nodes).repeat(num_nodes)\n        return torch.stack([row, col], dim=0).to(device)\n\n    def _split_output(self, logits, batch):\n        sizes = torch.bincount(batch)\n        return torch.split(logits, sizes.tolist())\n\ndef make_model(example_batch_x):\n    return HitClassifier(example_batch_x)\n\ndef train_model(model, train_loader, val_loader, epochs):\n    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)\n    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=3)\n    criterion = nn.CrossEntropyLoss()\n\n    train_loss = []\n    val_loss = []\n    train_acc = []\n    val_acc = []\n\n    best_val_acc = 0\n    patience = 5\n    counter = 0\n\n    for epoch in range(epochs):\n        model.train()\n        epoch_train_loss = 0\n        correct_train = 0\n        total_train = 0\n\n        for batch in train_loader:\n            view = normalise_batch(batch, device=device)\n            optimizer.zero_grad()\n\n            outputs = model(view.batch_x)\n            targets = view.batch_y.to(device)\n\n            loss = criterion(outputs, targets)\n            loss.backward()\n            optimizer.step()\n\n            epoch_train_loss += loss.item()\n            _, predicted = torch.max(outputs.data, 1)\n            correct_train += (predicted == targets).sum().item()\n            total_train += targets.size(0)\n\n        train_loss.append(epoch_train_loss / len(train_loader))\n        train_acc.append(correct_train / total_train)\n\n        model.eval()\n        epoch_val_loss = 0\n        correct_val = 0\n        total_val = 0\n\n        with torch.no_grad():\n            for batch in val_loader:\n                view = normalise_batch(batch, device=device)\n                outputs = model(view.batch_x)\n                targets = view.batch_y.to(device)\n\n                loss = criterion(outputs, targets)\n                epoch_val_loss += loss.item()\n\n                _, predicted = torch.max(outputs.data, 1)\n                correct_val += (predicted == targets).sum().item()\n                total_val += targets.size(0)\n\n        val_loss.append(epoch_val_loss / len(val_loader))\n        val_acc.append(correct_val / total_val)\n\n        scheduler.step(val_loss[-1])\n\n        if val_acc[-1] > best_val_acc:\n            best_val_acc = val_acc[-1]\n            counter = 0\n        else:\n            counter += 1\n            if counter >= patience:\n                break\n\n    return model, train_loss, val_loss, train_acc, val_acc",
+    "reasoning": "",
+    "Outer_attempt": 1
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-12-14T14:40:20Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-12-14T14:40:20Z",
+        "metrics": {
+          ".\\./outputs/14-12/TRACKFORMERS/Q1/script_deepseek_deepseek-chat-v3-0324_1540_1.py": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 253,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 253,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2025-12-14T14:40:53Z",
+    "passed": false,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/14-12/TRACKFORMERS/Q1/script_deepseek_deepseek-chat-v3-0324_1540_1.py\nargv2=--dryrun\n",
+      "stderr": "+ exec\n+ PY=outputs/14-12/TRACKFORMERS/Q1/script_deepseek_deepseek-chat-v3-0324_1540_1.py\n+ shift\n++ echo --dryrun\n++ tr -d '\\r\\n'\n++ xargs\n+ DRY=--dryrun\n+ [[ outputs/14-12/TRACKFORMERS/Q1/script_deepseek_deepseek-chat-v3-0324_1540_1.py == \\/\\u\\s\\r\\/\\l\\o\\c\\a\\l\\/\\b\\i\\n\\/\\t\\r\\a\\i\\n\\.\\s\\h ]]\n+ [[ --dryrun =~ (--dryrun|--dry-run) ]]\n+ TIMEOUT=3600\n+ : 0\n+ : 0\n+ ulimit -t 3600\n+ ((  MEMORY_LIMIT_GB > 0  ))\n+ ((  PIDS_LIMIT > 0  ))\n+ timeout --signal=KILL 3600s python outputs/14-12/TRACKFORMERS/Q1/script_deepseek_deepseek-chat-v3-0324_1540_1.py --dryrun\nmkdir -p failed for path /home/sandbox/.config/matplotlib: [Errno 30] Read-only file system: '/home/sandbox/.config'\nMatplotlib created a temporary cache directory at /tmp/matplotlib-rx4jz1d7 because there was an issue with the default path (/home/sandbox/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.\nERROR during training: 'int' object is not callable\nTraceback (most recent call last):\n  File \"/workspace/outputs/14-12/TRACKFORMERS/Q1/script_deepseek_deepseek-chat-v3-0324_1540_1.py\", line 336, in <module>\n    _run(dryrun=\"--dryrun\" in sys.argv)\n  File \"/workspace/outputs/14-12/TRACKFORMERS/Q1/script_deepseek_deepseek-chat-v3-0324_1540_1.py\", line 287, in _run\n    trained_model, tr_loss, va_loss, tr_acc, va_acc = train_model(\n                                                      ^^^^^^^^^^^^\n  File \"/workspace/outputs/14-12/TRACKFORMERS/Q1/script_deepseek_deepseek-chat-v3-0324_1540_1.py\", line 200, in train_model\n    outputs = model(view.batch_x)\n              ^^^^^^^^^^^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py\", line 1739, in _wrapped_call_impl\n    return self._call_impl(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py\", line 1750, in _call_impl\n    return forward_call(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/outputs/14-12/TRACKFORMERS/Q1/script_deepseek_deepseek-chat-v3-0324_1540_1.py\", line 133, in forward\n    batch = self._create_batch(batch_x)\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/outputs/14-12/TRACKFORMERS/Q1/script_deepseek_deepseek-chat-v3-0324_1540_1.py\", line 157, in _create_batch\n    edge_index = self._create_edges(x)\n                 ^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/outputs/14-12/TRACKFORMERS/Q1/script_deepseek_deepseek-chat-v3-0324_1540_1.py\", line 164, in _create_edges\n    num_nodes = x.size(0)\n                ^^^^^^^^^\nTypeError: 'int' object is not callable\n"
+    },
+    "return_code": 1
+  }
+}

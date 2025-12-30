@@ -1,0 +1,71 @@
+{
+  "LLMGeneration": {
+    "model": "openai/o4-mini-high-2025-04-16",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 3596,
+    "prompt_chars": 15081,
+    "response_tokens": 17836,
+    "response_chars": 4634,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.0795828,
+    "generation_ms": 171016,
+    "code": "import numpy as np\nimport torch\nfrom torch import nn\n\nclass DSU:\n    def __init__(self, n):\n        self.parent = list(range(n))\n        self.rank = [0] * n\n    def find(self, x):\n        px = self.parent[x]\n        if px != x:\n            self.parent[x] = self.find(px)\n        return self.parent[x]\n    def union(self, x, y):\n        xroot = self.find(x)\n        yroot = self.find(y)\n        if xroot == yroot:\n            return\n        if self.rank[xroot] < self.rank[yroot]:\n            self.parent[xroot] = yroot\n        else:\n            self.parent[yroot] = xroot\n            if self.rank[xroot] == self.rank[yroot]:\n                self.rank[xroot] += 1\n\nclass MyPreprocessor:\n    def __init__(self):\n        self.theta_th = None\n        self.z_th = None\n\n    def _raw_reshape(self, data):\n        return data\n\n    def make_loader_cfg(self):\n        return None\n\n    def fit(self, data):\n        dtheta_list = []\n        dz_list = []\n        for evt in data:\n            theta = np.array(evt[\"hit_theta\"], dtype=float)       # [N_hits]\n            z = np.array(evt[\"hit_z\"], dtype=float)               # [N_hits]\n            layer_id = np.array(evt[\"layer_id\"], dtype=int)       # [N_hits]\n            track_id = np.array(evt[\"track_id\"], dtype=int)       # [N_hits]\n            for t in np.unique(track_id):\n                mask = (track_id == t)\n                layers = layer_id[mask]\n                if layers.size <= 1:\n                    continue\n                theta_t = theta[mask]\n                z_t = z[mask]\n                order = np.argsort(layers)\n                layers_s = layers[order]\n                theta_s = theta_t[order]\n                z_s = z_t[order]\n                for k in range(len(layers_s) - 1):\n                    if layers_s[k+1] - layers_s[k] == 1:\n                        d_theta = abs(theta_s[k+1] - theta_s[k])\n                        if d_theta > np.pi:\n                            d_theta = 2 * np.pi - d_theta\n                        dtheta_list.append(d_theta)\n                        dz_list.append(abs(z_s[k+1] - z_s[k]))\n        if len(dtheta_list) > 0:\n            th_theta = np.percentile(dtheta_list, 90) * 1.5\n            th_z = np.percentile(dz_list, 90) * 1.5\n        else:\n            th_theta = 0.05\n            th_z = 5.0\n        self.theta_th = float(th_theta)\n        self.z_th = float(th_z)\n        global THETA_TH, Z_TH\n        THETA_TH = self.theta_th\n        Z_TH = self.z_th\n        return self\n\n    def transform(self, data):\n        return data\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\nclass HitClassifier(nn.Module):\n    def __init__(self, in_features):\n        super().__init__()\n        self.theta_th = globals().get(\"THETA_TH\", 0.05)\n        self.z_th = globals().get(\"Z_TH\", 5.0)\n\n    def forward(self, batch):\n        preds = []\n        for ev in batch:\n            if isinstance(ev, (list, tuple)):\n                X = ev[0]\n            else:\n                X = ev\n            x_cpu = X.detach().cpu().numpy()                   # [N, 4]\n            theta = x_cpu[:, 1]                                # [N]\n            z = x_cpu[:, 2]                                    # [N]\n            layer = x_cpu[:, 3].astype(int)                    # [N]\n            N = layer.shape[0]\n            dsu = DSU(N)\n            unique_layers = np.unique(layer)\n            for L in unique_layers:\n                nextL = L + 1\n                if nextL not in unique_layers:\n                    continue\n                idxL = np.where(layer == L)[0]\n                idxNext = np.where(layer == nextL)[0]\n                for i in idxL:\n                    dt = np.abs(theta[idxNext] - theta[i])\n                    dt = np.where(dt > np.pi, 2 * np.pi - dt, dt)\n                    dz_arr = np.abs(z[idxNext] - z[i])\n                    cond = (dt <= self.theta_th) & (dz_arr <= self.z_th)\n                    for j_idx in np.where(cond)[0]:\n                        j = idxNext[j_idx]\n                        dsu.union(int(i), int(j))\n            labels_np = np.zeros(N, dtype=int)\n            root_map = {}\n            curr_label = 0\n            for idx in range(N):\n                r = dsu.find(idx)\n                if r not in root_map:\n                    root_map[r] = curr_label\n                    curr_label += 1\n                labels_np[idx] = root_map[r]\n            labels = torch.from_numpy(labels_np).to(X.device)\n            preds.append(labels)\n        return preds\n\ndef make_model(in_features):\n    return HitClassifier(in_features)\n\nEPOCHS = 10\n\ndef train_model(model, train_loader, val_loader, epochs):\n    return model, [], [], [], []",
+    "reasoning": "",
+    "Outer_attempt": 1
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-12-10T16:12:04Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-12-10T16:12:04Z",
+        "metrics": {
+          ".\\./outputs/10-12/TRACKFORMERS/Q1/script_openai_o4-mini-high-2025-04-16_1711_1.py": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 241,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 241,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2025-12-10T16:12:17Z",
+    "passed": false,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/10-12/TRACKFORMERS/Q1/script_openai_o4-mini-high-2025-04-16_1711_1.py\nargv2=--dryrun\n",
+      "stderr": "+ exec\n+ PY=outputs/10-12/TRACKFORMERS/Q1/script_openai_o4-mini-high-2025-04-16_1711_1.py\n+ shift\n++ echo --dryrun\n++ tr -d '\\r\\n'\n++ xargs\n+ DRY=--dryrun\n+ [[ outputs/10-12/TRACKFORMERS/Q1/script_openai_o4-mini-high-2025-04-16_1711_1.py == \\/\\u\\s\\r\\/\\l\\o\\c\\a\\l\\/\\b\\i\\n\\/\\t\\r\\a\\i\\n\\.\\s\\h ]]\n+ [[ --dryrun =~ (--dryrun|--dry-run) ]]\n+ TIMEOUT=3600\n+ : 0\n+ : 0\n+ ulimit -t 3600\n+ ((  MEMORY_LIMIT_GB > 0  ))\n+ ((  PIDS_LIMIT > 0  ))\n+ timeout --signal=KILL 3600s python outputs/10-12/TRACKFORMERS/Q1/script_openai_o4-mini-high-2025-04-16_1711_1.py --dryrun\nTraceback (most recent call last):\n  File \"/workspace/outputs/10-12/TRACKFORMERS/Q1/script_openai_o4-mini-high-2025-04-16_1711_1.py\", line 6, in <module>\n    import matplotlib.pyplot as plt\nModuleNotFoundError: No module named 'matplotlib'\n"
+    },
+    "return_code": 1
+  }
+}

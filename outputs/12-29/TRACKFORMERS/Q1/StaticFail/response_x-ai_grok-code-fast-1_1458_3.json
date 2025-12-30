@@ -1,0 +1,73 @@
+{
+  "LLMGeneration": {
+    "model": "x-ai/grok-code-fast-1",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 4090,
+    "prompt_chars": 16762,
+    "response_tokens": 5806,
+    "response_chars": 6779,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.00880124,
+    "generation_ms": 46733,
+    "code": "# <start code template>\n# ---------- IMPORTS ----------\nimport numpy as np\nimport torch\nimport torch.nn as nn\nfrom torch.nn import functional as F\nfrom torch_geometric.data import Data\nfrom torch_geometric.nn import SAGEConv\nfrom torch.utils.data import Dataset\nfrom sklearn.neighbors import kneighbors_graph\n\n#  -------- CUSTOM DATASET  --------\nclass CustomDataset(Dataset):\n    REQUIREMENT: If you want a custom dataset: in make_loader_cfg set dataset_builder to \"llm_script:CustomDataset\"\n    def __init__(self, events, pre, train=True):\n        self.events = events\n        self.pre = pre\n        self.train = train\n\n    def __len__(self):\n        return len(self.events)\n\n    def __getitem__(self, idx):\n        evt = self.events[idx]\n        X, y = self.pre.transform(evt[\"hit_r\"]), evt[\"track_id\"]  # pre transform X\n        X = torch.from_numpy(X).float()\n        y = torch.from_numpy(y).long()\n        data = self.build_graph(X, y)\n        return data\n\n    def build_graph(self, X, y):\n        # X [N, 4]: r, theta, z, layer_id\n        N = X.shape[0]\n        pos = torch.zeros(N, 3, dtype=torch.float)\n        pos[:, 0] = X[:, 0] * torch.cos(X[:, 1])\n        pos[:, 1] = X[:, 0] * torch.sin(X[:, 1])\n        pos[:, 2] = X[:, 2]\n        k = min(6, N - 1)  # k-nearest\n        adj = kneighbors_graph(pos.numpy(), n_neighbors=k, mode='connectivity', include_self=False)\n        row, col = adj.nonzero()\n        edge_index = torch.tensor(np.column_stack([row, col]), dtype=torch.long).t()\n        data = Data(x=X, y=y, pos=pos, edge_index=edge_index)\n        return data\n\n# ----------- PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.stats = {}\n\n    def make_loader_cfg(self) -> dict:\n        return {\n            \"dataset_builder\": \"llm_script:CustomDataset\",\n            \"dataset_kwargs\": {},\n            \"loader_class\": \"torch_geometric.loader:DataLoader\",\n            \"batch_size\": 64,\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": False,\n            \"collate\": None,\n            \"extra_loader_kwargs\": {},\n            \"eval_overrides\": {\"shuffle\": False}\n        }\n\n    def fit(self, events):\n        # events: list of dicts with keys hit_r etc.\n        rs = []; thetas = []; zs = []; layers = []\n        for evt in events:\n            rs.extend(evt[\"hit_r\"])\n            thetas.extend(evt[\"hit_theta\"])\n            zs.extend(evt[\"hit_z\"])\n            layers.extend(evt[\"layer_id\"])\n        rs = np.array(rs); thetas = np.array(thetas); zs = np.array(zs); layers = np.array(layers)\n        self.stats['r_mean'] = rs.mean(); self.stats['r_std'] = rs.std() + 1e-6\n        self.stats['theta_min'] = thetas.min(); self.stats['theta_max'] = thetas.max()\n        self.stats['z_mean'] = zs.mean(); self.stats['z_std'] = zs.std() + 1e-6\n        self.stats['layer_min'] = layers.min(); self.stats['layer_max'] = layers.max()\n        return self\n\n    def transform(self, evt):\n        # evt: dict\n        r = np.array(evt[\"hit_r\"]); theta = np.array(evt[\"hit_theta\"]); z = np.array(evt[\"hit_z\"]); layer = np.array(evt[\"layer_id\"])\n        r = (r - self.stats['r_mean']) / self.stats['r_std']\n        theta = (theta - self.stats['theta_min']) / (self.stats['theta_max'] - self.stats['theta_min'] + 1e-6)\n        z = (z - self.stats['z_mean']) / self.stats['z_std']\n        layer = (layer - self.stats['layer_min']) / (self.stats['layer_max'] - self.stats['layer_min'] + 1e-6)\n        X = np.column_stack([r, theta, z, layer]).astype(np.float32)\n        return X\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# ---------- MODEL ARCHITECTURE ----------\nclass HitClassifier(nn.Module):\n    def __init__(self, example_batch_x):\n        super().__init__()\n        F = example_batch_x.x.shape[1]  # [sum N, 4]\n        self.strategy = \"inference\"\n        self.conv1 = SAGEConv(F, 64)\n        self.bn1 = nn.BatchNorm1d(64)\n        self.conv2 = SAGEConv(64, 64)\n        self.bn2 = nn.BatchNorm1d(64)\n        self.cls = nn.Linear(64, 100)  # classes 0 to 99\n\n    def set_training_mode(self, mode):\n        self.strategy = mode\n\n    def forward(self, batch):\n        x = batch.x  # [sum N, 4]\n        edge_index = batch.edge_index  # [2, E]\n        x = self.conv1(x, edge_index)\n        x = self.bn1(x)\n        x = F.relu(x)\n        x = self.conv2(x, edge_index)\n        x = self.bn2(x)\n        x = F.relu(x)\n        logits = self.cls(x)  # [sum N, 100]\n        if self.strategy == \"training\":\n            return logits\n        else:\n            return torch.argmax(logits, dim=1)  # [sum N] int64\n\ndef make_model(example_batch_x):\n    return HitClassifier(example_batch_x)\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 10\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    model.set_training_mode(\"training\")\n    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)\n    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.5)\n    best_loss = float('inf')\n    patience = 3; counter = 0\n    for epoch in range(epochs):\n        model.train()\n        train_loss_total = 0; train_correct = 0; train_total = 0\n        for batch in train_loader:\n            view = normalise_batch(batch, device=device)\n            xb = view.batch_x\n            yb = view.batch_y\n            out = model(xb)  # logits [sum N, 100]\n            loss = F.cross_entropy(out, yb)\n            optimizer.zero_grad()\n            loss.backward()\n            optimizer.step()\n            train_loss_total += loss.item()\n            preds = out.argmax(dim=1)\n            train_correct += (preds == yb).sum().item()\n            train_total += yb.numel()\n        scheduler.step()\n        tr_acc = train_correct / train_total\n        tr_loss = train_loss_total / len(train_loader)\n        model.eval()\n        val_loss_total = 0; val_correct = 0; val_total = 0\n        with torch.no_grad():\n            for batch in val_loader:\n                view = normalise_batch(batch, device=device)\n                xb = view.batch_x\n                yb = view.batch_y\n                out = model(xb)\n                loss = F.cross_entropy(out, yb)\n                val_loss_total += loss.item()\n                preds = out.argmax(dim=1)\n                val_correct += (preds == yb).sum().item()\n                val_total += yb.numel()\n        va_acc = val_correct / val_total\n        va_loss = val_loss_total / len(val_loader)\n        if va_loss < best_loss:\n            best_loss = va_loss; counter = 0\n        else:\n            counter += 1\n        if counter >= patience:\n            break\n    model.set_training_mode(\"inference\")\n    return model, tr_loss, va_loss, tr_acc, va_acc\n\n# IMPORTANT: DO NOT execute the pipeline here - the harness will do that.\n# <end code template>",
+    "reasoning": "",
+    "Outer_attempt": 3
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-12-29T13:58:03Z",
+    "PyLint": {
+      "passed": false,
+      "messages": [
+        {
+          "type": "error",
+          "module": "script_x-ai_grok-code-fast-1_1458_3",
+          "obj": "",
+          "line": 65,
+          "column": 21,
+          "endLine": null,
+          "endColumn": null,
+          "path": "outputs\\12-29\\TRACKFORMERS\\Q1\\script_x-ai_grok-code-fast-1_1458_3.py",
+          "symbol": "syntax-error",
+          "message": "Parsing failed: 'invalid syntax (script_x-ai_grok-code-fast-1_1458_3, line 65)'",
+          "message-id": "E0001"
+        }
+      ]
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [
+          {
+            "filename": ".\\outputs\\12-29\\TRACKFORMERS\\Q1\\script_x-ai_grok-code-fast-1_1458_3.py",
+            "reason": "syntax error while parsing AST from file"
+          }
+        ],
+        "generated_at": "2025-12-29T13:58:03Z",
+        "metrics": {
+          ".\\outputs\\12-29\\TRACKFORMERS\\Q1\\script_x-ai_grok-code-fast-1_1458_3.py": {
+            "loc": 240,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 240,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  }
+}

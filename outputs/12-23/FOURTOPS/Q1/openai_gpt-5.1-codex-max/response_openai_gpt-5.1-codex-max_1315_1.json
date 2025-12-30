@@ -1,0 +1,71 @@
+{
+  "LLMGeneration": {
+    "model": "openai/gpt-5.1-codex-max",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 3446,
+    "prompt_chars": 14077,
+    "response_tokens": 11416,
+    "response_chars": 9074,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.1184675,
+    "generation_ms": 233690,
+    "code": "# ---------- IMPORTS ----------\nfrom sklearn.metrics import roc_auc_score\nimport torch\nfrom torch import nn\nfrom torch.utils.data import DataLoader\n\n# ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    # Total flat length per event (X_train & X_val): 92\n    # Index  0 :  missing-ET magnitude  (E_T_miss)\n    # Index  1 :  missing-ET azimuth    (phi_Et_miss)\n    # Indices  2-6  : object 1  ->  obj_1, E_1, p_T1, eta_1, phi_1\n    # Indices  7-11 : object 2  ->  obj_2, E_2 , p_T_2 , eta_2 , phi_2\n    # ...\n    # Indices 87-91 : object 18 ->  obj_18, E_18 , p_T_18 , eta_18 , phi_18\n\n    def __init__(self):\n        self.mean = None\n        self.std = None\n        # precompute indices\n        self.obj_indices = [2 + 5 * k for k in range(18)]\n        self.E_indices = [3 + 5 * k for k in range(18)]\n        self.pT_indices = [4 + 5 * k for k in range(18)]\n        self.eta_indices = [5 + 5 * k for k in range(18)]\n        self.phi_indices = [1] + [6 + 5 * k for k in range(18)]\n\n    def make_loader_cfg(self) -> dict:\n        return {\n            \"dataset_builder\": \"llm_script:FourTopsDataset\",\n            \"dataset_kwargs\": {},\n            \"loader_class\": \"torch.utils.data:DataLoader\",\n            \"batch_size\": 1024,\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": torch.cuda.is_available(),\n            \"collate\": None,\n            \"extra_loader_kwargs\": {},\n            \"eval_overrides\": {\"shuffle\": False},\n        }\n\n    def fit(self, X, y=None):\n        with torch.no_grad():\n            feats = self._compute_features(X)  # [N, F]\n            self.mean = feats.mean(dim=0)\n            self.std = feats.std(dim=0)\n            self.std[self.std < 1e-6] = 1.0\n        return self\n\n    def _compute_features(self, X):\n        # X shape [N,92]\n        x = X if torch.is_tensor(X) else torch.from_numpy(X)\n        x = x.float()\n        # original features\n        feats = [x]  # [N,92]\n        # energies and pT\n        E_vals = x[:, self.E_indices]  # [N,18]\n        pT_vals = x[:, self.pT_indices]  # [N,18]\n        feats.append(torch.log1p(torch.clamp(E_vals, min=0.0)))  # [N,18]\n        feats.append(torch.log1p(torch.clamp(pT_vals, min=0.0)))  # [N,18]\n        # phi features\n        phi_vals = x[:, self.phi_indices]  # [N,19]\n        feats.append(torch.sin(phi_vals))  # [N,19]\n        feats.append(torch.cos(phi_vals))  # [N,19]\n        # mask for valid objects\n        obj_ids = x[:, self.obj_indices]  # [N,18]\n        mask = (obj_ids > 0).float()  # [N,18]\n        count = mask.sum(dim=1, keepdim=True)  # [N,1]\n        feats.append(count / 18.0)  # [N,1]\n        sum_pT = (pT_vals * mask).sum(dim=1, keepdim=True)  # [N,1]\n        sum_E = (E_vals * mask).sum(dim=1, keepdim=True)  # [N,1]\n        feats.append(torch.log1p(sum_pT))  # [N,1]\n        feats.append(torch.log1p(sum_E))  # [N,1]\n        max_pT = (pT_vals * mask + (1 - mask) * (-1e9)).max(dim=1, keepdim=True).values  # [N,1]\n        max_pT = torch.where(max_pT < -1e8, torch.zeros_like(max_pT), max_pT)\n        feats.append(torch.log1p(torch.clamp(max_pT, min=0.0)))  # [N,1]\n        eta_vals = x[:, self.eta_indices]  # [N,18]\n        mean_abs_eta = (eta_vals.abs() * mask).sum(dim=1, keepdim=True) / (count + 1e-3)  # [N,1]\n        feats.append(mean_abs_eta)\n        return torch.cat(feats, dim=1)  # [N, F]\n\n    def transform(self, X):\n        feats = self._compute_features(X)\n        if self.mean is not None and self.std is not None:\n            feats = (feats - self.mean) / self.std\n        return feats  # [N, F]\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# ---------- MODEL DEFINITION ----------\nclass ResidualBlock(nn.Module):\n    def __init__(self, dim, drop=0.2):\n        super().__init__()\n        self.fc1 = nn.Linear(dim, dim)\n        self.bn1 = nn.BatchNorm1d(dim)\n        self.fc2 = nn.Linear(dim, dim)\n        self.bn2 = nn.BatchNorm1d(dim)\n        self.act = nn.GELU()\n        self.drop = nn.Dropout(drop)\n\n    def forward(self, x):  # x: [B, D]\n        out = self.fc1(x)  # [B, D]\n        out = self.bn1(out)  # [B, D]\n        out = self.act(out)  # [B, D]\n        out = self.drop(out)  # [B, D]\n        out = self.fc2(out)  # [B, D]\n        out = self.bn2(out)  # [B, D]\n        out = self.drop(out)  # [B, D]\n        return self.act(out + x)  # [B, D]\n\nclass BinaryClassifier(nn.Module):\n    def __init__(self, sample_object):\n        super().__init__()\n        in_dim = sample_object.shape[-1]\n        hidden1 = 256\n        hidden2 = 128\n        hidden3 = 64\n        self.input_layer = nn.Sequential(\n            nn.Linear(in_dim, hidden1),\n            nn.BatchNorm1d(hidden1),\n            nn.GELU(),\n            nn.Dropout(0.2),\n        )\n        self.res1 = ResidualBlock(hidden1, drop=0.2)\n        self.res2 = ResidualBlock(hidden1, drop=0.2)\n        self.res3 = ResidualBlock(hidden1, drop=0.2)\n        self.down1 = nn.Sequential(\n            nn.Linear(hidden1, hidden2),\n            nn.BatchNorm1d(hidden2),\n            nn.GELU(),\n            nn.Dropout(0.2),\n        )\n        self.res4 = ResidualBlock(hidden2, drop=0.2)\n        self.down2 = nn.Sequential(\n            nn.Linear(hidden2, hidden3),\n            nn.BatchNorm1d(hidden3),\n            nn.GELU(),\n            nn.Dropout(0.1),\n        )\n        self.out_layer = nn.Linear(hidden3, 1)\n\n    def forward(self, batch_x):\n        x = batch_x  # [B, F]\n        x = self.input_layer(x)  # [B,256]\n        x = self.res1(x)  # [B,256]\n        x = self.res2(x)  # [B,256]\n        x = self.res3(x)  # [B,256]\n        x = self.down1(x)  # [B,128]\n        x = self.res4(x)  # [B,128]\n        x = self.down2(x)  # [B,64]\n        out = self.out_layer(x)  # [B,1]\n        return out  # [B,1]\n\ndef make_model(example_object):\n    return BinaryClassifier(example_object)\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 15\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)\n    criterion = nn.BCEWithLogitsLoss()\n    scaler = torch.cuda.amp.GradScaler(enabled=(device.type == \"cuda\"))\n\n    train_loss_hist = []\n    val_loss_hist = []\n    train_auc_hist = []\n    val_auc_hist = []\n\n    best_val_auc = -1.0\n    best_state = None\n    patience = 5\n    no_improve = 0\n\n    for epoch in range(epochs):\n        model.train()\n        epoch_loss = 0.0\n        all_train_preds = []\n        all_train_targets = []\n        for batch in train_loader:\n            view = normalise_batch(batch, device=device)\n            x = view.batch_x  # [B, F]\n            y = view.batch_y.float()  # [B]\n            optimizer.zero_grad(set_to_none=True)\n            with torch.cuda.amp.autocast(enabled=(device.type == \"cuda\")):\n                logits = model(x).squeeze(-1)  # [B]\n                loss = criterion(logits, y)\n            scaler.scale(loss).backward()\n            scaler.step(optimizer)\n            scaler.update()\n            epoch_loss += loss.item() * x.size(0)\n            with torch.no_grad():\n                preds = torch.sigmoid(logits).detach().cpu()  # [B]\n                all_train_preds.append(preds)\n                all_train_targets.append(y.detach().cpu())\n        epoch_loss /= len(train_loader.dataset)\n        train_loss_hist.append(epoch_loss)\n        # compute train AUC\n        train_preds = torch.cat(all_train_preds)  # [N_train]\n        train_targets = torch.cat(all_train_targets)  # [N_train]\n        try:\n            train_auc = roc_auc_score(train_targets.numpy(), train_preds.numpy())\n        except Exception:\n            train_auc = 0.0\n        train_auc_hist.append(train_auc)\n\n        model.eval()\n        val_loss = 0.0\n        all_val_preds = []\n        all_val_targets = []\n        with torch.no_grad():\n            for batch in val_loader:\n                view = normalise_batch(batch, device=device)\n                x = view.batch_x  # [B, F]\n                y = view.batch_y.float()  # [B]\n                logits = model(x).squeeze(-1)  # [B]\n                loss = criterion(logits, y)\n                val_loss += loss.item() * x.size(0)\n                preds = torch.sigmoid(logits).detach().cpu()  # [B]\n                all_val_preds.append(preds)\n                all_val_targets.append(y.detach().cpu())\n        val_loss /= len(val_loader.dataset)\n        val_loss_hist.append(val_loss)\n        val_preds = torch.cat(all_val_preds)  # [N_val]\n        val_targets = torch.cat(all_val_targets)  # [N_val]\n        try:\n            val_auc = roc_auc_score(val_targets.numpy(), val_preds.numpy())\n        except Exception:\n            val_auc = 0.0\n        val_auc_hist.append(val_auc)\n\n        if val_auc > best_val_auc + 1e-4:\n            best_val_auc = val_auc\n            best_state = {k: v.cpu() for k, v in model.state_dict().items()}\n            no_improve = 0\n        else:\n            no_improve += 1\n        if no_improve >= patience:\n            break\n\n    if best_state is not None:\n        model.load_state_dict(best_state)\n    return model, train_loss_hist, val_loss_hist, train_auc_hist, val_auc_hist",
+    "reasoning": "",
+    "Outer_attempt": 1
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-12-23T12:15:27Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-12-23T12:15:27Z",
+        "metrics": {
+          ".\\outputs\\12-23\\FOURTOPS\\Q1\\script_openai_gpt-5.1-codex-max_1315_1.py": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 291,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 291,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2025-12-23T12:15:55Z",
+    "passed": true,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/12-23/FOURTOPS/Q1/script_openai_gpt-5.1-codex-max_1315_1.py\nargv2=--dryrun\n",
+      "stderr": "+ exec\n+ PY=outputs/12-23/FOURTOPS/Q1/script_openai_gpt-5.1-codex-max_1315_1.py\n+ shift\n++ echo --dryrun\n++ tr -d '\\r\\n'\n++ xargs\n+ DRY=--dryrun\n+ [[ outputs/12-23/FOURTOPS/Q1/script_openai_gpt-5.1-codex-max_1315_1.py == \\/\\u\\s\\r\\/\\l\\o\\c\\a\\l\\/\\b\\i\\n\\/\\t\\r\\a\\i\\n\\.\\s\\h ]]\n+ [[ --dryrun =~ (--dryrun|--dry-run) ]]\n+ TIMEOUT=3600\n+ : 0\n+ : 0\n+ ulimit -t 3600\n+ ((  MEMORY_LIMIT_GB > 0  ))\n+ ((  PIDS_LIMIT > 0  ))\n+ timeout --signal=KILL 3600s python outputs/12-23/FOURTOPS/Q1/script_openai_gpt-5.1-codex-max_1315_1.py --dryrun\nmkdir -p failed for path /home/sandbox/.config/matplotlib: [Errno 30] Read-only file system: '/home/sandbox/.config'\nMatplotlib created a temporary cache directory at /tmp/matplotlib-g3ue2_xs because there was an issue with the default path (/home/sandbox/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.\n/workspace/outputs/12-23/FOURTOPS/Q1/script_openai_gpt-5.1-codex-max_1315_1.py:213: FutureWarning: `torch.cuda.amp.GradScaler(args...)` is deprecated. Please use `torch.amp.GradScaler('cuda', args...)` instead.\n  scaler = torch.cuda.amp.GradScaler(enabled=(device.type == \"cuda\"))\n/workspace/outputs/12-23/FOURTOPS/Q1/script_openai_gpt-5.1-codex-max_1315_1.py:235: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.\n  with torch.cuda.amp.autocast(enabled=(device.type == \"cuda\")):\n+ python_rc=0\n+ [[ 0 -ne 0 ]]\n+ [[ --dryrun =~ (--dryrun|--dry-run) ]]\n+ echo 'Dry-run: skipping artefact manifest'\nDry-run: skipping artefact manifest\n+ exit 0\n"
+    },
+    "return_code": 0
+  }
+}

@@ -1,0 +1,76 @@
+{
+  "LLMGeneration": {
+    "model": "deepseek/deepseek-v3.2",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 4012,
+    "prompt_chars": 15289,
+    "response_tokens": 5679,
+    "response_chars": 11274,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.00375915,
+    "generation_ms": 67824,
+    "code": "# -------------------------- START OF LLM BLOCK ------------------------------\n# ---------- IMPORTS ----------\nimport torch\nimport torch.nn as nn\nimport torch.nn.functional as F\nfrom torch.utils.data import Dataset, DataLoader\nimport numpy as np\nfrom sklearn.preprocessing import StandardScaler\nimport math\n\n#  -------- (OPTIONAL) CUSTOM DATASET  --------\n# No custom dataset needed - using FourTopsDataset from harness\n\n# ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.global_scaler = StandardScaler()\n        self.kinematic_scaler = StandardScaler()\n        self.phi_scaler = StandardScaler()\n\n    def make_loader_cfg(self) -> dict:\n        return {\n            \"dataset_builder\": \"llm_script:FourTopsDataset\",\n            \"dataset_kwargs\": {},\n            \"loader_class\": \"torch.utils.data:DataLoader\",\n            \"batch_size\": 512,\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": False,\n            \"collate\": None,\n            \"extra_loader_kwargs\": {},\n            \"eval_overrides\": {\"shuffle\": False},\n        }\n\n    def fit(self, X, y=None):\n        # Reshape data to extract features properly\n        X_np = X.numpy()\n\n        # Extract global features\n        global_features = X_np[:, :2]  # (n_samples, 2)\n\n        # Extract kinematic features (E, pT, eta, phi) for all objects\n        kinematic_features = []\n        phi_features = []\n\n        # Loop through 18 objects\n        for obj_idx in range(18):\n            start_idx = 2 + obj_idx * 5\n            # Object features: [obj_id, E, pT, eta, phi]\n            obj_slice = X_np[:, start_idx:start_idx+5]\n\n            # Get mask for real objects (obj_id != 0)\n            mask = obj_slice[:, 0] != 0\n\n            # Extract kinematic features for real objects\n            kinematic_features.append(obj_slice[mask, 1:4])  # E, pT, eta\n            phi_features.append(obj_slice[mask, 4:5])  # phi\n\n        # Concatenate all kinematic features\n        if kinematic_features:\n            kinematic_features = np.vstack(kinematic_features)\n            phi_features = np.vstack(phi_features)\n        else:\n            kinematic_features = np.zeros((0, 3))\n            phi_features = np.zeros((0, 1))\n\n        # Fit scalers\n        self.global_scaler.fit(global_features)\n        self.kinematic_scaler.fit(kinematic_features)\n        self.phi_scaler.fit(phi_features)\n\n        return self\n\n    def transform(self, X):\n        X_np = X.numpy()\n        X_transformed = X_np.copy()\n\n        # Normalize global features\n        X_transformed[:, :2] = self.global_scaler.transform(X_np[:, :2])\n\n        # Normalize kinematic features for all objects\n        for obj_idx in range(18):\n            start_idx = 2 + obj_idx * 5\n            obj_slice = X_np[:, start_idx:start_idx+5]\n\n            # Create mask for real objects\n            mask = obj_slice[:, 0] != 0\n\n            if mask.any():\n                # Normalize E, pT, eta\n                kinematic = obj_slice[mask, 1:4]\n                kinematic_norm = self.kinematic_scaler.transform(kinematic)\n                X_transformed[mask, start_idx+1:start_idx+4] = kinematic_norm\n\n                # Normalize phi\n                phi = obj_slice[mask, 4:5]\n                phi_norm = self.phi_scaler.transform(phi)\n                X_transformed[mask, start_idx+4:start_idx+5] = phi_norm\n\n        return torch.from_numpy(X_transformed).float()\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# ---------- MODEL DEFINITION ----------\nclass BinaryClassifier(nn.Module):\n    def __init__(self, sample_object):\n        super().__init__()\n\n        # Input shape: [batch_size, 92]\n        # Global features: 2\n        # Per object: 5 features, max 18 objects\n\n        # Process global features separately\n        self.global_net = nn.Sequential(\n            nn.Linear(2, 64),\n            nn.BatchNorm1d(64),\n            nn.ReLU(),\n            nn.Dropout(0.3),\n            nn.Linear(64, 64),\n            nn.BatchNorm1d(64),\n            nn.ReLU(),\n            nn.Dropout(0.3)\n        )\n\n        # Process object features\n        self.object_encoder = nn.Sequential(\n            nn.Linear(5, 128),\n            nn.BatchNorm1d(128),\n            nn.ReLU(),\n            nn.Dropout(0.4),\n            nn.Linear(128, 128),\n            nn.BatchNorm1d(128),\n            nn.ReLU(),\n            nn.Dropout(0.4),\n            nn.Linear(128, 64)\n        )\n\n        # Attention mechanism for objects\n        self.attention = nn.Sequential(\n            nn.Linear(64, 32),\n            nn.ReLU(),\n            nn.Linear(32, 1)\n        )\n\n        # Combine global and object features\n        self.combined_net = nn.Sequential(\n            nn.Linear(128, 256),  # 64 (global) + 64 (objects) = 128\n            nn.BatchNorm1d(256),\n            nn.ReLU(),\n            nn.Dropout(0.5),\n            nn.Linear(256, 128),\n            nn.BatchNorm1d(128),\n            nn.ReLU(),\n            nn.Dropout(0.5),\n            nn.Linear(128, 64),\n            nn.BatchNorm1d(64),\n            nn.ReLU(),\n            nn.Dropout(0.5),\n            nn.Linear(64, 1)\n        )\n\n    def forward(self, batch_x):\n        # batch_x shape: [batch_size, 92]\n        batch_size = batch_x.shape[0]\n\n        # Extract global features\n        global_features = batch_x[:, :2]  # [batch_size, 2]\n        global_encoded = self.global_net(global_features)  # [batch_size, 64]\n\n        # Process objects\n        object_features_list = []\n\n        for i in range(18):\n            start_idx = 2 + i * 5\n            obj_features = batch_x[:, start_idx:start_idx+5]  # [batch_size, 5]\n\n            # Create mask for real objects (obj_id != 0)\n            mask = obj_features[:, 0] != 0\n\n            # Encode object features\n            obj_encoded = self.object_encoder(obj_features)  # [batch_size, 64]\n\n            # Apply attention weights\n            attention_weights = self.attention(obj_encoded)  # [batch_size, 1]\n            attention_weights = torch.sigmoid(attention_weights)\n\n            # Apply mask: zero out padded objects\n            attention_weights = attention_weights * mask.float().unsqueeze(1)\n\n            # Store weighted object features\n            object_features_list.append(obj_encoded * attention_weights)\n\n        # Stack all object features\n        object_features = torch.stack(object_features_list, dim=1)  # [batch_size, 18, 64]\n\n        # Aggregate object features (sum over objects)\n        object_aggregated = torch.sum(object_features, dim=1)  # [batch_size, 64]\n\n        # Normalize by number of real objects\n        real_objects_mask = batch_x[:, 2::5] != 0  # [batch_size, 18]\n        num_real_objects = torch.sum(real_objects_mask.float(), dim=1, keepdim=True)  # [batch_size, 1]\n        num_real_objects = torch.clamp(num_real_objects, min=1.0)\n        object_aggregated = object_aggregated / num_real_objects  # [batch_size, 64]\n\n        # Combine global and object features\n        combined = torch.cat([global_encoded, object_aggregated], dim=1)  # [batch_size, 128]\n\n        # Final classification\n        output = self.combined_net(combined)  # [batch_size, 1]\n\n        return output.squeeze(-1)  # [batch_size]\n\ndef make_model(example_object):\n    return BinaryClassifier(example_object)\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 50\n\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    # Setup\n    criterion = nn.BCEWithLogitsLoss()\n    optimizer = torch.optim.AdamW(model.parameters(), lr=0.001, weight_decay=1e-4)\n    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(\n        optimizer, mode='min', factor=0.5, patience=5, verbose=False\n    )\n\n    # Early stopping\n    best_val_loss = float('inf')\n    patience_counter = 0\n    patience = 10\n\n    train_losses = []\n    val_losses = []\n    train_accs = []\n    val_accs = []\n\n    for epoch in range(epochs):\n        # Training\n        model.train()\n        train_loss = 0.0\n        train_correct = 0\n        train_total = 0\n\n        for batch in train_loader:\n            view = normalise_batch(batch, device=device)\n            xb, yb = view.batch_x, view.batch_y\n\n            optimizer.zero_grad()\n            outputs = model(xb)\n\n            # Convert labels to float for BCEWithLogitsLoss\n            yb_float = yb.float()\n\n            loss = criterion(outputs, yb_float)\n            loss.backward()\n\n            # Gradient clipping\n            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)\n\n            optimizer.step()\n\n            train_loss += loss.item() * xb.shape[0]\n\n            # Calculate accuracy\n            preds = torch.sigmoid(outputs) > 0.5\n            train_correct += (preds == yb).sum().item()\n            train_total += yb.size(0)\n\n        avg_train_loss = train_loss / train_total\n        train_acc = train_correct / train_total\n\n        # Validation\n        model.eval()\n        val_loss = 0.0\n        val_correct = 0\n        val_total = 0\n\n        with torch.no_grad():\n            for batch in val_loader:\n                view = normalise_batch(batch, device=device)\n                xb, yb = view.batch_x, view.batch_y\n\n                outputs = model(xb)\n                yb_float = yb.float()\n                loss = criterion(outputs, yb_float)\n\n                val_loss += loss.item() * xb.shape[0]\n\n                preds = torch.sigmoid(outputs) > 0.5\n                val_correct += (preds == yb).sum().item()\n                val_total += yb.size(0)\n\n        avg_val_loss = val_loss / val_total\n        val_acc = val_correct / val_total\n\n        # Record metrics\n        train_losses.append(avg_train_loss)\n        val_losses.append(avg_val_loss)\n        train_accs.append(train_acc)\n        val_accs.append(val_acc)\n\n        # Update scheduler\n        scheduler.step(avg_val_loss)\n\n        # Early stopping check\n        if avg_val_loss < best_val_loss:\n            best_val_loss = avg_val_loss\n            patience_counter = 0\n            # Save best model\n            best_model_state = model.state_dict().copy()\n        else:\n            patience_counter += 1\n\n        if patience_counter >= patience:\n            print(f\"Early stopping at epoch {epoch+1}\")\n            # Restore best model\n            model.load_state_dict(best_model_state)\n            break\n\n        # Print progress\n        if (epoch + 1) % 5 == 0:\n            print(f\"Epoch {epoch+1}/{epochs}, \"\n                  f\"Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}, \"\n                  f\"Train Acc: {train_acc:.4f}, Val Acc: {val_acc:.4f}\")\n\n    return model, train_losses, val_losses, train_accs, val_accs\n\n# ---------------------------  END OF LLM-CODE BLOCK  ---------------------------",
+    "reasoning": "",
+    "Outer_attempt": 1
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-12-26T16:42:04Z",
+    "PyLint": {
+      "passed": false,
+      "messages": [
+        {
+          "type": "error",
+          "module": "script_deepseek_deepseek-v3.2_1741_1",
+          "obj": "train_model",
+          "line": 368,
+          "column": 34,
+          "endLine": 368,
+          "endColumn": 50,
+          "path": "outputs\\12-26\\FOURTOPS\\Q1\\script_deepseek_deepseek-v3.2_1741_1.py",
+          "symbol": "possibly-used-before-assignment",
+          "message": "Possibly using variable 'best_model_state' before assignment",
+          "message-id": "E0606"
+        }
+      ]
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-12-26T16:42:04Z",
+        "metrics": {
+          ".\\outputs\\12-26\\FOURTOPS\\Q1\\script_deepseek_deepseek-v3.2_1741_1.py": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 291,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 291,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  }
+}

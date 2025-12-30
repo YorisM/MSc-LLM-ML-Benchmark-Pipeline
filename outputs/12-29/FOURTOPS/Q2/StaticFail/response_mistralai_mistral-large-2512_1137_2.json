@@ -1,0 +1,89 @@
+{
+  "LLMGeneration": {
+    "model": "mistralai/mistral-large-2512",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 4131,
+    "prompt_chars": 15845,
+    "response_tokens": 2674,
+    "response_chars": 9766,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.0060765,
+    "generation_ms": 56593,
+    "code": "# ---------- IMPORTS ----------\nfrom sklearn.preprocessing import RobustScaler\nfrom torch.optim import AdamW\nfrom torch.optim.lr_scheduler import ReduceLROnPlateau\nfrom torch.nn import functional as F\nfrom torch.nn import TransformerEncoder, TransformerEncoderLayer\nimport math\n\n# ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.scaler = RobustScaler()\n        self.obj_ids = [0, 1, 2, 3, 4, 5, 6, 21]  # Common object IDs in particle physics\n        self.max_objects = 18\n        self.global_features = 2\n        self.per_object_features = 5\n\n    def make_loader_cfg(self) -> dict:\n        return {\n            \"dataset_builder\": \"llm_script:FourTopsDataset\",\n            \"dataset_kwargs\": {},\n            \"loader_class\": \"torch.utils.data:DataLoader\",\n            \"batch_size\": 512,\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": False,\n            \"collate\": None,\n            \"extra_loader_kwargs\": {},\n            \"eval_overrides\": {\"shuffle\": False},\n        }\n\n    def fit(self, X, y=None):\n        # Extract global features (E_T_miss, phi_Et_miss) and object features\n        global_features = X[:, :2].numpy()  # [N, 2]\n        self.scaler.fit(global_features)\n        return self\n\n    def transform(self, X):\n        # Split into global and object features\n        global_features = X[:, :2]  # [N, 2]\n        object_features = X[:, 2:]  # [N, 90]\n\n        # Scale global features\n        global_features = torch.tensor(self.scaler.transform(global_features.numpy()), dtype=torch.float32)\n\n        # Reshape object features into [N, 18, 5]\n        object_features = object_features.view(-1, self.max_objects, self.per_object_features)  # [N, 18, 5]\n\n        # Extract kinematic features (E, pT, eta, phi) and object IDs\n        obj_ids = object_features[:, :, 0].long()  # [N, 18]\n        kinematics = object_features[:, :, 1:]  # [N, 18, 4]\n\n        # Create mask for valid objects (non-zero pT)\n        mask = (kinematics[:, :, 1] > 0)  # [N, 18]\n\n        # Compute pairwise features for valid objects\n        N = X.shape[0]\n        pairwise_features = []\n\n        for i in range(N):\n            # Get valid objects for this event\n            valid_mask = mask[i]  # [18]\n            valid_kinematics = kinematics[i][valid_mask]  # [num_valid, 4]\n            num_valid = valid_kinematics.shape[0]\n\n            if num_valid < 2:\n                # Not enough objects for pairwise features\n                pairwise_features.append(torch.zeros(1, 2))\n                continue\n\n            # Compute pairwise invariant mass and deltaR\n            E = valid_kinematics[:, 0]  # [num_valid]\n            px = valid_kinematics[:, 1] * torch.cos(valid_kinematics[:, 3])  # [num_valid]\n            py = valid_kinematics[:, 1] * torch.sin(valid_kinematics[:, 3])  # [num_valid]\n            pz = valid_kinematics[:, 1] * torch.sinh(valid_kinematics[:, 2])  # [num_valid]\n\n            # Compute all pairwise combinations\n            idx = torch.combinations(torch.arange(num_valid), 2)\n            E_i, E_j = E[idx[:, 0]], E[idx[:, 1]]\n            px_i, px_j = px[idx[:, 0]], px[idx[:, 1]]\n            py_i, py_j = py[idx[:, 0]], py[idx[:, 1]]\n            pz_i, pz_j = pz[idx[:, 0]], pz[idx[:, 1]]\n            eta_i, eta_j = valid_kinematics[idx[:, 0], 2], valid_kinematics[idx[:, 1], 2]\n            phi_i, phi_j = valid_kinematics[idx[:, 0], 3], valid_kinematics[idx[:, 1], 3]\n\n            # Invariant mass: m_ij = sqrt((E_i + E_j)^2 - (px_i + px_j)^2 - (py_i + py_j)^2 - (pz_i + pz_j)^2)\n            m_ij = torch.sqrt(\n                (E_i + E_j)**2 -\n                (px_i + px_j)**2 -\n                (py_i + py_j)**2 -\n                (pz_i + pz_j)**2\n            )  # [num_pairs]\n\n            # DeltaR: sqrt((eta_i - eta_j)^2 + (phi_i - phi_j)^2)\n            deltaR = torch.sqrt(\n                (eta_i - eta_j)**2 +\n                (phi_i - phi_j)**2\n            )  # [num_pairs]\n\n            # Take mean and max of pairwise features\n            pairwise_mean = torch.stack([m_ij.mean(), deltaR.mean()])\n            pairwise_max = torch.stack([m_ij.max(), deltaR.max()])\n            pairwise_features.append(torch.cat([pairwise_mean, pairwise_max]).unsqueeze(0))\n\n        pairwise_features = torch.cat(pairwise_features, dim=0)  # [N, 4]\n\n        # Combine all features\n        combined_features = torch.cat([\n            global_features,\n            pairwise_features,\n            kinematics.mean(dim=1),  # [N, 4] mean kinematics\n            kinematics.max(dim=1)[0],  # [N, 4] max kinematics\n            mask.sum(dim=1, keepdim=True).float()  # [N, 1] number of valid objects\n        ], dim=1)  # [N, 2 + 4 + 4 + 4 + 1 = 15]\n\n        return combined_features\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# ---------- MODEL DEFINITION ----------\nclass PositionalEncoding(nn.Module):\n    def __init__(self, d_model, max_len=5000):\n        super().__init__()\n        position = torch.arange(max_len).unsqueeze(1)\n        div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))\n        pe = torch.zeros(max_len, d_model)\n        pe[:, 0::2] = torch.sin(position * div_term)\n        pe[:, 1::2] = torch.cos(position * div_term)\n        self.register_buffer('pe', pe)\n\n    def forward(self, x):\n        return x + self.pe[:x.size(1)]\n\nclass BinaryClassifier(nn.Module):\n    def __init__(self, sample_object):\n        super().__init__()\n        input_dim = sample_object.shape[1]\n\n        # Transformer encoder\n        self.encoder_layer = TransformerEncoderLayer(\n            d_model=128,\n            nhead=8,\n            dim_feedforward=512,\n            dropout=0.1,\n            activation='gelu',\n            batch_first=True\n        )\n        self.transformer_encoder = TransformerEncoder(self.encoder_layer, num_layers=4)\n\n        # Positional encoding\n        self.pos_encoder = PositionalEncoding(d_model=128)\n\n        # Input projection\n        self.input_proj = nn.Linear(input_dim, 128)\n\n        # Output layers\n        self.fc = nn.Sequential(\n            nn.Linear(128, 64),\n            nn.GELU(),\n            nn.Dropout(0.1),\n            nn.Linear(64, 32),\n            nn.GELU(),\n            nn.Dropout(0.1),\n            nn.Linear(32, 1)\n        )\n\n    def forward(self, batch_x):\n        # batch_x: [batch_size, input_dim]\n        x = self.input_proj(batch_x)  # [batch_size, 128]\n        x = self.pos_encoder(x.unsqueeze(1))  # [batch_size, 1, 128]\n\n        # Transformer expects [batch_size, seq_len, d_model]\n        x = self.transformer_encoder(x)  # [batch_size, 1, 128]\n\n        # Global average pooling\n        x = x.mean(dim=1)  # [batch_size, 128]\n\n        # Output\n        logits = self.fc(x).squeeze(-1)  # [batch_size]\n        return logits\n\ndef make_model(example_object):\n    return BinaryClassifier(example_object)\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 20\n\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    optimizer = AdamW(model.parameters(), lr=3e-4, weight_decay=1e-5)\n    scheduler = ReduceLROnPlateau(optimizer, 'max', patience=3, factor=0.5, verbose=True)\n    criterion = nn.BCEWithLogitsLoss()\n\n    best_auc = 0.0\n    best_model = None\n    train_losses = []\n    val_losses = []\n    train_aucs = []\n    val_aucs = []\n\n    for epoch in range(epochs):\n        model.train()\n        train_loss = 0.0\n        train_preds = []\n        train_targets = []\n\n        for batch in train_loader:\n            view = normalise_batch(batch, device=device)\n            xb, yb = view.batch_x, view.batch_y.float()\n\n            optimizer.zero_grad()\n            logits = model(xb)\n            loss = criterion(logits, yb)\n            loss.backward()\n            optimizer.step()\n\n            train_loss += loss.item()\n            train_preds.append(torch.sigmoid(logits).detach().cpu())\n            train_targets.append(yb.detach().cpu())\n\n        train_loss /= len(train_loader)\n        train_preds = torch.cat(train_preds).numpy()\n        train_targets = torch.cat(train_targets).numpy()\n        train_auc = roc_auc_score(train_targets, train_preds)\n\n        # Validation\n        model.eval()\n        val_loss = 0.0\n        val_preds = []\n        val_targets = []\n\n        with torch.no_grad():\n            for batch in val_loader:\n                view = normalise_batch(batch, device=device)\n                xb, yb = view.batch_x, view.batch_y.float()\n                logits = model(xb)\n                loss = criterion(logits, yb)\n\n                val_loss += loss.item()\n                val_preds.append(torch.sigmoid(logits).detach().cpu())\n                val_targets.append(yb.detach().cpu())\n\n        val_loss /= len(val_loader)\n        val_preds = torch.cat(val_preds).numpy()\n        val_targets = torch.cat(val_targets).numpy()\n        val_auc = roc_auc_score(val_targets, val_preds)\n\n        # Update scheduler\n        scheduler.step(val_auc)\n\n        # Store metrics\n        train_losses.append(train_loss)\n        val_losses.append(val_loss)\n        train_aucs.append(train_auc)\n        val_aucs.append(val_auc)\n\n        print(f\"Epoch {epoch+1}/{epochs} - Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}, \"\n              f\"Train AUC: {train_auc:.4f}, Val AUC: {val_auc:.4f}\")\n\n        # Early stopping\n        if val_auc > best_auc:\n            best_auc = val_auc\n            best_model = model.state_dict()\n            patience = 0\n        else:\n            patience += 1\n            if patience >= 5:\n                print(\"Early stopping triggered\")\n                break\n\n    # Load best model\n    if best_model is not None:\n        model.load_state_dict(best_model)\n\n    return model, train_losses, val_losses, train_aucs, val_aucs",
+    "reasoning": "",
+    "Outer_attempt": 2
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-12-29T10:37:33Z",
+    "PyLint": {
+      "passed": false,
+      "messages": [
+        {
+          "type": "error",
+          "module": "script_mistralai_mistral-large-2512_1137_2",
+          "obj": "train_model",
+          "line": 274,
+          "column": 20,
+          "endLine": 274,
+          "endColumn": 33,
+          "path": "outputs\\12-29\\FOURTOPS\\Q2\\script_mistralai_mistral-large-2512_1137_2.py",
+          "symbol": "undefined-variable",
+          "message": "Undefined variable 'roc_auc_score'",
+          "message-id": "E0602"
+        },
+        {
+          "type": "error",
+          "module": "script_mistralai_mistral-large-2512_1137_2",
+          "obj": "train_model",
+          "line": 296,
+          "column": 18,
+          "endLine": 296,
+          "endColumn": 31,
+          "path": "outputs\\12-29\\FOURTOPS\\Q2\\script_mistralai_mistral-large-2512_1137_2.py",
+          "symbol": "undefined-variable",
+          "message": "Undefined variable 'roc_auc_score'",
+          "message-id": "E0602"
+        }
+      ]
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-12-29T10:37:33Z",
+        "metrics": {
+          ".\\outputs\\12-29\\FOURTOPS\\Q2\\script_mistralai_mistral-large-2512_1137_2.py": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 279,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 279,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  }
+}

@@ -1,0 +1,76 @@
+{
+  "LLMGeneration": {
+    "model": "x-ai/grok-code-fast-1",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 3815,
+    "prompt_chars": 15878,
+    "response_tokens": 7877,
+    "response_chars": 11932,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.01189882,
+    "generation_ms": 69156,
+    "code": "# <start code template>\n# ---------- IMPORTS ----------\n# NOTE: Some imports (torch, nn, numpy, DataLoader) are already available (see prefix).\n# Only import extra std-lib modules or modules available in the environment, i.e: torch, scipy, sklearn (sub-)modules you actually use.\n# <LLM: Import modules>\nimport torch.nn.functional as F\nfrom sklearn.preprocessing import StandardScaler\nimport torch.nn as nn\n\n# -------- (OPTIONAL) CUSTOM DATASET  --------\n# def make_dataset(events, pre, train: bool, **kwargs):\n#   REQUIREMENT: If you want a custom dataset: in make_loader_cfg set dataset_builder to \"llm_script:make_dataset\"\n#   k = kwargs.get(\"k\", 16)\n#   <LLM: Insert custom dataset logic here>\n#   return CustomDataset(events, pre, train=train, k=k)\n\n# ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    # Must implement:\n    #   - fit()\n    #   - transform()\n\n    # REQUIREMENTS\n    #   - IMPORTANT: All state must be picklable with the std-lib pickle module.\n    #   - May allocate NumPy arrays or Torch tensors internally, but: transform() must be deterministic.\n    #   - Store only derived parameters needed for transform i.e. do not store the raw data itself in the preprocessor object.\n\n    # TIPS\n    #   - IMPORTANT Default data flow: events[idx] -> split_X_y(evt) -> X, y\n    #   - When modifying data features or feature engineering: annotate tensor size as comments after each tensor operation to reduce dimension mismatches.\n\n    # <LLM: Write code to preprocess the data> \n\n    def __init__(self):\n        self.scaler = StandardScaler()\n\n    def make_loader_cfg(self) -> dict: \n        return {\n            \"dataset_builder\": \"utils.llm_io:EventDataset\",\n            \"dataset_kwargs\": {},\n\n            \"loader_class\": \"torch.utils.data:DataLoader\",    # or torch_geometric.loader:DataLoader\n            \"batch_size\": 8,\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": False,\n\n            # NO custom collate callables allowed. Choose one:\n            \"collate\": \"ragged_xy\",  # or \"identity\" or None\n\n            \"extra_loader_kwargs\": {},\n\n            # evaluation overrides (optional):\n            \"eval_overrides\": {\"shuffle\": False}\n        }\n\n    def fit(self, Xs):\n        # Xs: list of per-event X, each [N_hits_i, F_raw]\n        all_X = torch.cat(Xs, dim=0)  # [total_hits, 4]\n        self.scaler.fit(all_X.numpy()[:, :3])\n        self.layer_offset = torch.cat([X[:, 3] for X in Xs]).min().item()\n        return self\n\n    def transform(self, X):\n        # X: one event array/tensor [N_hits, F_raw]\n        X_scaled = X.clone()\n        X_scaled[:, :3] = torch.from_numpy(self.scaler.transform(X[:, :3].numpy())).float()\n        X_scaled[:, 3] = X[:, 3] - self.layer_offset\n        return X_scaled  # MUST return torch.FloatTensor [N_hits, 4] for the default EventDataset path.\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# ---------- MODEL ARCHITECTURE ----------\nclass PositionalEncoding(nn.Module):\n    def __init__(self, d_model, dropout=0.1, max_len=1024):\n        super().__init__()\n        self.dropout = nn.Dropout(p=dropout)\n        pe = torch.zeros(max_len, d_model)\n        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)\n        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-torch.log(torch.tensor(10000.0)) / d_model))\n        pe[:, 0::2] = torch.sin(position * div_term)\n        pe[:, 1::2] = torch.cos(position * div_term)\n        pe = pe.unsqueeze(0).transpose(0, 1)\n        self.register_buffer('pe', pe)\n\n    def forward(self, x):\n        # x: [seq_len, batch_size, d_model]\n        x = x + self.pe[:x.size(0), :]\n        return self.dropout(x)\n\nclass HitClassifier(nn.Module):\n    def __init__(self, example_batch_x):\n        super().__init__()\n        # example_batch_x: ragged list of [N_hits, 4] tensors (after preproc)\n        self.num_classes = 64  # fixed number of classes, 0 for noise, 1 to 63 for tracks\n        self.max_len = 1024\n        F = example_batch_x[0].shape[1]  # 4\n        layer_ids = example_batch_x[0][:, 3].long()\n        self.num_layers = torch.unique(layer_ids).max().item() + 1\n        self.layer_embed = nn.Embedding(self.num_layers, 16)\n        embed_dim = 64 + 16\n        self.hit_embed = nn.Linear(3, 64)  # for r, theta, z\n        self.pos_embed = PositionalEncoding(embed_dim, dropout=0.1)\n        self.transformer = nn.TransformerEncoder(\n            nn.TransformerEncoderLayer(d_model=embed_dim, nhead=4, dim_feedforward=256, dropout=0.1),\n            num_layers=6\n        )\n        self.classifier = nn.Linear(embed_dim, self.num_classes)\n\n    def forward(self, batch_x):\n        # batch_x: list of [N_hits, 4] tensors\n        batch_output = []\n        for X in batch_x:\n            N = X.shape[0]\n            if N == 0:\n                batch_output.append(torch.tensor([], dtype=torch.int64))\n                continue\n            r_theta_z = X[:, :3]  # [N, 3]\n            layer = X[:, 3].long()  # [N]\n            pad_len = self.max_len - N\n            r_theta_z_padded = torch.cat([r_theta_z, torch.zeros(pad_len, 3, device=X.device)], dim=0)  # [max_len, 3]\n            layer_padded = torch.cat([layer, torch.zeros(pad_len, device=X.device, dtype=torch.long)], dim=0)  # [max_len]\n            layer_emb = self.layer_embed(layer_padded)  # [max_len, 16]\n            hit_emb = self.hit_embed(r_theta_z_padded)  # [max_len, 64]\n            concatenated = torch.cat([hit_emb, layer_emb], dim=-1)  # [max_len, 80]\n            seq = concatenated.unsqueeze(1)  # [max_len, 1, 80]\n            seq = seq.transpose(0, 1)  # [1, max_len, 80]\n            src_key_padding_mask = torch.zeros(1, self.max_len, dtype=torch.bool, device=X.device)\n            src_key_padding_mask[0, N:] = True\n            out = self.transformer(seq, src_key_padding_mask=src_key_padding_mask)  # [1, max_len, 80]\n            out = out.squeeze(0)  # [max_len, 80]\n            out_class = self.classifier(out)  # [max_len, 64]\n            predicted = out_class.argmax(dim=-1)  # [max_len]\n            predicted = predicted[:N].clone()  # [N]\n            # map to >0 for tracks, -1 for noise (if any predicted 0; but 0 is noise, so for tracks >=1, set to >0 or -1? Wait, output must be >0 for tracks, -1 for noise.\n            # Since 0 is noise, set predicted == 0 to -1, else keep (1 to 63 are tracks)\n            predicted = torch.where(predicted == 0, -1, predicted)\n            batch_output.append(predicted)\n        return batch_output\n\ndef make_model(example_batch_x):\n    return HitClassifier(example_batch_x)\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 20\ndef train_model(model, train_loader, val_loader, epochs):\n    # If your method is non-parametric, train_model may be a no-op that returns the unmodified model and empty metric lists, otherwise:\n\n    # REQUIREMENTS \n    #   Do NOT pass \"verbose=\" to any PyTorch scheduler (not supported in this image).\n    #   Must return trained_model, train_loss, val_loss, train_acc, val_acc\n    #   Implement early-stopping.\n    #   Use CUDA - torch.cuda.is_available()\n    #   Forward signature must match.\n\n    # <LLM: Write code to define training loop>\n    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)\n    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.75)\n    num_classes = model.num_classes\n\n    best_model_weights = None\n    best_acc = -1.0\n    patience = 5\n    trigger = 0\n    epochs = epochs if epochs is not None else EPOCHS\n\n    train_loss_list = []\n    val_loss_list = []\n    train_acc_list = []\n    val_acc_list = []\n\n    for epoch in range(epochs):\n        model.train()\n        total_loss = 0.0\n        total_correct = 0\n        total_hits = 0\n        for batch in train_loader:\n            view = normalise_batch(batch, device=device)\n            batch_x = view.batch_x\n            ys = view.batch_y\n            model.zero_grad()\n            pred_logits_per_event = model(batch_x)\n            loss_sum = 0.0\n            for i, pred_logits in enumerate(pred_logits_per_event):\n                N_i = len(ys[i])\n                y = ys[i]\n                # Renumber y: unique track_ids >0, sorted, map to 1 to M, 0 stays 0\n                unique_tids = torch.unique(y[y > 0])\n                if len(unique_tids) == 0:\n                    M = 0\n                else:\n                    unique_tids_sorted = torch.sort(unique_tids)[0]\n                    M = len(unique_tids_sorted)\n                map_tid = {tid.item(): j + 1 for j, tid in enumerate(unique_tids_sorted)}  # 1 to M\n                renumbered = torch.tensor([map_tid.get(y[j].item(), 0) if y[j] != 0 else 0 for j in range(N_i)], dtype=torch.long, device=device)\n                pred_logits_subset = pred_logits[:N_i]\n                loss = F.cross_entropy(pred_logits_subset, renumbered, ignore_index=-1)\n                loss_sum += loss * N_i\n                predicted = pred_logits_subset.argmax(dim=-1)\n                correct = (predicted == renumbered) & (renumbered != -1)\n                total_correct += correct.sum().item()\n                total_hits += N_i\n            loss_sum.backward()\n            optimizer.step()\n            total_loss += loss_sum.item()\n        scheduler.step()\n        train_loss = total_loss / total_hits if total_hits > 0 else 0\n        train_acc = total_correct / total_hits if total_hits > 0 else 0\n        train_loss_list.append(train_loss)\n        train_acc_list.append(train_acc)\n\n        # Validation\n        model.eval()\n        total_val_loss = 0.0\n        total_val_correct = 0\n        total_val_hits = 0\n        with torch.no_grad():\n            for batch in val_loader:\n                view = normalise_batch(batch, device=device)\n                batch_x = view.batch_x\n                ys = view.batch_y\n                pred_logits_per_event = model(batch_x)\n                loss_sum = 0.0\n                for i, pred_logits in enumerate(pred_logits_per_event):\n                    N_i = len(ys[i])\n                    y = ys[i]\n                    # Same renumbering\n                    unique_tids = torch.unique(y[y > 0])\n                    if len(unique_tids) == 0:\n                        M = 0\n                    else:\n                        unique_tids_sorted = torch.sort(unique_tids)[0]\n                        M = len(unique_tids_sorted)\n                    map_tid = {tid.item(): j + 1 for j, tid in enumerate(unique_tids_sorted)}\n                    renumbered = torch.tensor([map_tid.get(y[j].item(), 0) if y[j] != 0 else 0 for j in range(N_i)], dtype=torch.long, device=device)\n                    pred_logits_subset = pred_logits[:N_i]\n                    loss = F.cross_entropy(pred_logits_subset, renumbered, ignore_index=-1)\n                    loss_sum += loss * N_i\n                    predicted = pred_logits_subset.argmax(dim=-1)\n                    correct = (predicted == renumbered) & (renumbered != -1)\n                    total_val_correct += correct.sum().item()\n                    total_val_hits += N_i\n                total_val_loss += loss_sum.item()\n        val_loss = total_val_loss / total_val_hits if total_val_hits > 0 else 0\n        val_acc = total_val_correct / total_val_hits if total_val_hits > 0 else 0\n        val_loss_list.append(val_loss)\n        val_acc_list.append(val_acc)\n\n        # Early stopping\n        if val_acc > best_acc:\n            best_acc = val_acc\n            best_model_weights = model.state_dict().copy()\n            trigger = 0\n        else:\n            trigger += 1\n            if trigger >= patience:\n                break\n\n    # Load best model\n    if best_model_weights is not None:\n        model.load_state_dict(best_model_weights)\n\n    return model, train_loss_list, val_loss_list, train_acc_list, val_acc_list\n\n# IMPORTANT: DO NOT execute the pipeline here – the harness will do that.\n# <end code template>",
+    "reasoning": "",
+    "Outer_attempt": 2
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-12-19T09:58:06Z",
+    "PyLint": {
+      "passed": false,
+      "messages": [
+        {
+          "type": "error",
+          "module": "script_x-ai_grok-code-fast-1_1057_2",
+          "obj": "_load_events",
+          "line": 27,
+          "column": 15,
+          "endLine": 27,
+          "endColumn": 21,
+          "path": "outputs\\12-19\\TRACKFORMERS\\Q1\\script_x-ai_grok-code-fast-1_1057_2.py",
+          "symbol": "undefined-variable",
+          "message": "Undefined variable 'pickle'",
+          "message-id": "E0602"
+        }
+      ]
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-12-19T09:58:06Z",
+        "metrics": {
+          ".\\outputs\\12-19\\TRACKFORMERS\\Q1\\script_x-ai_grok-code-fast-1_1057_2.py": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 277,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 277,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  }
+}

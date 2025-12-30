@@ -8,8 +8,19 @@ matplotlib==3.10.3
 pandas==2.2.3
 hdbscan==0.8.40
 
-torch==2.6.0+cu124
+--extra-index-url https://download.pytorch.org/whl/cu126
+torch==2.6.0+cu126
+
+--extra-index-url https://data.pyg.org/whl/torch-2.6.0+cu126.html
+torch-scatter
+torch-sparse
+torch-cluster
+torch-spline-conv
+
 torch_geometric==2.6.1 
+
+pylint==4.0.2
+bandit==1.8.6
 
 requests==2.32.4
 psutil==7.0.0

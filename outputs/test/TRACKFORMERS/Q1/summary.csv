@@ -1,0 +1,300 @@
+script,success,return_code,stdout,stderr,duration_s,max_rss_kb
+C:\Users\yoris\projects\Benchmark\outputs\test\TRACKFORMERS\Q1\gru_multi\gru_multi.py,True,0,"argv0=/usr/local/bin/train.sh
+argv1=outputs/test/TRACKFORMERS/Q1/gru_multi/gru_multi.py
+argv2=
+","+ exec
++ PY=outputs/test/TRACKFORMERS/Q1/gru_multi/gru_multi.py
++ shift
+++ echo ''
+++ tr -d '\r\n'
+++ xargs
++ DRY=
++ [[ outputs/test/TRACKFORMERS/Q1/gru_multi/gru_multi.py == \/\u\s\r\/\l\o\c\a\l\/\b\i\n\/\t\r\a\i\n\.\s\h ]]
++ [[ '' =~ (--dryrun|--dry-run) ]]
++ TIMEOUT=99999
++ : 0
++ : 0
++ ulimit -t 99999
++ ((  MEMORY_LIMIT_GB > 0  ))
++ ((  PIDS_LIMIT > 0  ))
++ timeout --signal=KILL 99999s python outputs/test/TRACKFORMERS/Q1/gru_multi/gru_multi.py
+mkdir -p failed for path /home/sandbox/.config/matplotlib: [Errno 30] Read-only file system: '/home/sandbox/.config'
+Matplotlib created a temporary cache directory at /tmp/matplotlib-q2gz_ya3 because there was an issue with the default path (/home/sandbox/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.
+#TRAIN_METRICS#{""epochs"": 1, ""train_loss"": [0.018699560314416885], ""val_loss"": [0.013989224098622799], ""train_acc"": [0.0], ""val_acc"": [0.0]}
++ python_rc=0
++ [[ 0 -ne 0 ]]
++ [[ '' =~ (--dryrun|--dry-run) ]]
+++ dirname outputs/test/TRACKFORMERS/Q1/gru_multi/gru_multi.py
++ MODEL_DIR=outputs/test/TRACKFORMERS/Q1/gru_multi
++ pushd outputs/test/TRACKFORMERS/Q1/gru_multi
++ shopt -s nullglob
++ ref=
++ for cand in *_model.pkl *_state.pt *_preproc.pkl
++ [[ -e gru_multi_model.pkl ]]
++ ref=gru_multi_model.pkl
++ break
++ [[ -z gru_multi_model.pkl ]]
++ stem=gru_multi_model.pkl
++ case ""$ref"" in
++ stem=gru_multi
++ MANIFEST=gru_multi_manifest.sha256
++ files=(""${stem}_state.pt"" ""${stem}_model.pkl"" ""${stem}_preproc.pkl"")
++ have=()
++ for f in ""${files[@]}""
++ [[ -e gru_multi_state.pt ]]
++ have+=(""$f"")
++ for f in ""${files[@]}""
++ [[ -e gru_multi_model.pkl ]]
++ have+=(""$f"")
++ for f in ""${files[@]}""
++ [[ -e gru_multi_preproc.pkl ]]
++ have+=(""$f"")
++ (( 3==0 ))
++ sha256sum gru_multi_state.pt gru_multi_model.pkl gru_multi_preproc.pkl
++ shopt -u nullglob
++ echo 'Hash manifest written â†’ gru_multi_manifest.sha256'
+Hash manifest written â†’ gru_multi_manifest.sha256
++ popd
+",11.103632200014545,808
+C:\Users\yoris\projects\Benchmark\outputs\test\TRACKFORMERS\Q1\mlp_padded\mlp_padded.py,False,1,"argv0=/usr/local/bin/train.sh
+argv1=outputs/test/TRACKFORMERS/Q1/mlp_padded/mlp_padded.py
+argv2=
+","+ exec
++ PY=outputs/test/TRACKFORMERS/Q1/mlp_padded/mlp_padded.py
++ shift
+++ echo ''
+++ tr -d '\r\n'
+++ xargs
++ DRY=
++ [[ outputs/test/TRACKFORMERS/Q1/mlp_padded/mlp_padded.py == \/\u\s\r\/\l\o\c\a\l\/\b\i\n\/\t\r\a\i\n\.\s\h ]]
++ [[ '' =~ (--dryrun|--dry-run) ]]
++ TIMEOUT=99999
++ : 0
++ : 0
++ ulimit -t 99999
++ ((  MEMORY_LIMIT_GB > 0  ))
++ ((  PIDS_LIMIT > 0  ))
++ timeout --signal=KILL 99999s python outputs/test/TRACKFORMERS/Q1/mlp_padded/mlp_padded.py
+mkdir -p failed for path /home/sandbox/.config/matplotlib: [Errno 30] Read-only file system: '/home/sandbox/.config'
+Matplotlib created a temporary cache directory at /tmp/matplotlib-zncn2gj9 because there was an issue with the default path (/home/sandbox/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.
+[DEBUG] collate from preproc: <function MyPreprocessor._collate_fn at 0x7fc494a2de40>
+[DEBUG] loader_cls: <class 'torch.utils.data.dataloader.DataLoader'>
+[DEBUG] first_batch type: <class 'list'>
+[DEBUG] normalise meta: {'source_type': 'list', 'mode': 'ragged_xy_list'}
+ERROR during training: The size of tensor a (399) must match the size of tensor b (256) at non-singleton dimension 1
+Traceback (most recent call last):
+  File ""/workspace/outputs/test/TRACKFORMERS/Q1/mlp_padded/mlp_padded.py"", line 290, in <module>
+    _run(dryrun=""--dryrun"" in sys.argv)
+  File ""/workspace/outputs/test/TRACKFORMERS/Q1/mlp_padded/mlp_padded.py"", line 242, in _run
+    trained_model, tr_loss, va_loss, tr_acc, va_acc = train_model(
+                                                      ^^^^^^^^^^^^
+  File ""/workspace/outputs/test/TRACKFORMERS/Q1/mlp_padded/mlp_padded.py"", line 172, in train_model
+    out = model(view.batch_x)
+          ^^^^^^^^^^^^^^^^^^^
+  File ""/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py"", line 1739, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py"", line 1750, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/workspace/outputs/test/TRACKFORMERS/Q1/mlp_padded/mlp_padded.py"", line 156, in forward
+    return logits.masked_select(mask)                         # [sumNi]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: The size of tensor a (399) must match the size of tensor b (256) at non-singleton dimension 1
+",10.395820000005187,80
+C:\Users\yoris\projects\Benchmark\outputs\test\TRACKFORMERS\Q1\mlp_ragged\mlp_ragged.py,True,0,"argv0=/usr/local/bin/train.sh
+argv1=outputs/test/TRACKFORMERS/Q1/mlp_ragged/mlp_ragged.py
+argv2=
+","+ exec
++ PY=outputs/test/TRACKFORMERS/Q1/mlp_ragged/mlp_ragged.py
++ shift
+++ echo ''
+++ tr -d '\r\n'
+++ xargs
++ DRY=
++ [[ outputs/test/TRACKFORMERS/Q1/mlp_ragged/mlp_ragged.py == \/\u\s\r\/\l\o\c\a\l\/\b\i\n\/\t\r\a\i\n\.\s\h ]]
++ [[ '' =~ (--dryrun|--dry-run) ]]
++ TIMEOUT=99999
++ : 0
++ : 0
++ ulimit -t 99999
++ ((  MEMORY_LIMIT_GB > 0  ))
++ ((  PIDS_LIMIT > 0  ))
++ timeout --signal=KILL 99999s python outputs/test/TRACKFORMERS/Q1/mlp_ragged/mlp_ragged.py
+mkdir -p failed for path /home/sandbox/.config/matplotlib: [Errno 30] Read-only file system: '/home/sandbox/.config'
+Matplotlib created a temporary cache directory at /tmp/matplotlib-kity5gbs because there was an issue with the default path (/home/sandbox/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.
+#TRAIN_METRICS#{""epochs"": 1, ""train_loss"": [0.1463737040758133], ""val_loss"": [0.13423490524291992], ""train_acc"": [0.0], ""val_acc"": [0.0]}
++ python_rc=0
++ [[ 0 -ne 0 ]]
++ [[ '' =~ (--dryrun|--dry-run) ]]
+++ dirname outputs/test/TRACKFORMERS/Q1/mlp_ragged/mlp_ragged.py
++ MODEL_DIR=outputs/test/TRACKFORMERS/Q1/mlp_ragged
++ pushd outputs/test/TRACKFORMERS/Q1/mlp_ragged
++ shopt -s nullglob
++ ref=
++ for cand in *_model.pkl *_state.pt *_preproc.pkl
++ [[ -e mlp_ragged_model.pkl ]]
++ ref=mlp_ragged_model.pkl
++ break
++ [[ -z mlp_ragged_model.pkl ]]
++ stem=mlp_ragged_model.pkl
++ case ""$ref"" in
++ stem=mlp_ragged
++ MANIFEST=mlp_ragged_manifest.sha256
++ files=(""${stem}_state.pt"" ""${stem}_model.pkl"" ""${stem}_preproc.pkl"")
++ have=()
++ for f in ""${files[@]}""
++ [[ -e mlp_ragged_state.pt ]]
++ have+=(""$f"")
++ for f in ""${files[@]}""
++ [[ -e mlp_ragged_model.pkl ]]
++ have+=(""$f"")
++ for f in ""${files[@]}""
++ [[ -e mlp_ragged_preproc.pkl ]]
++ have+=(""$f"")
++ (( 3==0 ))
++ sha256sum mlp_ragged_state.pt mlp_ragged_model.pkl mlp_ragged_preproc.pkl
++ shopt -u nullglob
++ echo 'Hash manifest written â†’ mlp_ragged_manifest.sha256'
+Hash manifest written â†’ mlp_ragged_manifest.sha256
++ popd
+",9.375438800023403,32
+C:\Users\yoris\projects\Benchmark\outputs\test\TRACKFORMERS\Q1\pyg\pyg.py,True,0,"argv0=/usr/local/bin/train.sh
+argv1=outputs/test/TRACKFORMERS/Q1/pyg/pyg.py
+argv2=
+","+ exec
++ PY=outputs/test/TRACKFORMERS/Q1/pyg/pyg.py
++ shift
+++ echo ''
+++ tr -d '\r\n'
+++ xargs
++ DRY=
++ [[ outputs/test/TRACKFORMERS/Q1/pyg/pyg.py == \/\u\s\r\/\l\o\c\a\l\/\b\i\n\/\t\r\a\i\n\.\s\h ]]
++ [[ '' =~ (--dryrun|--dry-run) ]]
++ TIMEOUT=99999
++ : 0
++ : 0
++ ulimit -t 99999
++ ((  MEMORY_LIMIT_GB > 0  ))
++ ((  PIDS_LIMIT > 0  ))
++ timeout --signal=KILL 99999s python outputs/test/TRACKFORMERS/Q1/pyg/pyg.py
+mkdir -p failed for path /home/sandbox/.config/matplotlib: [Errno 30] Read-only file system: '/home/sandbox/.config'
+Matplotlib created a temporary cache directory at /tmp/matplotlib-w98zllh4 because there was an issue with the default path (/home/sandbox/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.
+#TRAIN_METRICS#{""epochs"": 1, ""train_loss"": [0.29246100783348083], ""val_loss"": [0.19579875469207764], ""train_acc"": [0.0], ""val_acc"": [0.0]}
++ python_rc=0
++ [[ 0 -ne 0 ]]
++ [[ '' =~ (--dryrun|--dry-run) ]]
+++ dirname outputs/test/TRACKFORMERS/Q1/pyg/pyg.py
++ MODEL_DIR=outputs/test/TRACKFORMERS/Q1/pyg
++ pushd outputs/test/TRACKFORMERS/Q1/pyg
++ shopt -s nullglob
++ ref=
++ for cand in *_model.pkl *_state.pt *_preproc.pkl
++ [[ -e pyg_model.pkl ]]
++ ref=pyg_model.pkl
++ break
++ [[ -z pyg_model.pkl ]]
++ stem=pyg_model.pkl
++ case ""$ref"" in
++ stem=pyg
++ MANIFEST=pyg_manifest.sha256
++ files=(""${stem}_state.pt"" ""${stem}_model.pkl"" ""${stem}_preproc.pkl"")
++ have=()
++ for f in ""${files[@]}""
++ [[ -e pyg_state.pt ]]
++ have+=(""$f"")
++ for f in ""${files[@]}""
++ [[ -e pyg_model.pkl ]]
++ have+=(""$f"")
++ for f in ""${files[@]}""
++ [[ -e pyg_preproc.pkl ]]
++ have+=(""$f"")
++ (( 3==0 ))
++ sha256sum pyg_state.pt pyg_model.pkl pyg_preproc.pkl
++ shopt -u nullglob
++ echo 'Hash manifest written â†’ pyg_manifest.sha256'
+Hash manifest written â†’ pyg_manifest.sha256
++ popd
+",9.430501700000605,12
+C:\Users\yoris\projects\Benchmark\outputs\test\TRACKFORMERS\Q1\transformer_padded\transformer_padded.py,False,1,"argv0=/usr/local/bin/train.sh
+argv1=outputs/test/TRACKFORMERS/Q1/transformer_padded/transformer_padded.py
+argv2=
+","+ exec
++ PY=outputs/test/TRACKFORMERS/Q1/transformer_padded/transformer_padded.py
++ shift
+++ echo ''
+++ tr -d '\r\n'
+++ xargs
++ DRY=
++ [[ outputs/test/TRACKFORMERS/Q1/transformer_padded/transformer_padded.py == \/\u\s\r\/\l\o\c\a\l\/\b\i\n\/\t\r\a\i\n\.\s\h ]]
++ [[ '' =~ (--dryrun|--dry-run) ]]
++ TIMEOUT=99999
++ : 0
++ : 0
++ ulimit -t 99999
++ ((  MEMORY_LIMIT_GB > 0  ))
++ ((  PIDS_LIMIT > 0  ))
++ timeout --signal=KILL 99999s python outputs/test/TRACKFORMERS/Q1/transformer_padded/transformer_padded.py
+mkdir -p failed for path /home/sandbox/.config/matplotlib: [Errno 30] Read-only file system: '/home/sandbox/.config'
+Matplotlib created a temporary cache directory at /tmp/matplotlib-8hhhekli because there was an issue with the default path (/home/sandbox/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.
+[DEBUG] collate from preproc: <function MyPreprocessor._collate_fn at 0x7fafd157dee0>
+[DEBUG] loader_cls: <class 'torch.utils.data.dataloader.DataLoader'>
+[DEBUG] first_batch type: <class 'list'>
+[DEBUG] normalise meta: {'source_type': 'list', 'mode': 'ragged_xy_list'}
+ERROR during training: For batched (3-D) `query`, expected `key_padding_mask` to be `None` or 2-D but found 1-D tensor instead
+Traceback (most recent call last):
+  File ""/workspace/outputs/test/TRACKFORMERS/Q1/transformer_padded/transformer_padded.py"", line 302, in <module>
+    _run(dryrun=""--dryrun"" in sys.argv)
+  File ""/workspace/outputs/test/TRACKFORMERS/Q1/transformer_padded/transformer_padded.py"", line 254, in _run
+    trained_model, tr_loss, va_loss, tr_acc, va_acc = train_model(
+                                                      ^^^^^^^^^^^^
+  File ""/workspace/outputs/test/TRACKFORMERS/Q1/transformer_padded/transformer_padded.py"", line 183, in train_model
+    out = model(view.batch_x)
+          ^^^^^^^^^^^^^^^^^^^
+  File ""/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py"", line 1739, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py"", line 1750, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/workspace/outputs/test/TRACKFORMERS/Q1/transformer_padded/transformer_padded.py"", line 164, in forward
+    x = self.encoder(x, src_key_padding_mask=key_padding)  # [B,N,D]
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py"", line 1739, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py"", line 1750, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/opt/venv/lib/python3.12/site-packages/torch/nn/modules/transformer.py"", line 517, in forward
+    output = mod(
+             ^^^^
+  File ""/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py"", line 1739, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py"", line 1750, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/opt/venv/lib/python3.12/site-packages/torch/nn/modules/transformer.py"", line 920, in forward
+    + self._sa_block(x, src_mask, src_key_padding_mask, is_causal=is_causal)
+      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/opt/venv/lib/python3.12/site-packages/torch/nn/modules/transformer.py"", line 934, in _sa_block
+    x = self.self_attn(
+        ^^^^^^^^^^^^^^^
+  File ""/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py"", line 1739, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py"", line 1750, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/opt/venv/lib/python3.12/site-packages/torch/nn/modules/activation.py"", line 1373, in forward
+    attn_output, attn_output_weights = F.multi_head_attention_forward(
+                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/opt/venv/lib/python3.12/site-packages/torch/nn/functional.py"", line 6147, in multi_head_attention_forward
+    is_batched = _mha_shape_check(
+                 ^^^^^^^^^^^^^^^^^
+  File ""/opt/venv/lib/python3.12/site-packages/torch/nn/functional.py"", line 5904, in _mha_shape_check
+    assert key_padding_mask.dim() == 2, (
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: For batched (3-D) `query`, expected `key_padding_mask` to be `None` or 2-D but found 1-D tensor instead
+",10.47414849998313,-60

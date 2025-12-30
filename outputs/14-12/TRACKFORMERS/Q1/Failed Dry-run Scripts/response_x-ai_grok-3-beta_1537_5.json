@@ -1,0 +1,71 @@
+{
+  "LLMGeneration": {
+    "model": "x-ai/grok-3-beta",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 3731,
+    "prompt_chars": 16011,
+    "response_tokens": 1523,
+    "response_chars": 6384,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.0256455,
+    "generation_ms": 32609,
+    "code": "# 0. ---------- IMPORTS ----------\nimport torch.nn.functional as F\nfrom torch_geometric.nn import GCNConv, global_mean_pool\nfrom torch_geometric.data import Data, Batch\nfrom sklearn.preprocessing import StandardScaler\n\n# 1.1 -------- OPTIONAL: CUSTOM DATASET / DATA-CLASS --------\n# Not used, default EventDataset will be used\n\n# 1.2 ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.scaler = StandardScaler()\n\n    def _raw_reshape(self, data):           \n        return data\n\n    def make_loader_cfg(self):\n        return {\n            \"loader_class\": \"torch.utils.data.DataLoader\",\n            \"batch_size\": 128,\n            \"shuffle\": True,\n            \"num_workers\": 4,\n            \"pin_memory\": True\n        }\n\n    def fit(self, data):\n        # Data is a list of events, each event has feature arrays\n        all_features = []\n        for event in data:\n            features = np.column_stack((event[\"hit_r\"],\n                                        event[\"hit_theta\"],\n                                        event[\"hit_z\"],\n                                        event[\"layer_id\"]))\n            all_features.append(features)\n        all_features = np.concatenate(all_features, axis=0)\n        self.scaler.fit(all_features)\n        return self\n\n    def transform(self, data):\n        # data is a tensor of shape [N_hits, 4]\n        scaled_data = torch.tensor(self.scaler.transform(data.numpy()), dtype=torch.float32)  # [N_hits, 4]\n        return scaled_data\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# 2. ---------- MODEL ARCHITECTURE ----------\nclass HitClassifier(nn.Module):\n    def __init__(self, example_batch_x):\n        super().__init__()\n        # Infer input features from example_batch_x\n        in_features = example_batch_x[0].shape[-1]  # Should be 4 (r, theta, z, layer_id)\n        self.conv1 = GCNConv(in_features, 64)\n        self.conv2 = GCNConv(64, 128)\n        self.conv3 = GCNConv(128, 64)\n        self.fc1 = nn.Linear(64, 32)\n        self.fc2 = nn.Linear(32, 50)  # Assuming max 50 tracks per event, adjust if needed\n\n    def forward(self, batch_x):\n        # batch_x is a list of tensors, each tensor is [N_hits, F]\n        # We will build graphs for each event in the batch\n        data_list = []\n        for x in batch_x:\n            # Simple fully connected graph for each event, can be improved with geometric constraints\n            num_hits = x.shape[0]\n            edge_index = torch.combinations(torch.arange(num_hits), 2).T.to(x.device)  # [2, num_edges]\n            data = Data(x=x, edge_index=edge_index)\n            data_list.append(data)\n\n        batch = Batch.from_data_list(data_list).to(x.device)\n\n        # Graph Convolution Layers\n        x = batch.x  # [total_hits, F]\n        edge_index = batch.edge_index  # [2, total_edges]\n        x = F.relu(self.conv1(x, edge_index))  # [total_hits, 64]\n        x = F.relu(self.conv2(x, edge_index))  # [total_hits, 128]\n        x = F.relu(self.conv3(x, edge_index))  # [total_hits, 64]\n\n        # Pooling per event\n        x_pool = global_mean_pool(x, batch.batch)  # [num_events, 64]\n\n        # Classification per hit\n        x_hit = x  # [total_hits, 64]\n        x_hit = F.relu(self.fc1(x_hit))  # [total_hits, 32]\n        logits = self.fc2(x_hit)  # [total_hits, 50]\n\n        # Predict track IDs as class labels (0 to 49, -1 for noise if needed)\n        preds = torch.argmax(logits, dim=-1)  # [total_hits,]\n        return preds\n\ndef make_model(example_batch_x):\n    return HitClassifier(example_batch_x)\n\n# 3. ---------- MODEL TRAINING ----------\nEPOCHS = 20\ndef train_model(model, train_loader, val_loader, epochs):\n    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)\n    criterion = nn.CrossEntropyLoss(ignore_index=-1)  # Ignore noise labels if any\n    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=3)\n\n    train_loss, val_loss = [], []\n    train_acc, val_acc = [], []\n    best_val_acc = 0.0\n    patience = 5\n    counter = 0\n\n    for epoch in range(epochs):\n        # Training\n        model.train()\n        total_loss = 0.0\n        correct = 0\n        total = 0\n        for batch in train_loader:\n            optimizer.zero_grad()\n            view = normalise_batch(batch, device=device)\n            batch_x, batch_y = view.batch_x, view.batch_y\n            out = model(batch_x)  # [total_hits,]\n            loss = criterion(out, batch_y)\n            loss.backward()\n            optimizer.step()\n            total_loss += loss.item()\n\n            mask = (batch_y != -1)\n            correct += (out[mask] == batch_y[mask]).sum().item()\n            total += mask.sum().item()\n\n        avg_train_loss = total_loss / len(train_loader)\n        train_accuracy = correct / total if total > 0 else 0.0\n        train_loss.append(avg_train_loss)\n        train_acc.append(train_accuracy)\n\n        # Validation\n        model.eval()\n        total_val_loss = 0.0\n        correct = 0\n        total = 0\n        with torch.no_grad():\n            for batch in val_loader:\n                view = normalise_batch(batch, device=device)\n                batch_x, batch_y = view.batch_x, view.batch_y\n                out = model(batch_x)\n                loss = criterion(out, batch_y)\n                total_val_loss += loss.item()\n\n                mask = (batch_y != -1)\n                correct += (out[mask] == batch_y[mask]).sum().item()\n                total += mask.sum().item()\n\n        avg_val_loss = total_val_loss / len(val_loader)\n        val_accuracy = correct / total if total > 0 else 0.0\n        val_loss.append(avg_val_loss)\n        val_acc.append(val_accuracy)\n\n        scheduler.step(val_accuracy)\n\n        # Early Stopping\n        if val_accuracy > best_val_acc:\n            best_val_acc = val_accuracy\n            counter = 0\n        else:\n            counter += 1\n            if counter >= patience:\n                print(f\"Early stopping at epoch {epoch+1}\")\n                break\n\n        print(f\"Epoch {epoch+1}/{epochs}, Train Loss: {avg_train_loss:.4f}, Train Acc: {train_accuracy:.4f}, Val Loss: {avg_val_loss:.4f}, Val Acc: {val_accuracy:.4f}\")\n\n    return model, train_loss, val_loss, train_acc, val_acc",
+    "reasoning": "",
+    "Outer_attempt": 5
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-12-14T14:37:42Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-12-14T14:37:42Z",
+        "metrics": {
+          ".\\./outputs/14-12/TRACKFORMERS/Q1/script_x-ai_grok-3-beta_1537_5.py": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 244,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 244,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2025-12-14T14:38:15Z",
+    "passed": false,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/14-12/TRACKFORMERS/Q1/script_x-ai_grok-3-beta_1537_5.py\nargv2=--dryrun\n",
+      "stderr": "+ exec\n+ PY=outputs/14-12/TRACKFORMERS/Q1/script_x-ai_grok-3-beta_1537_5.py\n+ shift\n++ echo --dryrun\n++ tr -d '\\r\\n'\n++ xargs\n+ DRY=--dryrun\n+ [[ outputs/14-12/TRACKFORMERS/Q1/script_x-ai_grok-3-beta_1537_5.py == \\/\\u\\s\\r\\/\\l\\o\\c\\a\\l\\/\\b\\i\\n\\/\\t\\r\\a\\i\\n\\.\\s\\h ]]\n+ [[ --dryrun =~ (--dryrun|--dry-run) ]]\n+ TIMEOUT=3600\n+ : 0\n+ : 0\n+ ulimit -t 3600\n+ ((  MEMORY_LIMIT_GB > 0  ))\n+ ((  PIDS_LIMIT > 0  ))\n+ timeout --signal=KILL 3600s python outputs/14-12/TRACKFORMERS/Q1/script_x-ai_grok-3-beta_1537_5.py --dryrun\nmkdir -p failed for path /home/sandbox/.config/matplotlib: [Errno 30] Read-only file system: '/home/sandbox/.config'\nMatplotlib created a temporary cache directory at /tmp/matplotlib-1um8cfyq because there was an issue with the default path (/home/sandbox/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.\nERROR during training: cross_entropy_loss(): argument 'target' (position 2) must be Tensor, not list\nTraceback (most recent call last):\n  File \"/workspace/outputs/14-12/TRACKFORMERS/Q1/script_x-ai_grok-3-beta_1537_5.py\", line 335, in <module>\n    _run(dryrun=\"--dryrun\" in sys.argv)\n  File \"/workspace/outputs/14-12/TRACKFORMERS/Q1/script_x-ai_grok-3-beta_1537_5.py\", line 286, in _run\n    trained_model, tr_loss, va_loss, tr_acc, va_acc = train_model(\n                                                      ^^^^^^^^^^^^\n  File \"/workspace/outputs/14-12/TRACKFORMERS/Q1/script_x-ai_grok-3-beta_1537_5.py\", line 195, in train_model\n    loss = criterion(out, batch_y)\n           ^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py\", line 1739, in _wrapped_call_impl\n    return self._call_impl(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py\", line 1750, in _call_impl\n    return forward_call(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/torch/nn/modules/loss.py\", line 1295, in forward\n    return F.cross_entropy(\n           ^^^^^^^^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/torch/nn/functional.py\", line 3494, in cross_entropy\n    return torch._C._nn.cross_entropy_loss(\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nTypeError: cross_entropy_loss(): argument 'target' (position 2) must be Tensor, not list\n"
+    },
+    "return_code": 1
+  }
+}

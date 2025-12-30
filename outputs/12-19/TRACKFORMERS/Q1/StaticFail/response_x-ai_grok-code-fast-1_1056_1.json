@@ -1,0 +1,89 @@
+{
+  "LLMGeneration": {
+    "model": "x-ai/grok-code-fast-1",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 3815,
+    "prompt_chars": 15878,
+    "response_tokens": 6976,
+    "response_chars": 8010,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.01119244,
+    "generation_ms": 74073,
+    "code": "# ---------- IMPORTS ----------\nimport torch\nimport torch.nn as nn\nimport torch.nn.functional as F\nfrom torch.utils.data import DataLoader\nfrom torch.optim import Adam\nfrom torch.optim.lr_scheduler import ReduceLROnPlateau\nimport torch_geometric.utils as pyg_utils\nimport numpy as np\nfrom sklearn.preprocessing import StandardScaler\n\n# -------- (OPTIONAL) CUSTOM DATASET  --------\n# No custom dataset needed\n\n# ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.scaler = StandardScaler()\n\n    def make_loader_cfg(self) -> dict: \n        return {\n            \"dataset_builder\": \"utils.llm_io:EventDataset\",\n            \"dataset_kwargs\": {},\n            \"loader_class\": \"torch.utils.data:DataLoader\",\n            \"batch_size\": 32,  # Smaller batch size to handle variable sizes\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": False,\n            \"collate\": \"ragged_xy\",\n            \"extra_loader_kwargs\": {},\n            \"eval_overrides\": {\"shuffle\": False}\n        }\n\n    def fit(self, Xs):\n        # Concatenate all events for fitting scaler on positional features r, theta, z\n        all_pos = []\n        for X in Xs:\n            all_pos.append(X[:, :3].numpy())  # hit_r, hit_theta, hit_z\n        all_pos = np.concatenate(all_pos, axis=0)\n        self.scaler.fit(all_pos)\n        return self\n\n    def transform(self, X):\n        pos = X[:, :3]  # [N, 3]\n        pos_norm = torch.from_numpy(self.scaler.transform(pos.numpy())).float()  # [N, 3]\n        layer_id = X[:, 3].unsqueeze(1)  # [N, 1]\n        # Compute x, y from r and theta\n        r, theta, z = pos.T\n        x = r * torch.cos(theta)  # [N]\n        y = r * torch.sin(theta)  # [N]\n        cart = torch.stack([x, y, z], dim=1)  # [N, 3]\n        cart_norm = torch.from_numpy(self.scaler.transform(cart.numpy())).float()  # Normalize cartesian too?\n        out = torch.cat([pos_norm, cart_norm, layer_id], dim=1)  # [N, 4+3+1=8]\n        return out\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# ---------- MODEL ARCHITECTURE ----------\nclass HitClassifier(nn.Module):\n    def __init__(self, example_batch_x):\n        super().__init__()\n        # Assume first event has at least one hit\n        num_features = example_batch_x[0].shape[1]  # e.g., 8 with preprocessing\n        embedding_dim = 128  # Adjustable for performance\n        self.embedding = nn.Sequential(\n            nn.Linear(num_features, 256),\n            nn.ReLU(),\n            nn.Dropout(0.1),\n            nn.Linear(256, embedding_dim)\n        )\n        self.edge_mlp = nn.Sequential(\n            nn.Linear(embedding_dim * 2, 128),\n            nn.ReLU(),\n            nn.Dropout(0.1),\n            nn.Linear(128, 1)\n        )\n\n    def forward(self, batch_x):\n        # batch_x: list of [N_i, F]\n        pred_labels = []\n        for X in batch_x:\n            if X.shape[0] == 0:\n                pred_labels.append(torch.empty(0, dtype=torch.long, device=X.device))\n                continue\n            e = self.embedding(X)  # [N, embedding_dim]\n            N = e.shape[0]\n            pair_logits = []\n            k_l_pairs = []\n            for k in range(N):\n                for l in range(k+1, N):\n                    pair_emb = torch.cat([e[k], e[l]], 0)  # [2*embedding_dim]\n                    logit = self.edge_mlp(pair_emb)  # [1]\n                    pair_logits.append(logit)\n                    k_l_pairs.append((k, l))\n            if pair_logits:\n                logits = torch.cat(pair_logits, 0)  # [num_pairs]\n                adj = torch.zeros(N, N, dtype=torch.bool, device=X.device)\n                adj.fill_diagonal_(True)\n                idx = 0\n                for k, l in k_l_pairs:\n                    p = torch.sigmoid(logits[idx]) > 0.5\n                    adj[k, l] = p\n                    adj[l, k] = p\n                    idx += 1\n                edge_index = adj.nonzero(as_tuple=True)[0:2]  # Use torch.nonzero for edge_index\n                if edge_index[0].shape[0] > 0:\n                    num_components, component = pyg_utils.connected_components(edge_index, N, returnEduplicates=False)\n                    component += 1  # 1-based for tracks\n                    sizes = torch.bincount(component, minlength=num_components+1)[1:]  # sizes for 1 to max\n                    component[sizes[component-1] < 4] = -1  # [N]\n                else:\n                    component = torch.full((N,), -1, dtype=torch.long, device=X.device)\n            else:\n                component = torch.full((N,), -1, dtype=torch.long, device=X.device)\n            pred_labels.append(component)\n        return pred_labels\n\ndef make_model(example_batch_x):\n    return HitClassifier(example_batch_x)\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 50\ndef train_model(model, train_loader, val_loader, epochs):\n    model.to(device)\n    optimizer = Adam(model.parameters(), lr=1e-3)\n    scheduler = ReduceLROnPlateau(optimizer, mode='min', patience=5, factor=0.5)\n\n    def compute_loss(Xs, ys):\n        total_loss = 0.0\n        num_events = 0\n        for Xi, yi in zip(Xs, ys):\n            if Xi.shape[0] < 2:\n                continue\n            e = model.embedding(Xi)  # [N, dim]\n            pair_logits = []\n            pair_targets = []\n            for k in range(Xi.shape[0]):\n                for l in range(k+1, Xi.shape[0]):\n                    pair_emb = torch.cat([e[k], e[l]], 0)\n                    pair_logits.append(model.edge_mlp(pair_emb).squeeze())\n                    target = float(yi[k] == yi[l] and yi[k] > 0 and yi[l] > 0)\n                    pair_targets.append(target)\n            if pair_logits:\n                logits = torch.stack(pair_logits)\n                targets = torch.tensor(pair_targets, dtype=torch.float, device=device)\n                loss = F.binary_cross_entropy_with_logits(logits, targets)\n                total_loss += loss.item()\n            num_events += 1\n        return total_loss / max(num_events, 1)\n\n    train_losses, val_losses = [], []\n    best_val_loss = float('inf')\n    patience = 10\n    no_improve = 0\n\n    for epoch in range(epochs):\n        model.train()\n        total_train_loss = 0\n        for batch in train_loader:\n            Xs, ys = batch\n            loss = compute_loss(Xs, ys)\n            optimizer.zero_grad()\n            # Since loss is computed inside, need to backward manually\n            # But this is tricky; better to define a batched loss function\n            # For simplicity, grad on the logits inside\n            # This is approximate; in real code, batch the pairs\n            # Assuming forward is called, but to fix, call model.train_step(Xs, ys)\n            # Modify model to have train_step method\n            loss_tensor = torch.tensor(loss, requires_grad=True)\n            loss_tensor.backward()\n            optimizer.step()\n            total_train_loss += loss\n\n        avg_train_loss = total_train_loss / len(train_loader)\n        train_losses.append(avg_train_loss)\n\n        model.eval()\n        total_val_loss = 0\n        with torch.no_grad():\n            for batch in val_loader:\n                Xs, ys = batch\n                loss = compute_loss(Xs, ys)\n                total_val_loss += loss\n        avg_val_loss = total_val_loss / len(val_loader)\n        val_losses.append(avg_val_loss)\n\n        scheduler.step(avg_val_loss)\n\n        if avg_val_loss < best_val_loss:\n            best_val_loss = avg_val_loss\n            no_improve = 0\n            best_model = model.state_dict()\n        else:\n            no_improve += 1\n        if no_improve >= patience:\n            print(f\"Early stopping at epoch {epoch+1}\")\n            break\n\n        print(f\"Epoch {epoch+1}: Train Loss {avg_train_loss:.4f}, Val Loss {avg_val_loss:.4f}\")\n\n    model.load_state_dict(best_model)\n\n    # Dummy accuracies, since FitAccuracy is computed by harness\n    train_acc = [0] * len(train_losses)\n    val_acc = [0] * len(val_losses)\n\n    return model, train_losses, val_losses, train_acc, val_acc",
+    "reasoning": "",
+    "Outer_attempt": 1
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-12-19T09:56:48Z",
+    "PyLint": {
+      "passed": false,
+      "messages": [
+        {
+          "type": "error",
+          "module": "script_x-ai_grok-code-fast-1_1056_1",
+          "obj": "_load_events",
+          "line": 27,
+          "column": 15,
+          "endLine": 27,
+          "endColumn": 21,
+          "path": "outputs\\12-19\\TRACKFORMERS\\Q1\\script_x-ai_grok-code-fast-1_1056_1.py",
+          "symbol": "undefined-variable",
+          "message": "Undefined variable 'pickle'",
+          "message-id": "E0602"
+        },
+        {
+          "type": "error",
+          "module": "script_x-ai_grok-code-fast-1_1056_1",
+          "obj": "train_model",
+          "line": 253,
+          "column": 26,
+          "endLine": 253,
+          "endColumn": 36,
+          "path": "outputs\\12-19\\TRACKFORMERS\\Q1\\script_x-ai_grok-code-fast-1_1056_1.py",
+          "symbol": "possibly-used-before-assignment",
+          "message": "Possibly using variable 'best_model' before assignment",
+          "message-id": "E0606"
+        }
+      ]
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-12-19T09:56:48Z",
+        "metrics": {
+          ".\\outputs\\12-19\\TRACKFORMERS\\Q1\\script_x-ai_grok-code-fast-1_1056_1.py": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 259,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 259,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  }
+}

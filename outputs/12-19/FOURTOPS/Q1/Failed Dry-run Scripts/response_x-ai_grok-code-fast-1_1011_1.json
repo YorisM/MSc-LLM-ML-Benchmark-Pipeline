@@ -1,0 +1,92 @@
+{
+  "LLMGeneration": {
+    "model": "x-ai/grok-code-fast-1",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 3507,
+    "prompt_chars": 13777,
+    "response_tokens": 4923,
+    "response_chars": 6514,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.00805134,
+    "generation_ms": 30165,
+    "code": "# ---------- IMPORTS ----------\nfrom sklearn.preprocessing import StandardScaler\nfrom sklearn.metrics import roc_auc_score\n\n# ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.scaler_glob = StandardScaler()\n        self.scaler_kin = StandardScaler()\n        self.max_obj_id = 0\n\n    def make_loader_cfg(self):\n        return {\n            \"dataset_builder\": \"llm_script:FourTopsDataset\",   \n            \"dataset_kwargs\": {},\n\n            \"loader_class\": \"torch.utils.data:DataLoader\",     \n            \"batch_size\": 512,\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": False,\n\n            \"collate\": None,\n\n            \"extra_loader_kwargs\": {},\n            \"eval_overrides\": {\"shuffle\": False},\n        }\n\n    def fit(self, X, y=None):\n        # Extract global and kinematics\n        glob = X[:, :2]\n        self.scaler_glob.fit(glob.numpy())\n\n        objects = X[:, 2:].view(-1, 18, 5)  # [N, 18, 5]\n        kin_flat = objects[:, :, 1:].reshape(-1, 4)  # [N*18, 4]\n        self.scaler_kin.fit(kin_flat.numpy())\n\n        self.max_obj_id = int(objects[:, :, 0].max().item()) + 1\n        return self\n\n    def transform(self, X):\n        # Normalize globals\n        glob_norm = torch.tensor(self.scaler_glob.transform(X[:, :2].numpy())).to(X.dtype).float()\n\n        # Process objects\n        objects = torch.zeros_like(X[:, 2:])\n        obj_kin = X[:, 2:].view(-1, 18, 5)\n        obj_ids = obj_kin[:, :, 0]  # [N, 18]\n        kinematics = obj_kin[:, :, 1:]  # [N, 18, 4]\n\n        kin_flat = kinematics.reshape(-1, 4)\n        kin_norm = torch.tensor(self.scaler_kin.transform(kin_flat.numpy())).reshape(kinematics.shape).to(X.dtype).float()\n\n        # Combine\n        obj_new = torch.zeros_like(obj_kin)\n        obj_new[:, :, 0] = obj_ids\n        obj_new[:, :, 1:] = kin_norm\n\n        objects = obj_new.view(-1, 18*5)\n\n        # Final combined\n        X_new = torch.cat([glob_norm, objects], dim=1)\n        return X_new\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# ---------- MODEL DEFINITION ----------\nclass BinaryClassifier(nn.Module):\n    def __init__(self, sample_object):\n        super().__init__()\n        objects = sample_object[:, 2:].view(-1, 18, 5)\n        self.max_obj = int(objects[:, :, 0].max().item()) + 1\n        self.embed_dim = 4\n        self.d_model = 16\n        self.num_heads = 4\n        self.num_layers = 2\n\n        self.obj_emb = nn.Embedding(self.max_obj, self.embed_dim)\n        self.proj_kin = nn.Linear(4, self.d_model - self.embed_dim)\n        self.pos_emb = nn.Embedding(18, self.d_model)\n        self.transformer = nn.TransformerEncoder(\n            nn.TransformerEncoderLayer(\n                d_model=self.d_model, nhead=self.num_heads, dim_feedforward=32, batch_first=False\n            ),\n            num_layers=self.num_layers\n        )\n        self.glob_proj = nn.Linear(2, 8)\n        self.mlp = nn.Sequential(\n            nn.Linear(self.d_model + 8, 32),\n            nn.ReLU(),\n            nn.Linear(32, 1)\n        )\n\n    def forward(self, batch_x):\n        global_ = batch_x[:, :2]\n        objects_flat = batch_x[:, 2:].view(batch_x.size(0), 18, 5)  # [batch, 18, 5]\n        obj_ids = objects_flat[:, :, 0].long()\n        kinematics = objects_flat[:, :, 1:]\n\n        kin_proj = self.proj_kin(kinematics)  # [batch, 18, d_model - embed_dim]\n        obj_emb = self.obj_emb(obj_ids)  # [batch, 18, embed_dim]\n        combined = torch.cat([obj_emb, kin_proj], -1)  # [batch, 18, d_model]\n\n        pos = self.pos_emb(torch.arange(18, device=batch_x.device).unsqueeze(0).expand(batch_x.size(0), -1))  # [batch, 18, d_model]\n        combined += pos\n\n        # Transformer input (seq, batch, dmodel)\n        trans_input = combined.transpose(0, 1)  # [18, batch, d_model]\n        trans_out = self.transformer(trans_input)  # [18, batch, d_model]\n\n        # Aggregate\n        seq_agg = trans_out.transpose(0, 1).mean(dim=1)  # [batch, d_model]\n        glob_agg = self.glob_proj(global_)  # [batch, 8]\n        out = self.mlp(torch.cat([seq_agg, glob_agg], -1))\n        return out\n\ndef make_model(example_object):\n    return BinaryClassifier(example_object)\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 50  # Increased for potential better training\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)\n    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.5)\n    loss_fn = nn.BCEWithLogitsLoss()\n\n    best_auc = 0\n    early_stop = 10\n    epochs_no_improve = 0\n    best_model_dict = None\n\n    for epoch in range(epochs):\n        model.train()\n        train_loss = 0\n        train_correct = 0\n        total_train = 0\n        for x, y in train_loader:\n            x, y = x.to(device), y.to(device)\n            pred = model(x).squeeze()\n            loss = loss_fn(pred, y.float())\n            optimizer.zero_grad()\n            loss.backward()\n            optimizer.step()\n            train_loss += loss.item()\n            train_correct += ((pred > 0) == y).sum().item()\n            total_train += y.size(0)\n        train_loss /= len(train_loader)\n        train_acc = train_correct / total_train\n\n        model.eval()\n        val_loss = 0\n        val_correct = 0\n        total_val = 0\n        val_preds = []\n        val_ys = []\n        with torch.no_grad():\n            for x, y in val_loader:\n                x, y = x.to(device), y.to(device)\n                pred = model(x).squeeze()\n                loss = loss_fn(pred, y.float())\n                val_loss += loss.item()\n                val_correct += ((pred > 0) == y).sum().item()\n                total_val += y.size(0)\n                val_preds.extend(pred.sigmoid().cpu().numpy())\n                val_ys.extend(y.cpu().numpy())\n        val_loss /= len(val_loader)\n        val_acc = val_correct / total_val\n        auc = roc_auc_score(val_ys, val_preds)\n\n        if auc > best_auc:\n            best_auc = auc\n            epochs_no_improve = 0\n            best_model_dict = model.state_dict().copy()\n        else:\n            epochs_no_improve += 1\n\n        if epochs_no_improve > early_stop:\n            break\n\n        scheduler.step()\n\n    if best_model_dict:\n        model.load_state_dict(best_model_dict)\n    return model, train_loss, val_loss, train_acc, val_acc",
+    "reasoning": "",
+    "Outer_attempt": 1
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-12-19T09:11:42Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-12-19T09:11:42Z",
+        "metrics": {
+          ".\\outputs\\12-19\\FOURTOPS\\Q1\\script_x-ai_grok-code-fast-1_1011_1.py": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 229,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 229,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "Training": {
+    "__timestamp": "2025-12-19T09:12:02.923455+00:00",
+    "passed": false,
+    "resources": {
+      "cpu_seconds_user": 0.58,
+      "cpu_seconds_sys": 0.55,
+      "disk_read_mb": 46.7,
+      "disk_write_mb": 0.4,
+      "max_rss_kb": 0,
+      "training_time_s": 20.46,
+      "gpu_name": null,
+      "gpu_total_mb": null,
+      "gpu_peak_alloc_mb": null,
+      "cuda_available": null
+    },
+    "metrics": null,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/12-19/FOURTOPS/Q1/script_x-ai_grok-code-fast-1_1011_1.py\nargv2=--dryrun\n",
+      "stderr": "+ exec\n+ PY=outputs/12-19/FOURTOPS/Q1/script_x-ai_grok-code-fast-1_1011_1.py\n+ shift\n++ echo --dryrun\n++ tr -d '\\r\\n'\n++ xargs\n+ DRY=--dryrun\n+ [[ outputs/12-19/FOURTOPS/Q1/script_x-ai_grok-code-fast-1_1011_1.py == \\/\\u\\s\\r\\/\\l\\o\\c\\a\\l\\/\\b\\i\\n\\/\\t\\r\\a\\i\\n\\.\\s\\h ]]\n+ [[ --dryrun =~ (--dryrun|--dry-run) ]]\n+ TIMEOUT=3600\n+ : 0\n+ : 0\n+ ulimit -t 3600\n+ ((  MEMORY_LIMIT_GB > 0  ))\n+ ((  PIDS_LIMIT > 0  ))\n+ timeout --signal=KILL 3600s python outputs/12-19/FOURTOPS/Q1/script_x-ai_grok-code-fast-1_1011_1.py --dryrun\nmkdir -p failed for path /home/sandbox/.config/matplotlib: [Errno 30] Read-only file system: '/home/sandbox/.config'\nMatplotlib created a temporary cache directory at /tmp/matplotlib-iel5sgns because there was an issue with the default path (/home/sandbox/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.\nTraceback (most recent call last):\n  File \"/workspace/outputs/12-19/FOURTOPS/Q1/script_x-ai_grok-code-fast-1_1011_1.py\", line 311, in <module>\n    _run(dryrun=\"--dryrun\" in sys.argv)\n  File \"/workspace/outputs/12-19/FOURTOPS/Q1/script_x-ai_grok-code-fast-1_1011_1.py\", line 267, in _run\n    model       = make_model(view.batch_x).to(device)\n                  ^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/outputs/12-19/FOURTOPS/Q1/script_x-ai_grok-code-fast-1_1011_1.py\", line 171, in make_model\n    return BinaryClassifier(example_object)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/outputs/12-19/FOURTOPS/Q1/script_x-ai_grok-code-fast-1_1011_1.py\", line 124, in __init__\n    objects = sample_object[:, 2:].view(-1, 18, 5)\n              ~~~~~~~~~~~~~^^^^^^^\nTypeError: list indices must be integers or slices, not tuple\n"
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2025-12-19T09:12:02Z",
+    "passed": false,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/12-19/FOURTOPS/Q1/script_x-ai_grok-code-fast-1_1011_1.py\nargv2=--dryrun\n",
+      "stderr": "+ exec\n+ PY=outputs/12-19/FOURTOPS/Q1/script_x-ai_grok-code-fast-1_1011_1.py\n+ shift\n++ echo --dryrun\n++ tr -d '\\r\\n'\n++ xargs\n+ DRY=--dryrun\n+ [[ outputs/12-19/FOURTOPS/Q1/script_x-ai_grok-code-fast-1_1011_1.py == \\/\\u\\s\\r\\/\\l\\o\\c\\a\\l\\/\\b\\i\\n\\/\\t\\r\\a\\i\\n\\.\\s\\h ]]\n+ [[ --dryrun =~ (--dryrun|--dry-run) ]]\n+ TIMEOUT=3600\n+ : 0\n+ : 0\n+ ulimit -t 3600\n+ ((  MEMORY_LIMIT_GB > 0  ))\n+ ((  PIDS_LIMIT > 0  ))\n+ timeout --signal=KILL 3600s python outputs/12-19/FOURTOPS/Q1/script_x-ai_grok-code-fast-1_1011_1.py --dryrun\nmkdir -p failed for path /home/sandbox/.config/matplotlib: [Errno 30] Read-only file system: '/home/sandbox/.config'\nMatplotlib created a temporary cache directory at /tmp/matplotlib-iel5sgns because there was an issue with the default path (/home/sandbox/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.\nTraceback (most recent call last):\n  File \"/workspace/outputs/12-19/FOURTOPS/Q1/script_x-ai_grok-code-fast-1_1011_1.py\", line 311, in <module>\n    _run(dryrun=\"--dryrun\" in sys.argv)\n  File \"/workspace/outputs/12-19/FOURTOPS/Q1/script_x-ai_grok-code-fast-1_1011_1.py\", line 267, in _run\n    model       = make_model(view.batch_x).to(device)\n                  ^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/outputs/12-19/FOURTOPS/Q1/script_x-ai_grok-code-fast-1_1011_1.py\", line 171, in make_model\n    return BinaryClassifier(example_object)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/outputs/12-19/FOURTOPS/Q1/script_x-ai_grok-code-fast-1_1011_1.py\", line 124, in __init__\n    objects = sample_object[:, 2:].view(-1, 18, 5)\n              ~~~~~~~~~~~~~^^^^^^^\nTypeError: list indices must be integers or slices, not tuple\n"
+    },
+    "return_code": 1
+  }
+}

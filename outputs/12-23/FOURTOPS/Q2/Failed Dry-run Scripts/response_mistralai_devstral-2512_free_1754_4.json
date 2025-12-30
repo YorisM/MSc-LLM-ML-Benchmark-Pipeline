@@ -1,0 +1,71 @@
+{
+  "LLMGeneration": {
+    "model": "mistralai/devstral-2512:free",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 3782,
+    "prompt_chars": 14633,
+    "response_tokens": 2041,
+    "response_chars": 8422,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0,
+    "generation_ms": 213080,
+    "code": "# ---------- IMPORTS ----------\nimport torch.nn.functional as F\nfrom sklearn.preprocessing import StandardScaler\nfrom torch_geometric.data import Data\nfrom torch_geometric.nn import TransformerConv, global_mean_pool\nfrom torch_geometric.loader import DataLoader\n\n# ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.scaler = StandardScaler()\n        self.global_scaler = StandardScaler()\n        self.obj_scaler = StandardScaler()\n\n    def make_loader_cfg(self) -> dict:\n        return {\n            \"dataset_builder\": \"llm_script:FourTopsDataset\",\n            \"dataset_kwargs\": {},\n            \"loader_class\": \"torch_geometric.loader:DataLoader\",\n            \"batch_size\": 256,\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": False,\n            \"collate\": None,\n            \"extra_loader_kwargs\": {},\n            \"eval_overrides\": {\"shuffle\": False},\n        }\n\n    def fit(self, X, y=None):\n        # Separate global and object features\n        global_features = X[:, :2]  # E_T_miss, phi_Et_miss\n        obj_features = X[:, 2:].reshape(-1, 18, 5)[:, :, 1:]  # Remove obj_id, keep E, pT, eta, phi\n\n        # Flatten for scaling\n        global_flat = global_features.reshape(-1, 2)\n        obj_flat = obj_features.reshape(-1, 4)\n\n        # Fit scalers\n        self.global_scaler.fit(global_flat)\n        self.obj_scaler.fit(obj_flat)\n        return self\n\n    def transform(self, X):\n        # Apply scaling\n        global_features = X[:, :2]\n        obj_features = X[:, 2:].reshape(-1, 18, 5)\n\n        # Scale global features\n        global_scaled = self.global_scaler.transform(global_features)\n\n        # Extract and scale object features (remove obj_id)\n        obj_ids = obj_features[:, :, 0]  # Keep obj_ids for masking\n        obj_kinematics = obj_features[:, :, 1:]\n        obj_scaled = self.obj_scaler.transform(obj_kinematics.reshape(-1, 4)).reshape(-1, 18, 4)\n\n        # Combine back\n        obj_features = torch.cat([\n            obj_ids.unsqueeze(-1),\n            torch.from_numpy(obj_scaled).float()\n        ], dim=-1).reshape(X.shape[0], -1)\n\n        # Create PyG Data objects\n        data_list = []\n        for i in range(X.shape[0]):\n            # Get non-zero objects (mask)\n            obj_mask = obj_ids[i] != 0\n            num_objects = obj_mask.sum().item()\n\n            if num_objects == 0:\n                # Handle empty events (shouldn't happen but just in case)\n                x = torch.zeros(1, 4)\n                edge_index = torch.empty((2, 0), dtype=torch.long)\n            else:\n                # Object features (E, pT, eta, phi)\n                x = torch.from_numpy(obj_scaled[i][obj_mask])\n\n                # Create complete graph\n                edge_index = torch.combinations(torch.arange(num_objects), r=2).t()\n                if edge_index.numel() == 0:\n                    edge_index = torch.empty((2, 0), dtype=torch.long)\n\n            # Global features\n            u = torch.from_numpy(global_scaled[i])\n\n            # Create Data object\n            data = Data(\n                x=x,\n                edge_index=edge_index,\n                u=u,\n                y=torch.tensor([0], dtype=torch.float)  # Dummy, will be replaced in dataset\n            )\n            data_list.append(data)\n\n        return data_list\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# ---------- MODEL DEFINITION ----------\nclass BinaryClassifier(nn.Module):\n    def __init__(self, sample_object):\n        super().__init__()\n        # Extract dimensions from sample\n        num_obj_features = sample_object.x.shape[1]  # Should be 4 (E, pT, eta, phi)\n        num_global_features = sample_object.u.shape[0]  # Should be 2\n\n        # Transformer layers for object interactions\n        self.transformer1 = TransformerConv(\n            in_channels=num_obj_features,\n            out_channels=64,\n            heads=4,\n            concat=True,\n            beta=True\n        )\n        self.transformer2 = TransformerConv(\n            in_channels=64 * 4,\n            out_channels=64,\n            heads=4,\n            concat=True,\n            beta=True\n        )\n\n        # Global interaction\n        self.global_interaction = nn.Sequential(\n            nn.Linear(num_global_features + 64, 64),\n            nn.ReLU(),\n            nn.Linear(64, 32),\n            nn.ReLU()\n        )\n\n        # Classifier\n        self.classifier = nn.Sequential(\n            nn.Linear(32 + 64, 64),\n            nn.ReLU(),\n            nn.Dropout(0.3),\n            nn.Linear(64, 32),\n            nn.ReLU(),\n            nn.Linear(32, 1)\n        )\n\n    def forward(self, data):\n        x, edge_index, u = data.x, data.edge_index, data.u\n\n        # Transformer layers\n        x1 = F.relu(self.transformer1(x, edge_index))\n        x2 = F.relu(self.transformer2(x1, edge_index))\n\n        # Global pooling\n        x_global = global_mean_pool(x2, torch.zeros(x2.size(0), dtype=torch.long, device=x2.device))\n\n        # Combine with global features\n        combined = torch.cat([u, x_global], dim=-1)\n        global_feat = self.global_interaction(combined)\n\n        # Final classification\n        out = self.classifier(torch.cat([x_global, global_feat], dim=-1))\n        return torch.sigmoid(out)\n\ndef make_model(example_object):\n    return BinaryClassifier(example_object)\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 50\n\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    device = torch.device(\"cuda\" if torch.cuda.is_available() else \"cpu\")\n    model = model.to(device)\n\n    criterion = nn.BCELoss()\n    optimizer = torch.optim.AdamW(model.parameters(), lr=0.001, weight_decay=1e-4)\n    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=5, factor=0.5)\n\n    best_val_loss = float('inf')\n    patience = 10\n    patience_counter = 0\n\n    train_loss_history = []\n    val_loss_history = []\n    train_acc_history = []\n    val_acc_history = []\n\n    for epoch in range(epochs):\n        # Training\n        model.train()\n        train_loss = 0.0\n        correct_train = 0\n        total_train = 0\n\n        for batch in train_loader:\n            batch = batch.to(device)\n            optimizer.zero_grad()\n\n            # Forward pass\n            outputs = model(batch).squeeze()\n            targets = batch.y.float()\n\n            loss = criterion(outputs, targets)\n\n            # Backward pass\n            loss.backward()\n            optimizer.step()\n\n            train_loss += loss.item() * batch.num_graphs\n            preds = (outputs > 0.5).float()\n            correct_train += (preds == targets).sum().item()\n            total_train += targets.size(0)\n\n        # Validation\n        model.eval()\n        val_loss = 0.0\n        correct_val = 0\n        total_val = 0\n\n        with torch.no_grad():\n            for batch in val_loader:\n                batch = batch.to(device)\n\n                outputs = model(batch).squeeze()\n                targets = batch.y.float()\n\n                loss = criterion(outputs, targets)\n                val_loss += loss.item() * batch.num_graphs\n                preds = (outputs > 0.5).float()\n                correct_val += (preds == targets).sum().item()\n                total_val += targets.size(0)\n\n        # Calculate metrics\n        train_loss = train_loss / len(train_loader.dataset)\n        val_loss = val_loss / len(val_loader.dataset)\n        train_acc = correct_train / total_train\n        val_acc = correct_val / total_val\n\n        # Store history\n        train_loss_history.append(train_loss)\n        val_loss_history.append(val_loss)\n        train_acc_history.append(train_acc)\n        val_acc_history.append(val_acc)\n\n        # Early stopping and learning rate scheduling\n        scheduler.step(val_loss)\n\n        if val_loss < best_val_loss:\n            best_val_loss = val_loss\n            patience_counter = 0\n            best_model = model.state_dict()\n        else:\n            patience_counter += 1\n            if patience_counter >= patience:\n                print(f\"Early stopping at epoch {epoch}\")\n                model.load_state_dict(best_model)\n                break\n\n        print(f'Epoch {epoch+1}/{epochs} - Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}, Train Acc: {train_acc:.4f}, Val Acc: {val_acc:.4f}')\n\n    return model, train_loss_history, val_loss_history, train_acc_history, val_acc_history",
+    "reasoning": "",
+    "Outer_attempt": 4
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-12-23T16:55:04Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-12-23T16:55:04Z",
+        "metrics": {
+          ".\\outputs\\12-23\\FOURTOPS\\Q2\\script_mistralai_devstral-2512_free_1754_4.py": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 261,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 261,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2025-12-23T16:55:29Z",
+    "passed": false,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/12-23/FOURTOPS/Q2/script_mistralai_devstral-2512_free_1754_4.py\nargv2=--dryrun\n",
+      "stderr": "+ exec\n+ PY=outputs/12-23/FOURTOPS/Q2/script_mistralai_devstral-2512_free_1754_4.py\n+ shift\n++ echo --dryrun\n++ tr -d '\\r\\n'\n++ xargs\n+ DRY=--dryrun\n+ [[ outputs/12-23/FOURTOPS/Q2/script_mistralai_devstral-2512_free_1754_4.py == \\/\\u\\s\\r\\/\\l\\o\\c\\a\\l\\/\\b\\i\\n\\/\\t\\r\\a\\i\\n\\.\\s\\h ]]\n+ [[ --dryrun =~ (--dryrun|--dry-run) ]]\n+ TIMEOUT=3600\n+ : 0\n+ : 0\n+ ulimit -t 3600\n+ ((  MEMORY_LIMIT_GB > 0  ))\n+ ((  PIDS_LIMIT > 0  ))\n+ timeout --signal=KILL 3600s python outputs/12-23/FOURTOPS/Q2/script_mistralai_devstral-2512_free_1754_4.py --dryrun\nmkdir -p failed for path /home/sandbox/.config/matplotlib: [Errno 30] Read-only file system: '/home/sandbox/.config'\nMatplotlib created a temporary cache directory at /tmp/matplotlib-y8l09wuo because there was an issue with the default path (/home/sandbox/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.\nERROR during training: 'list' object has no attribute 'to'\nTraceback (most recent call last):\n  File \"/workspace/outputs/12-23/FOURTOPS/Q2/script_mistralai_devstral-2512_free_1754_4.py\", line 380, in <module>\n    _run(dryrun=\"--dryrun\" in sys.argv)\n  File \"/workspace/outputs/12-23/FOURTOPS/Q2/script_mistralai_devstral-2512_free_1754_4.py\", line 341, in _run\n    trained_model, tr_loss, va_loss, tr_acc, va_acc = train_model(\n                                                      ^^^^^^^^^^^^\n  File \"/workspace/outputs/12-23/FOURTOPS/Q2/script_mistralai_devstral-2512_free_1754_4.py\", line 241, in train_model\n    batch = batch.to(device)\n            ^^^^^^^^\nAttributeError: 'list' object has no attribute 'to'\n"
+    },
+    "return_code": 1
+  }
+}

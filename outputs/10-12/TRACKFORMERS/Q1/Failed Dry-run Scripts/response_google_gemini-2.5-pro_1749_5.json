@@ -1,0 +1,71 @@
+{
+  "LLMGeneration": {
+    "model": "google/gemini-2.5-pro",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 4165,
+    "prompt_chars": 15081,
+    "response_tokens": 19118,
+    "response_chars": 9944,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.19638625,
+    "generation_ms": 160622,
+    "code": "# <start code template>\n# 0. ---------- IMPORTS ----------\n# NOTE: Some imports (torch, numpy, DataLoader) are already available (see prefix).\n# Only import extra std-lib modules, torch, scipy, sklearn (sub-)modules you actually use.\nfrom torch.nn import functional as F\nfrom torch_geometric.nn import EdgeConv, knn_graph\nfrom sklearn.cluster import DBSCAN\nfrom sklearn.metrics import adjusted_rand_score\nimport copy\nfrom tqdm import tqdm\n\n# 1. ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    # Must implement:\n    #   - fit()\n    #   - transform()\n\n    # REQUIREMENTS\n    #   IMPORTANT: All state must be picklable with the std-lib pickle module.\n    #   May allocate NumPy arrays or Torch tensors internally, but:\n    #   transform() must be deterministic.\n    #   fit(events) receives the *raw* event dicts list, not a tensor batch.\n    #   Store only derived parameters needed for transform i.e. do not store the raw data\n    #    itself in the preprocessor object.\n\n    # TIPS\n    #   When modifying data features or feature engineering: annotate tensor size as comments after \n    #   each tensor operation to reduce dimension mismatches.\n\n    def __init__(self):\n        self.scalers = {}\n\n    def _raw_reshape(self, data):           \n        return data # Returns identity by default\n\n    def make_loader_cfg(self):\n        return None\n\n    def fit(self, events):\n        features = {\n            \"x\": [], \"y\": [], \"z\": [], \"r\": []\n        }\n        for evt in events:\n            r, theta, z = evt[\"hit_r\"], evt[\"hit_theta\"], evt[\"hit_z\"]\n            features[\"x\"].append(r * np.cos(theta))\n            features[\"y\"].append(r * np.sin(theta))\n            features[\"z\"].append(z)\n            features[\"r\"].append(r)\n\n        for key, values in features.items():\n            all_vals = np.concatenate(values)\n            self.scalers[key] = {\n                \"mean\": all_vals.mean(),\n                \"std\": all_vals.std()\n            }\n        return self\n\n    def transform(self, data: torch.Tensor) -> torch.Tensor:\n        # data is a (N, 4) tensor with (r, theta, z, layer_id)\n        r, theta, z, layer_id = data[:, 0], data[:, 1], data[:, 2], data[:, 3]\n\n        x = r * torch.cos(theta)\n        y = r * torch.sin(theta)\n\n        # Ensure std is not zero\n        x_std = self.scalers[\"x\"][\"std\"] if self.scalers[\"x\"][\"std\"] > 1e-8 else 1.\n        y_std = self.scalers[\"y\"][\"std\"] if self.scalers[\"y\"][\"std\"] > 1e-8 else 1.\n        z_std = self.scalers[\"z\"][\"std\"] if self.scalers[\"z\"][\"std\"] > 1e-8 else 1.\n        r_std = self.scalers[\"r\"][\"std\"] if self.scalers[\"r\"][\"std\"] > 1e-8 else 1.\n\n        x_scaled = (x - self.scalers[\"x\"][\"mean\"]) / x_std\n        y_scaled = (y - self.scalers[\"y\"][\"mean\"]) / y_std\n        z_scaled = (z - self.scalers[\"z\"][\"mean\"]) / z_std\n        r_scaled = (r - self.scalers[\"r\"][\"mean\"]) / r_std\n\n        return torch.stack([x_scaled, y_scaled, z_scaled, r_scaled, theta, layer_id], dim=1) # (N_hits, 6)\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# 2. ---------- MODEL ARCHITECTURE ----------\nclass HitClassifier(nn.Module):\n    def __init__(self, in_features, embed_dim=8, k=10, dbscan_eps=0.25, dbscan_min_samples=2):\n        super().__init__()\n        self.k = k\n        self.dbscan_eps = dbscan_eps\n        self.dbscan_min_samples = dbscan_min_samples\n\n        # Node feature projection\n        self.node_encoder = nn.Sequential(\n            nn.Linear(in_features, 64),\n            nn.ReLU(),\n            nn.LayerNorm(64),\n        )\n\n        # EdgeConv layers for message passing\n        self.conv1 = EdgeConv(nn.Sequential(nn.Linear(128, 64), nn.ReLU(), nn.LayerNorm(64)), aggr='mean')\n        self.conv2 = EdgeConv(nn.Sequential(nn.Linear(128, 64), nn.ReLU(), nn.LayerNorm(64)), aggr='mean')\n\n        # Output projection to embedding space\n        self.embed_proj = nn.Sequential(\n            nn.Linear(64, 32),\n            nn.ReLU(),\n            nn.Linear(32, embed_dim)\n        )\n\n    def forward(self, batch):\n        embeddings_list = []\n\n        model_device = next(self.parameters()).device\n        for X, _ in batch:\n            X = X.to(model_device)\n            node_coords = X[:, :3] # Use scaled x, y, z for geometry\n\n            edge_index = knn_graph(node_coords, self.k, loop=False)\n\n            h = self.node_encoder(X)\n            h = self.conv1(h, edge_index)\n            h = self.conv2(h, edge_index)\n\n            embeddings = self.embed_proj(h) # (N_hits, embed_dim)\n            embeddings = F.normalize(embeddings, p=2, dim=1)\n            embeddings_list.append(embeddings)\n\n        if self.training:\n            return embeddings_list\n        else:\n            pred_ids_list = []\n            for embeddings in embeddings_list:\n                emb_np = embeddings.detach().cpu().numpy()\n                dbscan = DBSCAN(eps=self.dbscan_eps, min_samples=self.dbscan_min_samples, metric='euclidean', n_jobs=-1)\n                pred_ids = dbscan.fit_predict(emb_np)\n                pred_ids_list.append(torch.from_numpy(pred_ids).to(model_device))\n            return pred_ids_list\n\ndef make_model(example_sample):\n    if isinstance(example_sample, tuple):\n        in_features = example_sample[0].shape[1]\n    else:\n        in_features = example_sample.shape[1]\n\n    return HitClassifier(in_features=in_features, k=10, embed_dim=8)\n\n# 3. ---------- MODEL TRAINING ----------\nEPOCHS = 30\ndef train_model(model, train_loader, val_loader, epochs):\n    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-5)\n    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', factor=0.5, patience=2, verbose=False)\n    triplet_loss_fn = nn.TripletMarginLoss(margin=0.5)\n\n    train_loss_hist, val_loss_hist = [], []\n    train_acc_hist, val_acc_hist = [], []\n\n    best_val_acc = -1\n    patience = 5\n    patience_counter = 0\n    best_model_state = None\n\n    for epoch in range(epochs):\n        model.train()\n        total_train_loss = 0\n        num_train_events_processed = 0\n\n        pbar = tqdm(train_loader, desc=f\"Epoch {epoch+1}/{epochs} [Train]\")\n        for batch in pbar:\n            optimizer.zero_grad()\n\n            embeddings_list = model(batch)\n            event_losses = []\n\n            for i, (_, y_true) in enumerate(batch):\n                embeddings = embeddings_list[i]\n                y_true = y_true.to(device)\n\n                unique_labels, counts = torch.unique(y_true, return_counts=True)\n                if len(unique_labels) < 2: continue\n\n                anchors, positives, negatives = [], [], []\n                for label_idx, label in enumerate(unique_labels):\n                    if counts[label_idx] < 2: continue\n\n                    is_current_track = (y_true == label)\n                    current_indices = torch.where(is_current_track)[0]\n                    other_indices = torch.where(~is_current_track)[0]\n\n                    for anchor_idx in current_indices:\n                        pos_candidates = current_indices[current_indices != anchor_idx]\n                        pos_idx = pos_candidates[torch.randperm(len(pos_candidates))[:1]]\n                        neg_idx = other_indices[torch.randperm(len(other_indices))[:1]]\n\n                        anchors.append(embeddings[anchor_idx].unsqueeze(0))\n                        positives.append(embeddings[pos_idx])\n                        negatives.append(embeddings[neg_idx])\n\n                if not anchors: continue\n\n                loss = triplet_loss_fn(torch.cat(anchors), torch.cat(positives), torch.cat(negatives))\n                event_losses.append(loss)\n                num_train_events_processed += 1\n\n            if event_losses:\n                batch_loss = torch.stack(event_losses).mean()\n                batch_loss.backward()\n                optimizer.step()\n                total_train_loss += batch_loss.item()\n\n        avg_train_loss = total_train_loss / len(train_loader) if train_loader else 0\n        train_loss_hist.append(avg_train_loss)\n\n        # Validation\n        model.eval()\n        total_val_ari = 0\n        num_val_events = 0\n        with torch.no_grad():\n            pbar = tqdm(val_loader, desc=f\"Epoch {epoch+1}/{epochs} [Val]\")\n            for batch in pbar:\n                pred_ids_list = model(batch)\n\n                for i, (_, y_true) in enumerate(batch):\n                    pred_ids = pred_ids_list[i]\n                    valid_mask = pred_ids != -1\n                    if torch.sum(valid_mask) > 1:\n                         ari = adjusted_rand_score(y_true.cpu()[valid_mask.cpu()], pred_ids.cpu()[valid_mask.cpu()])\n                         total_val_ari += ari\n\n                    num_val_events += 1\n\n        avg_val_ari = total_val_ari / num_val_events if num_val_events > 0 else 0\n        val_acc_hist.append(avg_val_ari)\n        val_loss_hist.append(0)  # No validation loss defined\n\n        scheduler.step(avg_val_ari)\n        current_lr = optimizer.param_groups[0]['lr']\n\n        print(f\"Epoch {epoch+1}: Train Loss: {avg_train_loss:.4f}, Val ARI: {avg_val_ari:.4f}, LR: {current_lr:.6f}\")\n\n        if avg_val_ari > best_val_acc:\n            best_val_acc = avg_val_ari\n            patience_counter = 0\n            best_model_state = copy.deepcopy(model.state_dict())\n        else:\n            patience_counter += 1\n\n        if patience_counter >= patience:\n            print(f\"Early stopping at epoch {epoch+1}\")\n            break\n\n    if best_model_state:\n        model.load_state_dict(best_model_state)\n\n    train_acc_hist = [0.0] * len(train_loss_hist)\n\n    return model, train_loss_hist, val_loss_hist, train_acc_hist, val_acc_hist\n\n# </end code template>",
+    "reasoning": "",
+    "Outer_attempt": 5
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-12-10T16:50:05Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-12-10T16:50:05Z",
+        "metrics": {
+          ".\\./outputs/10-12/TRACKFORMERS/Q1/script_google_gemini-2.5-pro_1749_5.py": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 292,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 292,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2025-12-10T16:50:23Z",
+    "passed": false,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/10-12/TRACKFORMERS/Q1/script_google_gemini-2.5-pro_1749_5.py\nargv2=--dryrun\n",
+      "stderr": "+ exec\n+ PY=outputs/10-12/TRACKFORMERS/Q1/script_google_gemini-2.5-pro_1749_5.py\n+ shift\n++ echo --dryrun\n++ tr -d '\\r\\n'\n++ xargs\n+ DRY=--dryrun\n+ [[ outputs/10-12/TRACKFORMERS/Q1/script_google_gemini-2.5-pro_1749_5.py == \\/\\u\\s\\r\\/\\l\\o\\c\\a\\l\\/\\b\\i\\n\\/\\t\\r\\a\\i\\n\\.\\s\\h ]]\n+ [[ --dryrun =~ (--dryrun|--dry-run) ]]\n+ TIMEOUT=3600\n+ : 0\n+ : 0\n+ ulimit -t 3600\n+ ((  MEMORY_LIMIT_GB > 0  ))\n+ ((  PIDS_LIMIT > 0  ))\n+ timeout --signal=KILL 3600s python outputs/10-12/TRACKFORMERS/Q1/script_google_gemini-2.5-pro_1749_5.py --dryrun\nmkdir -p failed for path /home/sandbox/.config/matplotlib: [Errno 30] Read-only file system: '/home/sandbox/.config'\nMatplotlib created a temporary cache directory at /tmp/matplotlib-86foqcsb because there was an issue with the default path (/home/sandbox/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.\nTraceback (most recent call last):\n  File \"/workspace/outputs/10-12/TRACKFORMERS/Q1/script_google_gemini-2.5-pro_1749_5.py\", line 417, in <module>\n    _run(dryrun=\"--dryrun\" in sys.argv)\n  File \"/workspace/outputs/10-12/TRACKFORMERS/Q1/script_google_gemini-2.5-pro_1749_5.py\", line 366, in _run\n    model          = make_model(example_sample)\n                     ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/outputs/10-12/TRACKFORMERS/Q1/script_google_gemini-2.5-pro_1749_5.py\", line 215, in make_model\n    in_features = example_sample.shape[1]\n                  ^^^^^^^^^^^^^^^^^^^^\nAttributeError: 'list' object has no attribute 'shape'\n"
+    },
+    "return_code": 1
+  }
+}

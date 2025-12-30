@@ -5,6 +5,8 @@ from challenges.challenges import Challenge, Question
 CHALLENGE_NAME_challenge = Challenge(
     name = "",
 
+    version = "",
+
     dataset = { 
 
     },
@@ -22,12 +24,12 @@ CHALLENGE_NAME_challenge = Challenge(
 """,
 
     prefix = r"""
-# ----------------  START HARNESS WRAPPER PREFIX (FOR CONTEXT)  ---------------- 
+# ----------------  START HARNESS WRAPPER PREFIX (FOR CONTEXT)  ----------------
 
 
 
-# ----------------  END HARNESS WRAPPER PREFIX (FOR CONTEXT)  ---------------- 
-# -------------------------- START OF LLM BLOCK ------------------------------
+# -----------------  END HARNESS WRAPPER PREFIX (FOR CONTEXT)  -----------------
+# --------------------------- START OF LLM BLOCK -------------------------------
 
 """,
 
@@ -37,10 +39,11 @@ CHALLENGE_NAME_challenge = Challenge(
 
     suffix = r"""
 # ---------------------------  END OF LLM-CODE BLOCK ---------------------------
-# ----------------  START HARNESS WRAPPER SUFFIX (FOR CONTEXT)  ---------------- 
+# ----------------  START HARNESS WRAPPER SUFFIX (FOR CONTEXT)  ----------------
 
 
 
+# -----------------  END HARNESS WRAPPER SUFFIX (FOR CONTEXT)  -----------------
 """,
 
     questions = [

@@ -1,0 +1,89 @@
+{
+  "LLMGeneration": {
+    "model": "deepseek/deepseek-v3.2",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 3568,
+    "prompt_chars": 13777,
+    "response_tokens": 9030,
+    "response_chars": 15410,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.00506254,
+    "generation_ms": 538268,
+    "code": "import torch\nimport torch.nn as nn\nimport torch.nn.functional as F\nimport numpy as np\nfrom sklearn.metrics import roc_auc_score\nfrom torch.optim.lr_scheduler import ReduceLROnPlateau\nfrom collections import Counter\nimport math\n\n# ---------- IMPORTS ----------\n# Additional imports beyond those in prefix\nimport torch.optim as optim\nfrom typing import Tuple, List\n\n#  -------- CUSTOM DATASET --------\nclass FourTopsDatasetEnhanced(torch.utils.data.Dataset):\n    def __init__(self, events, pre, train: bool = True, **kwargs):\n        X, y = events\n        self.X = pre.transform(X) if pre is not None else X\n        self.y = y\n        self.train = train\n\n    def __len__(self):\n        return self.y.shape[0]\n\n    def __getitem__(self, idx):\n        return self.X[idx], self.y[idx]\n\n# ----------- PRE-PROCESSING ----------\nclass MyPreprocessor:\n    # DATA SPECIFICS\n    # Total flat length per event: 92\n    # Index 0: E_T_miss magnitude\n    # Index 1: phi_Et_miss\n    # Indices 2-6: object 1 (obj_id, E, pT, eta, phi)\n    # ...\n    # Indices 87-91: object 18\n    # Global features = 2, Per-object = 5, Max objects = 18\n\n    def __init__(self):\n        self.global_mean = None\n        self.global_std = None\n        self.obj_feat_mean = None\n        self.obj_feat_std = None\n        self.obj_id_mapping = None\n        self.obj_id_counts = None\n\n    def make_loader_cfg(self):\n        return {\n            \"dataset_builder\": \"llm_script:FourTopsDatasetEnhanced\",\n            \"dataset_kwargs\": {},\n            \"loader_class\": \"torch.utils.data:DataLoader\",\n            \"batch_size\": 256,  # Reduced for memory efficiency\n            \"shuffle\": True,\n            \"num_workers\": 2,\n            \"pin_memory\": True if torch.cuda.is_available() else False,\n            \"collate\": None,\n            \"extra_loader_kwargs\": {},\n            \"eval_overrides\": {\"shuffle\": False, \"batch_size\": 512},\n        }\n\n    def _extract_obj_features(self, X):\n        \"\"\"Extract object features from flattened array\"\"\"\n        batch_size = X.shape[0]\n        # Reshape to [batch, 18, 5]\n        objects = X[:, 2:].reshape(batch_size, 18, 5)\n        return objects\n\n    def _create_obj_id_mapping(self, objects):\n        \"\"\"Create mapping for object IDs\"\"\"\n        # Flatten object IDs across all training events\n        obj_ids = objects[:, :, 0].flatten()\n        obj_ids = obj_ids[obj_ids != 0]  # Remove zero-padding\n\n        # Count frequencies\n        counts = Counter(obj_ids.numpy() if torch.is_tensor(obj_ids) else obj_ids)\n\n        # Create mapping: frequent IDs get unique embedding, others share a common \"rare\" embedding\n        frequent_ids = [id for id, cnt in counts.items() if cnt >= 100]  # At least 100 occurrences\n        self.obj_id_mapping = {id: i+1 for i, id in enumerate(frequent_ids)}  # 0 reserved for padding\n        self.obj_id_mapping[0] = 0  # Padding\n        self.obj_id_counts = counts\n\n        # Rare objects get index len(frequent_ids) + 1\n        self.rare_obj_index = len(frequent_ids) + 1\n\n    def fit(self, X, y=None):\n        X_np = X.numpy() if torch.is_tensor(X) else X\n\n        # Global features normalization\n        global_feats = X_np[:, :2]\n        self.global_mean = global_feats.mean(axis=0)\n        self.global_std = global_feats.std(axis=0) + 1e-8\n\n        # Object features normalization\n        objects = self._extract_obj_features(torch.from_numpy(X_np))\n\n        # Create object ID mapping\n        self._create_obj_id_mapping(objects)\n\n        # Normalize kinematic features (E, pT, eta, phi) - skip object ID\n        # Consider only non-zero-padded objects\n        mask = objects[:, :, 0] != 0  # Shape: [batch, 18]\n        kin_feats = objects[:, :, 1:][mask.unsqueeze(-1).expand(-1, -1, 4)].reshape(-1, 4)  # Shape: [n_objects*4]\n\n        self.obj_feat_mean = kin_feats.mean(dim=0).numpy()\n        self.obj_feat_std = kin_feats.std(dim=0).numpy() + 1e-8\n\n        return self\n\n    def _map_obj_id(self, obj_id):\n        \"\"\"Map object ID to embedding index\"\"\"\n        if obj_id in self.obj_id_mapping:\n            return self.obj_id_mapping[obj_id]\n        else:\n            return self.rare_obj_index\n\n    def transform(self, X):\n        X_tensor = X if torch.is_tensor(X) else torch.from_numpy(X)\n        batch_size = X_tensor.shape[0]\n\n        # Normalize global features\n        global_norm = (X_tensor[:, :2] - torch.from_numpy(self.global_mean).to(X_tensor.device)) / \\\n                     torch.from_numpy(self.global_std).to(X_tensor.device)\n\n        # Process objects\n        objects = self._extract_obj_features(X_tensor)  # [batch, 18, 5]\n\n        # Map object IDs\n        obj_ids = objects[:, :, 0].long()\n        mapped_ids = torch.zeros_like(obj_ids)\n        for i in range(batch_size):\n            for j in range(18):\n                mapped_ids[i, j] = self._map_obj_id(obj_ids[i, j].item())\n\n        # Normalize kinematic features\n        kin_feats = objects[:, :, 1:]  # [batch, 18, 4]\n        kin_norm = (kin_feats - torch.from_numpy(self.obj_feat_mean).to(X_tensor.device)) / \\\n                  torch.from_numpy(self.obj_feat_std).to(X_tensor.device)\n\n        # Create mask for zero-padded objects\n        mask = (obj_ids != 0).float()  # [batch, 18]\n\n        # Replace original object ID with mapped ID\n        processed_objects = torch.cat([\n            mapped_ids.unsqueeze(-1).float(),  # [batch, 18, 1]\n            kin_norm  # [batch, 18, 4]\n        ], dim=-1)  # [batch, 18, 5]\n\n        # Flatten\n        processed_objects_flat = processed_objects.reshape(batch_size, -1)  # [batch, 90]\n        mask_flat = mask.reshape(batch_size, -1)  # [batch, 18]\n\n        # Concatenate everything: [global_norm, processed_objects_flat, mask_flat]\n        # Output shape: [batch, 2 + 90 + 18 = 110]\n        result = torch.cat([global_norm, processed_objects_flat, mask_flat], dim=1)\n\n        return result.float()\n\n# ---------- MODEL DEFINITION ----------\nclass AttentionPooling(nn.Module):\n    \"\"\"Attention-based pooling over objects\"\"\"\n    def __init__(self, input_dim, hidden_dim):\n        super().__init__()\n        self.query = nn.Linear(input_dim, hidden_dim)\n        self.key = nn.Linear(input_dim, hidden_dim)\n        self.value = nn.Linear(input_dim, hidden_dim)\n        self.scale = math.sqrt(hidden_dim)\n\n    def forward(self, x, mask=None):\n        # x: [batch, num_objects, feat_dim]\n        # mask: [batch, num_objects], 1 for real object, 0 for padded\n        batch_size, num_objects, feat_dim = x.shape\n\n        Q = self.query(x)  # [batch, num_objects, hidden_dim]\n        K = self.key(x)    # [batch, num_objects, hidden_dim]\n        V = self.value(x)  # [batch, num_objects, hidden_dim]\n\n        # Attention scores\n        scores = torch.matmul(Q, K.transpose(1, 2)) / self.scale  # [batch, num_objects, num_objects]\n\n        if mask is not None:\n            # Apply mask to prevent attention to padded objects\n            mask_expanded = mask.unsqueeze(1)  # [batch, 1, num_objects]\n            scores = scores.masked_fill(mask_expanded == 0, -1e9)\n\n        attn_weights = F.softmax(scores, dim=-1)  # [batch, num_objects, num_objects]\n\n        # Apply attention\n        output = torch.matmul(attn_weights, V)  # [batch, num_objects, hidden_dim]\n\n        # Pool over objects (mean pooling)\n        if mask is not None:\n            output = output * mask.unsqueeze(-1)  # Zero out padded\n            pooled = output.sum(dim=1) / (mask.sum(dim=1, keepdim=True) + 1e-8)  # [batch, hidden_dim]\n        else:\n            pooled = output.mean(dim=1)  # [batch, hidden_dim]\n\n        return pooled\n\nclass BinaryClassifier(nn.Module):\n    def __init__(self, sample_object):\n        super().__init__()\n        # Input shape after preprocessing: [batch, 110]\n        # First 2: global features, next 90: 18 objects * 5 features, last 18: mask\n\n        # Object processing branch\n        self.obj_embedding = nn.Embedding(\n            num_embeddings=50,  # Max 50 unique object types\n            embedding_dim=16,\n            padding_idx=0\n        )\n\n        # After embedding: [batch, 18, 16] for IDs + [batch, 18, 4] for kinematics = [batch, 18, 20]\n        obj_feat_dim = 20\n\n        # Attention pooling for objects\n        self.attention_pool = AttentionPooling(obj_feat_dim, 64)\n\n        # Global features processing\n        self.global_net = nn.Sequential(\n            nn.Linear(2, 32),\n            nn.BatchNorm1d(32),\n            nn.ReLU(),\n            nn.Dropout(0.2),\n            nn.Linear(32, 64),\n            nn.BatchNorm1d(64),\n            nn.ReLU(),\n            nn.Dropout(0.2)\n        )\n\n        # Combined processing\n        combined_dim = 64 + 64  # global features + object features\n\n        self.combined_net = nn.Sequential(\n            nn.Linear(combined_dim, 256),\n            nn.BatchNorm1d(256),\n            nn.ReLU(),\n            nn.Dropout(0.3),\n            nn.Linear(256, 128),\n            nn.BatchNorm1d(128),\n            nn.ReLU(),\n            nn.Dropout(0.3),\n            nn.Linear(128, 64),\n            nn.BatchNorm1d(64),\n            nn.ReLU(),\n            nn.Dropout(0.2),\n            nn.Linear(64, 1)\n        )\n\n        # Initialize weights\n        self._init_weights()\n\n    def _init_weights(self):\n        for m in self.modules():\n            if isinstance(m, nn.Linear):\n                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')\n                if m.bias is not None:\n                    nn.init.constant_(m.bias, 0)\n            elif isinstance(m, nn.BatchNorm1d):\n                nn.init.constant_(m.weight, 1)\n                nn.init.constant_(m.bias, 0)\n\n    def forward(self, batch_x):\n        # batch_x shape: [batch, 110]\n        batch_size = batch_x.shape[0]\n\n        # Split input\n        global_feats = batch_x[:, :2]  # [batch, 2]\n        obj_data = batch_x[:, 2:92]    # [batch, 90] = 18 * 5\n        mask = batch_x[:, 92:]         # [batch, 18]\n\n        # Reshape object data\n        objects = obj_data.reshape(batch_size, 18, 5)  # [batch, 18, 5]\n\n        # Separate object ID and kinematic features\n        obj_ids = objects[:, :, 0].long()  # [batch, 18]\n        obj_kin = objects[:, :, 1:]        # [batch, 18, 4]\n\n        # Embed object IDs\n        obj_emb = self.obj_embedding(obj_ids)  # [batch, 18, 16]\n\n        # Combine embedded IDs with kinematic features\n        obj_feats = torch.cat([obj_emb, obj_kin], dim=-1)  # [batch, 18, 20]\n\n        # Attention pooling over objects\n        obj_pooled = self.attention_pool(obj_feats, mask)  # [batch, 64]\n\n        # Process global features\n        global_processed = self.global_net(global_feats)  # [batch, 64]\n\n        # Combine features\n        combined = torch.cat([global_processed, obj_pooled], dim=1)  # [batch, 128]\n\n        # Final classification\n        output = self.combined_net(combined)  # [batch, 1]\n\n        return output\n\ndef make_model(example_object):\n    return BinaryClassifier(example_object)\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 50\n\ndef compute_auc(model, data_loader, device):\n    \"\"\"Compute AUC score\"\"\"\n    model.eval()\n    all_preds = []\n    all_labels = []\n\n    with torch.no_grad():\n        for batch_x, batch_y in data_loader:\n            batch_x = batch_x.to(device)\n            batch_y = batch_y.to(device)\n\n            outputs = model(batch_x)\n            probs = torch.sigmoid(outputs).squeeze()\n\n            all_preds.extend(probs.cpu().numpy())\n            all_labels.extend(batch_y.cpu().numpy())\n\n    model.train()\n    return roc_auc_score(all_labels, all_preds)\n\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    device = torch.device(\"cuda\" if torch.cuda.is_available() else \"cpu\")\n    model = model.to(device)\n\n    # Optimizer with weight decay\n    optimizer = optim.AdamW(\n        model.parameters(),\n        lr=1e-3,\n        weight_decay=1e-4,\n        betas=(0.9, 0.999)\n    )\n\n    # Learning rate scheduler\n    scheduler = ReduceLROnPlateau(\n        optimizer,\n        mode='max',\n        factor=0.5,\n        patience=5,\n        verbose=False\n    )\n\n    # Loss function with label smoothing\n    criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([1.0]).to(device))\n\n    # Early stopping\n    best_auc = 0.0\n    patience_counter = 0\n    patience = 10\n\n    train_losses = []\n    val_losses = []\n    train_accs = []\n    val_accs = []\n\n    for epoch in range(epochs):\n        # Training phase\n        model.train()\n        epoch_train_loss = 0.0\n        correct_train = 0\n        total_train = 0\n\n        for batch_x, batch_y in train_loader:\n            batch_x, batch_y = batch_x.to(device), batch_y.to(device).float().unsqueeze(1)\n\n            optimizer.zero_grad()\n            outputs = model(batch_x)\n            loss = criterion(outputs, batch_y)\n\n            loss.backward()\n            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)\n            optimizer.step()\n\n            epoch_train_loss += loss.item()\n\n            # Compute accuracy\n            preds = (torch.sigmoid(outputs) > 0.5).float()\n            correct_train += (preds == batch_y).sum().item()\n            total_train += batch_y.size(0)\n\n        # Validation phase\n        model.eval()\n        epoch_val_loss = 0.0\n        correct_val = 0\n        total_val = 0\n\n        with torch.no_grad():\n            for batch_x, batch_y in val_loader:\n                batch_x, batch_y = batch_x.to(device), batch_y.to(device).float().unsqueeze(1)\n\n                outputs = model(batch_x)\n                loss = criterion(outputs, batch_y)\n                epoch_val_loss += loss.item()\n\n                preds = (torch.sigmoid(outputs) > 0.5).float()\n                correct_val += (preds == batch_y).sum().item()\n                total_val += batch_y.size(0)\n\n        # Compute metrics\n        avg_train_loss = epoch_train_loss / len(train_loader)\n        avg_val_loss = epoch_val_loss / len(val_loader)\n        train_acc = correct_train / total_train\n        val_acc = correct_val / total_val\n\n        # Compute AUC\n        val_auc = compute_auc(model, val_loader, device)\n\n        train_losses.append(avg_train_loss)\n        val_losses.append(avg_val_loss)\n        train_accs.append(train_acc)\n        val_accs.append(val_acc)\n\n        # Update learning rate\n        scheduler.step(val_auc)\n\n        # Early stopping\n        if val_auc > best_auc:\n            best_auc = val_auc\n            best_model_state = model.state_dict().copy()\n            patience_counter = 0\n        else:\n            patience_counter += 1\n\n        if patience_counter >= patience:\n            print(f\"Early stopping at epoch {epoch}\")\n            break\n\n    # Load best model\n    model.load_state_dict(best_model_state)\n\n    return model, train_losses, val_losses, train_accs, val_accs\n\n# IMPORTANT: DO NOT execute the pipeline here – the harness will do that.",
+    "reasoning": "",
+    "Outer_attempt": 1
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-12-19T09:24:09Z",
+    "PyLint": {
+      "passed": false,
+      "messages": [
+        {
+          "type": "error",
+          "module": "script_deepseek_deepseek-v3.2_1023_1",
+          "obj": "train_model",
+          "line": 485,
+          "column": 26,
+          "endLine": 485,
+          "endColumn": 42,
+          "path": "outputs\\12-19\\FOURTOPS\\Q1\\script_deepseek_deepseek-v3.2_1023_1.py",
+          "symbol": "possibly-used-before-assignment",
+          "message": "Possibly using variable 'best_model_state' before assignment",
+          "message-id": "E0606"
+        },
+        {
+          "type": "error",
+          "module": "script_deepseek_deepseek-v3.2_1023_1",
+          "obj": "_run",
+          "line": 504,
+          "column": 14,
+          "endLine": 504,
+          "endColumn": 31,
+          "path": "outputs\\12-19\\FOURTOPS\\Q1\\script_deepseek_deepseek-v3.2_1023_1.py",
+          "symbol": "undefined-variable",
+          "message": "Undefined variable 'make_preprocessor'",
+          "message-id": "E0602"
+        }
+      ]
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-12-19T09:24:09Z",
+        "metrics": {
+          ".\\outputs\\12-19\\FOURTOPS\\Q1\\script_deepseek_deepseek-v3.2_1023_1.py": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 362,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 362,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  }
+}

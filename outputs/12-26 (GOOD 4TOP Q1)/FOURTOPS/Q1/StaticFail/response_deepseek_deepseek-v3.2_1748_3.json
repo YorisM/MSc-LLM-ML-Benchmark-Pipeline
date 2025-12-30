@@ -1,0 +1,73 @@
+{
+  "LLMGeneration": {
+    "model": "deepseek/deepseek-v3.2",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 4054,
+    "prompt_chars": 15289,
+    "response_tokens": 3221,
+    "response_chars": 7217,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.00231023,
+    "generation_ms": 194391,
+    "code": "```python\n# -------------------------- START OF LLM BLOCK ------------------------------\n# <start code template>\n# ---------- IMPORTS ----------\nimport torch.nn.functional as F\nfrom torch.optim import AdamW\nfrom torch.optim.lr_scheduler import ReduceLROnPlateau\nimport numpy as np\nfrom sklearn.preprocessing import StandardScaler, RobustScaler\nimport warnings\nwarnings.filterwarnings('ignore')\n\n# ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.scaler = RobustScaler()\n        self.feature_indices = []\n        self.object_indices = []\n        self.valid_feature_mask = None\n\n    def make_loader_cfg(self) -> dict:\n        return {\n            \"dataset_builder\": \"llm_script:FourTopsDataset\",\n            \"dataset_kwargs\": {},\n            \"loader_class\": \"torch.utils.data:DataLoader\",\n            \"batch_size\": 2048,\n            \"shuffle\": True,\n            \"num_workers\": 4,\n            \"pin_memory\": True,\n            \"collate\": None,\n            \"extra_loader_kwargs\": {},\n            \"eval_overrides\": {\"shuffle\": False, \"batch_size\": 4096},\n        }\n\n    def fit(self, X, y=None):\n        X_np = X.numpy()\n        # Identify valid features (non-zero columns)\n        valid_cols = np.std(X_np, axis=0) > 1e-8\n        self.valid_feature_mask = valid_cols\n\n        # Fit scaler only on valid features\n        X_valid = X_np[:, valid_cols]\n        self.scaler.fit(X_valid)\n\n        # Store feature engineering indices\n        self._setup_feature_indices()\n        return self\n\n    def _setup_feature_indices(self):\n        # Global features: ETmiss and phi_ETmiss\n        self.global_features = [0, 1]\n\n        # Object features: group by particle properties\n        for obj_idx in range(18):\n            start_idx = 2 + obj_idx * 5\n            # obj_id, E, pT, eta, phi\n            self.object_indices.append({\n                'id': start_idx,\n                'energy': start_idx + 1,\n                'pt': start_idx + 2,\n                'eta': start_idx + 3,\n                'phi': start_idx + 4\n            })\n\n    def transform(self, X):\n        X_np = X.numpy()\n\n        # Apply scaling to valid features\n        X_valid = X_np[:, self.valid_feature_mask]\n        X_scaled = self.scaler.transform(X_valid)\n\n        # Reconstruct full tensor with scaled valid features\n        X_result = np.zeros_like(X_np)\n        X_result[:, self.valid_feature_mask] = X_scaled\n\n        # Convert back to torch tensor\n        return torch.from_numpy(X_result.astype(np.float32))\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# ---------- MODEL DEFINITION ----------\nclass TransformerBlock(nn.Module):\n    def __init__(self, dim, heads=8, dropout=0.1):\n        super().__init__()\n        self.attention = nn.MultiheadAttention(dim, heads, dropout=dropout, batch_first=True)\n        self.norm1 = nn.LayerNorm(dim)\n        self.norm2 = nn.LayerNorm(dim)\n        self.ff = nn.Sequential(\n            nn.Linear(dim, dim * 4),\n            nn.GELU(),\n            nn.Dropout(dropout),\n            nn.Linear(dim * 4, dim),\n            nn.Dropout(dropout)\n        )\n\n    def forward(self, x):\n        # x shape: [batch_size, num_objects, dim]\n        attn_output, _ = self.attention(x, x, x)\n        x = self.norm1(x + attn_output)\n        ff_output = self.ff(x)\n        x = self.norm2(x + ff_output)\n        return x\n\nclass BinaryClassifier(nn.Module):\n    def __init__(self, sample_object):\n        super().__init__()\n\n        # Input dimension: 92 features per event\n        input_dim = 92\n\n        # Feature engineering dimensions\n        self.object_dim = 18  # max objects\n        self.feats_per_obj = 5\n\n        # Projection layer for object-centric processing\n        self.object_proj = nn.Sequential(\n            nn.Linear(self.feats_per_obj, 64),\n            nn.BatchNorm1d(64),\n            nn.GELU(),\n            nn.Dropout(0.1),\n            nn.Linear(64, 32),\n            nn.GELU()\n        )\n\n        # Transformer for object interactions\n        self.transformer = TransformerBlock(32, heads=4, dropout=0.1)\n\n        # Global features processing\n        self.global_net = nn.Sequential(\n            nn.Linear(2, 32),\n            nn.BatchNorm1d(32),\n            nn.GELU(),\n            nn.Dropout(0.1),\n            nn.Linear(32, 32),\n            nn.GELU()\n        )\n\n        # High-level feature extractor\n        self.feature_extractor = nn.Sequential(\n            nn.Linear(32 * (self.object_dim + 1), 512),\n            nn.BatchNorm1d(512),\n            nn.GELU(),\n            nn.Dropout(0.3),\n            nn.Linear(512, 256),\n            nn.BatchNorm1d(256),\n            nn.GELU(),\n            nn.Dropout(0.2),\n            nn.Linear(256, 128),\n            nn.BatchNorm1d(128),\n            nn.GELU(),\n            nn.Dropout(0.1),\n        )\n\n        # Output layers with skip connections\n        self.output_layers = nn.Sequential(\n            nn.Linear(128, 64),\n            nn.GELU(),\n            nn.BatchNorm1d(64),\n            nn.Dropout(0.1),\n            nn.Linear(64, 32),\n            nn.GELU(),\n            nn.Linear(32, 1)\n        )\n\n        # Initialize weights\n        self._init_weights()\n\n    def _init_weights(self):\n        for m in self.modules():\n            if isinstance(m, nn.Linear):\n                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')\n                if m.bias is not None:\n                    nn.init.constant_(m.bias, 0)\n            elif isinstance(m, nn.BatchNorm1d):\n                nn.init.constant_(m.weight, 1)\n                nn.init.constant_(m.bias, 0)\n\n    def forward(self, batch_x):\n        # batch_x shape: [batch_size, 92]\n        batch_size = batch_x.shape[0]\n\n        # Extract global features (ETmiss, phi_ETmiss)\n        global_feats = batch_x[:, :2]  # [batch_size, 2]\n        global_processed = self.global_net(global_feats)  # [batch_size, 32]\n\n        # Process objects\n        objects = batch_x[:, 2:]  # [batch_size, 90]\n        objects = objects.view(batch_size, self.object_dim, self.feats_per_obj)  # [batch_size, 18, 5]\n\n        # Project each object\n        objects_processed = self.object_proj(objects.view(-1, self.feats_per_obj))  # [batch_size*18, 32]\n        objects_processed = objects_processed.view(batch_size, self.object_dim, 32)  # [batch_size, 18, 32]\n\n        # Apply transformer\n        objects_transformed = self.transformer(objects_processed)  # [batch_size, 18, 32]\n\n        # Pool object features\n        obj_max = torch.max(objects_transformed, dim=1)[0]  # [batch_size, 32]\n        obj_mean = torch.mean(objects_transformed, dim=1)  # [batch_size, 32]\n        obj_std = torch.std(objects_transformed, dim=1)  # [batch_size, 32]\n\n        # Combine all features\n        combined = torch.cat([\n            global_processed,\n            obj_max,\n            obj_mean,\n            obj_std,\n            objects_transformed.view(batch_size, -1)  # Flatten all objects\n        ], dim=1)  # [batch_size, 32*(1+1+1+1+18) = 32*22 = 704]\n\n        # Extract high-level features",
+    "reasoning": "",
+    "Outer_attempt": 3
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-12-26T16:48:12Z",
+    "PyLint": {
+      "passed": false,
+      "messages": [
+        {
+          "type": "error",
+          "module": "script_deepseek_deepseek-v3.2_1748_3",
+          "obj": "",
+          "line": 51,
+          "column": 1,
+          "endLine": null,
+          "endColumn": null,
+          "path": "outputs\\12-26\\FOURTOPS\\Q1\\script_deepseek_deepseek-v3.2_1748_3.py",
+          "symbol": "syntax-error",
+          "message": "Parsing failed: 'invalid syntax (script_deepseek_deepseek-v3.2_1748_3, line 51)'",
+          "message-id": "E0001"
+        }
+      ]
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [
+          {
+            "filename": ".\\outputs\\12-26\\FOURTOPS\\Q1\\script_deepseek_deepseek-v3.2_1748_3.py",
+            "reason": "syntax error while parsing AST from file"
+          }
+        ],
+        "generated_at": "2025-12-26T16:48:12Z",
+        "metrics": {
+          ".\\outputs\\12-26\\FOURTOPS\\Q1\\script_deepseek_deepseek-v3.2_1748_3.py": {
+            "loc": 235,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 235,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  }
+}

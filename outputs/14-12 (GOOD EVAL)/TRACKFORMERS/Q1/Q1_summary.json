@@ -1,0 +1,18 @@
+{
+  "google_gemini-2.5-pro": {
+    "ok": true,
+    "load_s": 5.96,
+    "eval_s": 13.76,
+    "FitAccuracy": 0.9642438487049441,
+    "accuracy": 0.07322058658938155,
+    "missing_files": []
+  },
+  "openai_o4-mini-high-2025-04-16": {
+    "ok": true,
+    "load_s": 2.27,
+    "eval_s": 2.07,
+    "FitAccuracy": 0.9801980198019802,
+    "accuracy": 0.10891089108910891,
+    "missing_files": []
+  }
+}

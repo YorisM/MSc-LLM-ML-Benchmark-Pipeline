@@ -1,0 +1,135 @@
+script,success,return_code,stdout,stderr,duration_s,max_rss_kb
+C:\Users\yoris\projects\Benchmark\outputs\17-12\TRACKFORMERS\Q1\google_gemini-2.5-pro\script_google_gemini-2.5-pro_1929_2.py,True,0,"argv0=/usr/local/bin/train.sh
+argv1=outputs/17-12/TRACKFORMERS/Q1/google_gemini-2.5-pro/script_google_gemini-2.5-pro_1929_2.py
+argv2=
+","+ exec
++ PY=outputs/17-12/TRACKFORMERS/Q1/google_gemini-2.5-pro/script_google_gemini-2.5-pro_1929_2.py
++ shift
+++ echo ''
+++ tr -d '\r\n'
+++ xargs
++ DRY=
++ [[ outputs/17-12/TRACKFORMERS/Q1/google_gemini-2.5-pro/script_google_gemini-2.5-pro_1929_2.py == \/\u\s\r\/\l\o\c\a\l\/\b\i\n\/\t\r\a\i\n\.\s\h ]]
++ [[ '' =~ (--dryrun|--dry-run) ]]
++ TIMEOUT=99999
++ : 0
++ : 0
++ ulimit -t 99999
++ ((  MEMORY_LIMIT_GB > 0  ))
++ ((  PIDS_LIMIT > 0  ))
++ timeout --signal=KILL 99999s python outputs/17-12/TRACKFORMERS/Q1/google_gemini-2.5-pro/script_google_gemini-2.5-pro_1929_2.py
+mkdir -p failed for path /home/sandbox/.config/matplotlib: [Errno 30] Read-only file system: '/home/sandbox/.config'
+Matplotlib created a temporary cache directory at /tmp/matplotlib-ysj3q3qr because there was an issue with the default path (/home/sandbox/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.
+/opt/venv/lib/python3.12/site-packages/torch/optim/lr_scheduler.py:62: UserWarning: The verbose parameter is deprecated. Please use get_last_lr() to access the learning rate.
+  warnings.warn(
++ python_rc=0
++ [[ 0 -ne 0 ]]
++ [[ '' =~ (--dryrun|--dry-run) ]]
+++ dirname outputs/17-12/TRACKFORMERS/Q1/google_gemini-2.5-pro/script_google_gemini-2.5-pro_1929_2.py
++ MODEL_DIR=outputs/17-12/TRACKFORMERS/Q1/google_gemini-2.5-pro
++ pushd outputs/17-12/TRACKFORMERS/Q1/google_gemini-2.5-pro
++ shopt -s nullglob
++ ref=
++ for cand in *_model.pkl *_state.pt *_preproc.pkl
++ [[ -e google_gemini-2.5-pro_1929_2_model.pkl ]]
++ ref=google_gemini-2.5-pro_1929_2_model.pkl
++ break
++ [[ -z google_gemini-2.5-pro_1929_2_model.pkl ]]
++ stem=google_gemini-2.5-pro_1929_2_model.pkl
++ case ""$ref"" in
++ stem=google_gemini-2.5-pro_1929_2
++ MANIFEST=google_gemini-2.5-pro_1929_2_manifest.sha256
++ files=(""${stem}_state.pt"" ""${stem}_model.pkl"" ""${stem}_preproc.pkl"" ""${stem}_loaderspec.json"")
++ have=()
++ for f in ""${files[@]}""
++ [[ -e google_gemini-2.5-pro_1929_2_state.pt ]]
++ have+=(""$f"")
++ for f in ""${files[@]}""
++ [[ -e google_gemini-2.5-pro_1929_2_model.pkl ]]
++ have+=(""$f"")
++ for f in ""${files[@]}""
++ [[ -e google_gemini-2.5-pro_1929_2_preproc.pkl ]]
++ have+=(""$f"")
++ for f in ""${files[@]}""
++ [[ -e google_gemini-2.5-pro_1929_2_loaderspec.json ]]
++ have+=(""$f"")
++ req=(""${stem}_loaderspec.json"" ""${stem}_model.pkl"" ""${stem}_preproc.pkl"")
++ for f in ""${req[@]}""
++ [[ ! -e google_gemini-2.5-pro_1929_2_loaderspec.json ]]
++ for f in ""${req[@]}""
++ [[ ! -e google_gemini-2.5-pro_1929_2_model.pkl ]]
++ for f in ""${req[@]}""
++ [[ ! -e google_gemini-2.5-pro_1929_2_preproc.pkl ]]
++ (( 4==0 ))
++ sha256sum google_gemini-2.5-pro_1929_2_state.pt google_gemini-2.5-pro_1929_2_model.pkl google_gemini-2.5-pro_1929_2_preproc.pkl google_gemini-2.5-pro_1929_2_loaderspec.json
++ shopt -u nullglob
++ echo 'Hash manifest written â†’ google_gemini-2.5-pro_1929_2_manifest.sha256'
+Hash manifest written â†’ google_gemini-2.5-pro_1929_2_manifest.sha256
++ popd
+",10153.60063880001,-310140
+C:\Users\yoris\projects\Benchmark\outputs\17-12\TRACKFORMERS\Q1\openai_o4-mini-high-2025-04-16\script_openai_o4-mini-high-2025-04-16_1922_1.py,True,0,"argv0=/usr/local/bin/train.sh
+argv1=outputs/17-12/TRACKFORMERS/Q1/openai_o4-mini-high-2025-04-16/script_openai_o4-mini-high-2025-04-16_1922_1.py
+argv2=
+","+ exec
++ PY=outputs/17-12/TRACKFORMERS/Q1/openai_o4-mini-high-2025-04-16/script_openai_o4-mini-high-2025-04-16_1922_1.py
++ shift
+++ echo ''
+++ tr -d '\r\n'
+++ xargs
++ DRY=
++ [[ outputs/17-12/TRACKFORMERS/Q1/openai_o4-mini-high-2025-04-16/script_openai_o4-mini-high-2025-04-16_1922_1.py == \/\u\s\r\/\l\o\c\a\l\/\b\i\n\/\t\r\a\i\n\.\s\h ]]
++ [[ '' =~ (--dryrun|--dry-run) ]]
++ TIMEOUT=99999
++ : 0
++ : 0
++ ulimit -t 99999
++ ((  MEMORY_LIMIT_GB > 0  ))
++ ((  PIDS_LIMIT > 0  ))
++ timeout --signal=KILL 99999s python outputs/17-12/TRACKFORMERS/Q1/openai_o4-mini-high-2025-04-16/script_openai_o4-mini-high-2025-04-16_1922_1.py
+mkdir -p failed for path /home/sandbox/.config/matplotlib: [Errno 30] Read-only file system: '/home/sandbox/.config'
+Matplotlib created a temporary cache directory at /tmp/matplotlib-uv2mrqne because there was an issue with the default path (/home/sandbox/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.
++ python_rc=0
++ [[ 0 -ne 0 ]]
++ [[ '' =~ (--dryrun|--dry-run) ]]
+++ dirname outputs/17-12/TRACKFORMERS/Q1/openai_o4-mini-high-2025-04-16/script_openai_o4-mini-high-2025-04-16_1922_1.py
++ MODEL_DIR=outputs/17-12/TRACKFORMERS/Q1/openai_o4-mini-high-2025-04-16
++ pushd outputs/17-12/TRACKFORMERS/Q1/openai_o4-mini-high-2025-04-16
++ shopt -s nullglob
++ ref=
++ for cand in *_model.pkl *_state.pt *_preproc.pkl
++ [[ -e openai_o4-mini-high-2025-04-16_1922_1_model.pkl ]]
++ ref=openai_o4-mini-high-2025-04-16_1922_1_model.pkl
++ break
++ [[ -z openai_o4-mini-high-2025-04-16_1922_1_model.pkl ]]
++ stem=openai_o4-mini-high-2025-04-16_1922_1_model.pkl
++ case ""$ref"" in
++ stem=openai_o4-mini-high-2025-04-16_1922_1
++ MANIFEST=openai_o4-mini-high-2025-04-16_1922_1_manifest.sha256
++ files=(""${stem}_state.pt"" ""${stem}_model.pkl"" ""${stem}_preproc.pkl"" ""${stem}_loaderspec.json"")
++ have=()
++ for f in ""${files[@]}""
++ [[ -e openai_o4-mini-high-2025-04-16_1922_1_state.pt ]]
++ have+=(""$f"")
++ for f in ""${files[@]}""
++ [[ -e openai_o4-mini-high-2025-04-16_1922_1_model.pkl ]]
++ have+=(""$f"")
++ for f in ""${files[@]}""
++ [[ -e openai_o4-mini-high-2025-04-16_1922_1_preproc.pkl ]]
++ have+=(""$f"")
++ for f in ""${files[@]}""
++ [[ -e openai_o4-mini-high-2025-04-16_1922_1_loaderspec.json ]]
++ have+=(""$f"")
++ req=(""${stem}_loaderspec.json"" ""${stem}_model.pkl"" ""${stem}_preproc.pkl"")
++ for f in ""${req[@]}""
++ [[ ! -e openai_o4-mini-high-2025-04-16_1922_1_loaderspec.json ]]
++ for f in ""${req[@]}""
++ [[ ! -e openai_o4-mini-high-2025-04-16_1922_1_model.pkl ]]
++ for f in ""${req[@]}""
++ [[ ! -e openai_o4-mini-high-2025-04-16_1922_1_preproc.pkl ]]
++ (( 4==0 ))
++ sha256sum openai_o4-mini-high-2025-04-16_1922_1_state.pt openai_o4-mini-high-2025-04-16_1922_1_model.pkl openai_o4-mini-high-2025-04-16_1922_1_preproc.pkl openai_o4-mini-high-2025-04-16_1922_1_loaderspec.json
++ shopt -u nullglob
++ echo 'Hash manifest written â†’ openai_o4-mini-high-2025-04-16_1922_1_manifest.sha256'
+Hash manifest written â†’ openai_o4-mini-high-2025-04-16_1922_1_manifest.sha256
++ popd
+",22.13104210002348,1360

@@ -8,7 +8,6 @@ import json
 #   Problem Description
 #   Evaluation Metric
 #   Dataset Description
-#   Runtime Constraints
 #   Prefix
 #   Code Template
 #   Suffix
@@ -23,26 +22,21 @@ import json
 # LLM Response = data pre-processing, model definition, training
 # Suffix = preparing outputs, main function and running the model
 
+# - - - - - - - - - - - - - -
+# TODO: Default fields below need to be updated based on revised versions, both from FOURTOPS as TRACKFORMERS
+# - - - - - - - - - - - - - -
 
 DEFAULT_INSTRUCTIONS = r"""** Instructions **
-You are an expert at programming in Python, machine learning,
-particle and high energy physics. You will help me answer a question
-in a machine learning challenge format where you strive to maximise
-a scalar metric in order to learn more about your scientific creativity
-and scientific understanding. You will follow all of the instructions 
-to your best capabilities. Your first priority is to produce a correct 
-solution in terms of runnable python code. Your second priority is to 
-maximise the scoring metric defined below.
+You are an expert at programming in Python, machine learning, particle and high energy physics. You will help me answer a question in a machine learning challenge format where you strive to maximise a scalar metric in order to learn more about your scientific creativity and scientific understanding. You will follow all of the instructions to your best capabilities. Your first priority is to produce a correct solution in terms of runnable python code. Your second priority is to maximise the scoring metric defined below.
 """ 
 
+# not being used atm
 DEFAULT_RUNTIME_CONSTRAINTS = r"""** Runtime Constraints **	
 /
 """
 
 DEFAULT_RESPONSE_FORMAT = r"""** Response Format **
-Your response must strictly be python code. 
-If you must wrap it, put it in a ```python fenced block and nothing else.
-Your response must follow these rules:
+Your response must strictly be python code. If you must wrap it, put it in a ```python fenced block and nothing else. Your response must follow these rules:
 
 1. Do not add any formatting, such as markdown, to the response. 
 2. Replace each "# <LLM: ...>" comment, in the code template, with the required code. 
@@ -196,7 +190,6 @@ if __name__ == "__main__":
     _run(dryrun="--dryrun" in sys.argv)
 """
 
-
 class Question:
     def __init__(self, question_id, text, context=""):
         self.question_id = question_id
@@ -204,7 +197,7 @@ class Question:
         self.context = context
 
 class Challenge:
-    def __init__(self, name, dataset, problem_description, dataset_description, 
+    def __init__(self, name, version, dataset, problem_description, dataset_description, 
                  evaluation_metric, questions, code_template,
                  instructions = DEFAULT_INSTRUCTIONS,
                  runtime_constraints = DEFAULT_RUNTIME_CONSTRAINTS, 
@@ -212,6 +205,7 @@ class Challenge:
                  prefix = DEFAULT_PREFIX, suffix = DEFAULT_SUFFIX):
         
         self.name = name
+        self.version = version
         self.dataset = dataset
         self.problem_description = problem_description
         self.dataset_description = dataset_description
@@ -236,7 +230,8 @@ class Challenge:
             f"{self.suffix}"
             f"{question.text}\n"
             f"{question.context}\n"
-            f"{self.response_format}"
+            f"{self.response_format}\n"
+            f"{self.version}"
         )
         return prompt
     

@@ -1,11 +1,23 @@
-# .dockerignore
+# docker/.dockerignore
 
+# data & outputs
 challenges/**/data/
 outputs/**  
 
+# vcs / virtual envs
+.git
+.gitignore
 .env/
 .venv/
+.venv_old
+
+# python caches
 __pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# misc
 pylintrc
 *.pt
 *.pkl
@@ -13,5 +25,9 @@ pylintrc
 *.gz
 *.csv
 *.log
-*.ipynb
+*.ipynbs
 *.pdf
+
+# OS cruft
+.DS_Store
+Thumbs.db

@@ -1,0 +1,85 @@
+{
+  "LLMGeneration": {
+    "model": "google/gemini-2.5-pro",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 3890,
+    "prompt_chars": 14903,
+    "response_tokens": 21770,
+    "response_chars": 15588,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.2225625,
+    "generation_ms": 188234,
+    "code": "# ---------- IMPORTS ----------\n# NOTE: Some imports (torch, nn, numpy, DataLoader) are already available (see prefix).\n# Only import extra std-lib modules or modules available in the environment, i.e: torch, scipy, sklearn (sub-)modules you actually use.\nimport torch_geometric\nfrom torch_geometric.data import Dataset as PyGDataset, Data as PyGData\nfrom torch_geometric.nn import EdgeConv, knn_graph\nimport scipy.sparse\nfrom utils.llm_io import split_X_y\n\n# -------- (OPTIONAL) CUSTOM DATASET  --------\nclass CustomPygDataset(PyGDataset):\n    \"\"\"\n    Custom PyTorch Geometric dataset.\n    For each event, it creates a graph where hits are nodes.\n    Nodes are connected via k-NN.\n    It prepares node features, edge indices, and edge labels for training.\n    \"\"\"\n    def __init__(self, events, preprocessor, train: bool, k: int):\n        super().__init__()\n        self.events = events\n        self.pre = preprocessor\n        self.is_train = train\n        self.k = k\n\n    def len(self):\n        return len(self.events)\n\n    def get(self, idx):\n        event = self.events[idx]\n        X, y = split_X_y(event)\n\n        X_tensor = torch.from_numpy(X).float()\n\n        # Use unscaled cartesian coordinates for k-NN to capture geometric proximity.\n        r, theta, z = X_tensor[:, 0], X_tensor[:, 1], X_tensor[:, 2]\n        pos_x = r * torch.cos(theta)\n        pos_y = r * torch.sin(theta)\n        pos = torch.stack([pos_x, pos_y, z], dim=-1)\n\n        edge_index = knn_graph(pos, self.k, loop=False)\n\n        # Get preprocessed node features for the GNN.\n        node_features = self.pre.transform_single(X_tensor)\n\n        # Create edge-level ground truth labels for training.\n        y_tensor = torch.from_numpy(y)\n        row, col = edge_index\n        edge_y = (y_tensor[row] == y_tensor[col]) & (y_tensor[row] > 0)\n\n        return PyGData(x=node_features, edge_index=edge_index, y=edge_y.float(),\n                       pos=pos, truth_labels=y_tensor.long(), num_nodes=X_tensor.shape[0])\n\ndef make_dataset(events, pre, train: bool, **kwargs):\n    k = kwargs.get(\"k\", 16)\n    return CustomPygDataset(events, pre, train=train, k=k)\n\n# ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    # Must implement:\n    #   - fit()\n    #   - transform()\n\n    def __init__(self):\n        self.feature_means = None\n        self.feature_stds = None\n        self.num_layers = 20  # As per challenge_data_specs.json\n\n    def _get_cartesian(self, X: torch.Tensor):\n        r, theta = X[:, 0], X[:, 1]\n        x = r * torch.cos(theta)\n        y = r * torch.sin(theta)\n        return x, y\n\n    def make_loader_cfg(self) -> dict: \n        return {\n            \"dataset_builder\": \"llm_script:make_dataset\",\n            \"dataset_kwargs\": {\"k\": 16},\n            \"loader_class\": \"torch_geometric.loader:DataLoader\",\n            \"batch_size\": 32,\n            \"shuffle\": True,\n            \"num_workers\": 2 if torch.cuda.is_available() else 0, # Use workers if GPU is available\n            \"pin_memory\": True,\n            \"collate\": None,  # PyG loader supplies its own collate\n            \"extra_loader_kwargs\": {},\n            \"eval_overrides\": {\"shuffle\": False}\n        }\n\n    def fit(self, data):\n        # data is a list of X tensors [N, 4] from the training set.\n        all_features = []\n        for X_np in data:\n            X = torch.from_numpy(X_np).float()\n            x, y = self._get_cartesian(X)\n            r, z = X[:, 0], X[:, 2]\n            # Features to be scaled: x, y, z, r\n            features = torch.stack([x, y, z, r], dim=-1) # [N_hits, 4]\n            all_features.append(features)\n\n        all_features = torch.cat(all_features, dim=0)\n        self.feature_means = all_features.mean(dim=0)\n        self.feature_stds = all_features.std(dim=0)\n        return self\n\n    def transform(self, data):\n        # This is applied to the raw event list.\n        # We perform the actual feature transformation in the Dataset's __getitem__\n        # for on-the-fly graph construction. So this is an identity function.\n        return data\n\n    def transform_single(self, X: torch.Tensor):\n        # X is a single event's feature tensor: [N, 4] float\n        x, y = self._get_cartesian(X)\n        z, r, layer_id = X[:, 2], X[:, 0], X[:, 3]\n\n        # Scale continuous features\n        cont_features = torch.stack([x, y, z, r], dim=-1) # [N, 4]\n        cont_features = (cont_features - self.feature_means.to(X.device)) / self.feature_stds.to(X.device)\n\n        # One-hot encode layer_id\n        layer_id_one_hot = nn.functional.one_hot(layer_id.long(), num_classes=self.num_layers).float() # [N, 20]\n\n        return torch.cat([cont_features, layer_id_one_hot], dim=-1) # [N, 24]\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# ---------- MODEL ARCHITECTURE ----------\nclass HitClassifier(nn.Module):\n    def __init__(self, example_batch_x):\n        super().__init__()\n        # example_batch_x is a PyG Batch object\n        input_dim = example_batch_x.num_node_features\n        h_dim = 64\n\n        # Stacked EdgeConv layers for deep feature learning\n        self.gnn1 = EdgeConv(nn.Sequential(nn.Linear(2 * input_dim, h_dim), nn.ReLU()))\n        self.gnn2 = EdgeConv(nn.Sequential(nn.Linear(2 * h_dim, h_dim), nn.ReLU()))\n        self.gnn3 = EdgeConv(nn.Sequential(nn.Linear(2 * h_dim, h_dim), nn.ReLU()))\n\n        self.edge_predictor = nn.Sequential(\n            nn.Linear(2 * h_dim, h_dim),\n            nn.ReLU(),\n            nn.Linear(h_dim, 1)\n        )\n        self.register_buffer('dummy', torch.tensor(0))\n\n    @property\n    def device(self):\n        return self.dummy.device\n\n    def _get_edge_scores(self, batch: PyGData):\n        h0 = batch.x # [N_total, F]\n        h1 = self.gnn1(h0, batch.edge_index) # [N_total, h_dim]\n        h2 = self.gnn2(h1, batch.edge_index) # [N_total, h_dim]\n        h3 = self.gnn3(h2, batch.edge_index) # [N_total, h_dim]\n\n        row, col = batch.edge_index # [2, E_total]\n        edge_features = torch.cat([h3[row], h3[col]], dim=-1) # [E_total, 2*h_dim]\n        return self.edge_predictor(edge_features)  # [E_total, 1]\n\n    def forward(self, batch_x: PyGData):\n        # batch_x is a PyG Batch object\n        edge_logits = self._get_edge_scores(batch_x)\n        if self.training:\n            return edge_logits\n        else:\n            with torch.no_grad():\n                return self.cluster_from_logits(batch_x, edge_logits)\n\n    def cluster_from_logits(self, batch_x: PyGData, edge_logits: torch.Tensor):\n        edge_scores = torch.sigmoid(edge_logits).squeeze()\n\n        pred_labels = []\n        for i in range(batch_x.num_graphs):\n            node_mask = (batch_x.batch == i)\n            num_nodes_in_graph = int(node_mask.sum())\n\n            row, col = batch_x.edge_index\n            edge_mask_for_graph = node_mask[row]\n\n            graph_edges = batch_x.edge_index[:, edge_mask_for_graph]\n            graph_edge_scores = edge_scores[edge_mask_for_graph]\n\n            # Map global node indices to local-to-graph indices\n            node_indices = torch.where(node_mask)[0]\n            mapping = -torch.ones(batch_x.num_nodes, dtype=torch.long, device=self.device)\n            mapping[node_indices] = torch.arange(num_nodes_in_graph, device=self.device)\n            local_edges = mapping[graph_edges]\n\n            # Filter edges with score > 0.5\n            passing_edges = local_edges[:, graph_edge_scores > 0.5]\n\n            if passing_edges.shape[1] > 0:\n                adj = scipy.sparse.coo_matrix(\n                    (torch.ones(passing_edges.shape[1]), \n                     (passing_edges[0].cpu().numpy(), passing_edges[1].cpu().numpy())),\n                    shape=(num_nodes_in_graph, num_nodes_in_graph)\n                )\n                _, labels = scipy.sparse.csgraph.connected_components(\n                    csgraph=adj, directed=False, return_labels=True\n                )\n                labels = torch.from_numpy(labels).long().to(self.device)\n            else: # No edges passed the threshold\n                labels = torch.arange(num_nodes_in_graph, device=self.device)\n\n            # Filter out small clusters (< 4 hits)\n            unique_labels, counts = torch.unique(labels, return_counts=True)\n            small_clusters = unique_labels[counts < 4]\n            final_labels = labels.clone()\n            if len(small_clusters) > 0:\n                is_small = torch.isin(labels, small_clusters)\n                final_labels[is_small] = -1\n\n            # Renumber valid clusters to be 1-indexed and contiguous\n            valid_mask = (final_labels != -1)\n            if valid_mask.any():\n                uniques, inverse = torch.unique(final_labels[valid_mask], return_inverse=True)\n                final_labels[valid_mask] = inverse + 1\n\n            pred_labels.append(final_labels.long())\n        return pred_labels\n\ndef make_model(example_batch_x):\n    return HitClassifier(example_batch_x)\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 15\ndef train_model(model, train_loader, val_loader, epochs):\n    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)\n    # Give more weight to positive class (true edges) due to imbalance\n    criterion = torch.nn.BCEWithLogitsLoss(pos_weight=torch.tensor(2.0).to(device))\n\n    best_val_loss = float('inf')\n    patience, patience_counter = 5, 0\n\n    train_loss, val_loss, train_acc, val_acc = [], [], [], []\n\n    for epoch in range(epochs):\n        model.train()\n        total_loss, total_acc, batches = 0, 0, 0\n        for batch in train_loader:\n            batch = batch.to(device)\n            optimizer.zero_grad()\n\n            edge_logits = model(batch)\n            loss = criterion(edge_logits.squeeze(), batch.y)\n\n            loss.backward()\n            optimizer.step()\n\n            total_loss += loss.item()\n            acc = ((torch.sigmoid(edge_logits).squeeze() > 0.5) == batch.y).float().mean()\n            total_acc += acc.item()\n            batches += 1\n\n        train_loss.append(total_loss / batches)\n        train_acc.append(total_acc / batches)\n\n        model.eval()\n        total_vloss, total_vacc, vbatches = 0, 0, 0\n        with torch.no_grad():\n            for batch in val_loader:\n                batch = batch.to(device)\n                # To get validation loss, we need the logits, not clustered labels.\n                # We can call the internal method that just computes scores.\n                edge_logits = model._get_edge_scores(batch)\n                vloss = criterion(edge_logits.squeeze(), batch.y)\n                total_vloss += vloss.item()\n                vacc = ((torch.sigmoid(edge_logits).squeeze() > 0.5) == batch.y).float().mean()\n                total_vacc += vacc.item()\n                vbatches += 1\n\n        current_val_loss = total_vloss / vbatches\n        val_loss.append(current_val_loss)\n        val_acc.append(total_vacc / vbatches)\n\n        print(f\"Epoch {epoch+1}/{epochs}: Train Loss: {train_loss[-1]:.4f}, Train Acc: {train_acc[-1]:.4f}, Val Loss: {val_loss[-1]:.4f}, Val Acc: {val_acc[-1]:.4f}\")\n\n        if current_val_loss < best_val_loss:\n            best_val_loss = current_val_loss\n            patience_counter = 0\n        else:\n            patience_counter += 1\n            if patience_counter >= patience:\n                print(f\"Early stopping at epoch {epoch+1} due to no improvement in validation loss.\")\n                break\n\n    return model, train_loss, val_loss, train_acc, val_acc",
+    "reasoning": "",
+    "Outer_attempt": 1
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-12-17T18:26:13Z",
+    "PyLint": {
+      "passed": true,
+      "messages": [
+        {
+          "type": "error",
+          "module": "script_google_gemini-2.5-pro_1926_1",
+          "obj": "MyPreprocessor.transform_single",
+          "line": 151,
+          "column": 27,
+          "endLine": 151,
+          "endColumn": 94,
+          "path": "outputs\\17-12\\TRACKFORMERS\\Q1\\script_google_gemini-2.5-pro_1926_1.py",
+          "symbol": "not-callable",
+          "message": "nn.functional.one_hot is not callable",
+          "message-id": "E1102"
+        }
+      ]
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-12-17T18:26:13Z",
+        "metrics": {
+          ".\\./outputs/17-12/TRACKFORMERS/Q1/script_google_gemini-2.5-pro_1926_1.py": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 271,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 271,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2025-12-17T18:26:30Z",
+    "passed": false,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/17-12/TRACKFORMERS/Q1/script_google_gemini-2.5-pro_1926_1.py\nargv2=--dryrun\n",
+      "stderr": "+ exec\n+ PY=outputs/17-12/TRACKFORMERS/Q1/script_google_gemini-2.5-pro_1926_1.py\n+ shift\n++ echo --dryrun\n++ tr -d '\\r\\n'\n++ xargs\n+ DRY=--dryrun\n+ [[ outputs/17-12/TRACKFORMERS/Q1/script_google_gemini-2.5-pro_1926_1.py == \\/\\u\\s\\r\\/\\l\\o\\c\\a\\l\\/\\b\\i\\n\\/\\t\\r\\a\\i\\n\\.\\s\\h ]]\n+ [[ --dryrun =~ (--dryrun|--dry-run) ]]\n+ TIMEOUT=3600\n+ : 0\n+ : 0\n+ ulimit -t 3600\n+ ((  MEMORY_LIMIT_GB > 0  ))\n+ ((  PIDS_LIMIT > 0  ))\n+ timeout --signal=KILL 3600s python outputs/17-12/TRACKFORMERS/Q1/script_google_gemini-2.5-pro_1926_1.py --dryrun\nmkdir -p failed for path /home/sandbox/.config/matplotlib: [Errno 30] Read-only file system: '/home/sandbox/.config'\nMatplotlib created a temporary cache directory at /tmp/matplotlib-53lvisob because there was an issue with the default path (/home/sandbox/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.\nTraceback (most recent call last):\n  File \"/workspace/outputs/17-12/TRACKFORMERS/Q1/script_google_gemini-2.5-pro_1926_1.py\", line 391, in <module>\n    _run(dryrun=\"--dryrun\" in sys.argv)\n  File \"/workspace/outputs/17-12/TRACKFORMERS/Q1/script_google_gemini-2.5-pro_1926_1.py\", line 332, in _run\n    pre = make_preprocessor().fit(Xs)\n          ^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/outputs/17-12/TRACKFORMERS/Q1/script_google_gemini-2.5-pro_1926_1.py\", line 123, in fit\n    X = torch.from_numpy(X_np).float()\n        ^^^^^^^^^^^^^^^^^^^^^^\nTypeError: expected np.ndarray (got Tensor)\n"
+    },
+    "return_code": 1
+  }
+}

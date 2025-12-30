@@ -1,0 +1,71 @@
+{
+  "LLMGeneration": {
+    "model": "mistralai/devstral-2512:free",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 4015,
+    "prompt_chars": 15289,
+    "response_tokens": 1907,
+    "response_chars": 7366,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0,
+    "generation_ms": 32022,
+    "code": "# ---------- IMPORTS ----------\nfrom torch.nn import functional as F\nfrom torch.optim import Adam\nfrom torch.optim.lr_scheduler import ReduceLROnPlateau\nfrom sklearn.preprocessing import StandardScaler\nimport torch.nn.utils.rnn as rnn_utils\n\n# ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.scaler = StandardScaler()\n        self.mask_value = -999.0  # Special value to mark padding\n\n    def make_loader_cfg(self) -> dict:\n        return {\n            \"dataset_builder\": \"llm_script:FourTopsDataset\",\n            \"dataset_kwargs\": {},\n            \"loader_class\": \"torch.utils.data:DataLoader\",\n            \"batch_size\": 512,\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": False,\n            \"collate\": None,\n            \"extra_loader_kwargs\": {},\n            \"eval_overrides\": {\"shuffle\": False},\n        }\n\n    def fit(self, X, y=None):\n        # Reshape to 2D for scaling (flatten all features except batch dimension)\n        n_samples = X.shape[0]\n        X_flat = X.reshape(n_samples, -1)\n        # Replace padding zeros with mask_value before scaling\n        X_flat[X_flat == 0] = self.mask_value\n        self.scaler.fit(X_flat)\n        return self\n\n    def transform(self, X):\n        n_samples = X.shape[0]\n        X_flat = X.reshape(n_samples, -1)\n        # Apply scaling\n        X_scaled = self.scaler.transform(X_flat)\n        # Restore padding to zeros (for compatibility with model)\n        X_scaled[X_scaled == self.mask_value] = 0\n        # Reshape back to original\n        return torch.from_numpy(X_scaled.reshape(n_samples, 92)).float()\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# ---------- MODEL DEFINITION ----------\nclass BinaryClassifier(nn.Module):\n    def __init__(self, sample_object):\n        super().__init__()\n        # Extract dimensions from sample\n        if isinstance(sample_object, torch.Tensor):\n            self.input_dim = sample_object.shape[-1]  # 92\n        else:\n            self.input_dim = 92\n\n        # Feature extraction layers\n        self.fc1 = nn.Linear(self.input_dim, 256)\n        self.fc2 = nn.Linear(256, 128)\n        self.fc3 = nn.Linear(128, 64)\n        self.fc4 = nn.Linear(64, 32)\n\n        # Attention mechanism for object-level features\n        self.attention = nn.Sequential(\n            nn.Linear(32, 16),\n            nn.Tanh(),\n            nn.Linear(16, 1),\n            nn.Softmax(dim=1)\n        )\n\n        # Final classification layers\n        self.classifier = nn.Sequential(\n            nn.Linear(32, 16),\n            nn.ReLU(),\n            nn.Dropout(0.3),\n            nn.Linear(16, 1)\n        )\n\n        # Batch normalization\n        self.bn1 = nn.BatchNorm1d(256)\n        self.bn2 = nn.BatchNorm1d(128)\n        self.bn3 = nn.BatchNorm1d(64)\n        self.bn4 = nn.BatchNorm1d(32)\n\n    def forward(self, batch_x):\n        # batch_x shape: [batch_size, 92]\n        x = F.relu(self.bn1(self.fc1(batch_x)))\n        x = F.relu(self.bn2(self.fc2(x)))\n        x = F.relu(self.bn3(self.fc3(x)))\n        x = F.relu(self.bn4(self.fc4(x)))\n\n        # Reshape for attention over object features\n        # Each object has 5 features (including obj_id), so we have 18 objects + 2 global features\n        # We'll apply attention to the object features only\n        global_features = x[:, :2]  # First 2 features are global\n        obj_features = x[:, 2:]     # Remaining 90 features (18 objects * 5 features)\n\n        # Reshape to [batch_size, 18, 5]\n        obj_features = obj_features.view(-1, 18, 5)\n\n        # Apply attention to get weighted sum of object features\n        attention_weights = self.attention(obj_features)  # [batch_size, 18, 1]\n        attended_objects = torch.sum(attention_weights * obj_features, dim=1)  # [batch_size, 5]\n\n        # Combine with global features\n        combined = torch.cat([global_features, attended_objects], dim=1)\n\n        # Final classification\n        logits = self.classifier(combined)\n        return logits.squeeze(1)\n\ndef make_model(example_object):\n    return BinaryClassifier(example_object)\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 50\n\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    optimizer = Adam(model.parameters(), lr=0.001, weight_decay=1e-5)\n    scheduler = ReduceLROnPlateau(optimizer, 'max', patience=5, factor=0.5, verbose=True)\n    criterion = nn.BCEWithLogitsLoss()\n    best_auc = 0\n    best_model = None\n\n    train_loss_history = []\n    val_loss_history = []\n    train_acc_history = []\n    val_acc_history = []\n\n    for epoch in range(epochs):\n        model.train()\n        train_loss = 0\n        train_correct = 0\n        train_total = 0\n\n        for batch in train_loader:\n            view = normalise_batch(batch, device=device)\n            xb, yb = view.batch_x, view.batch_y\n            yb = yb.float().unsqueeze(1)  # BCE expects [batch_size, 1]\n\n            optimizer.zero_grad()\n            outputs = model(xb)\n            loss = criterion(outputs, yb)\n            loss.backward()\n            optimizer.step()\n\n            train_loss += loss.item() * xb.size(0)\n            predicted = (torch.sigmoid(outputs) > 0.5).float()\n            train_total += yb.size(0)\n            train_correct += (predicted == yb).sum().item()\n\n        # Validation phase\n        model.eval()\n        val_loss = 0\n        val_correct = 0\n        val_total = 0\n        all_probs = []\n        all_labels = []\n\n        with torch.no_grad():\n            for batch in val_loader:\n                view = normalise_batch(batch, device=device)\n                xb, yb = view.batch_x, view.batch_y\n                yb = yb.float().unsqueeze(1)\n\n                outputs = model(xb)\n                loss = criterion(outputs, yb)\n\n                val_loss += loss.item() * xb.size(0)\n                predicted = (torch.sigmoid(outputs) > 0.5).float()\n                val_total += yb.size(0)\n                val_correct += (predicted == yb).sum().item()\n\n                # Store probabilities and labels for AUC calculation\n                probs = torch.sigmoid(outputs).cpu().numpy()\n                all_probs.extend(probs)\n                all_labels.extend(yb.cpu().numpy())\n\n        # Calculate metrics\n        train_loss = train_loss / train_total\n        train_acc = train_correct / train_total\n        val_loss = val_loss / val_total\n        val_acc = val_correct / val_total\n\n        # Calculate AUC\n        from sklearn.metrics import roc_auc_score\n        try:\n            auc = roc_auc_score(all_labels, all_probs)\n        except:\n            auc = 0\n\n        # Update scheduler and track best model\n        scheduler.step(auc)\n        if auc > best_auc:\n            best_auc = auc\n            best_model = model.state_dict()\n\n        # Store history\n        train_loss_history.append(train_loss)\n        val_loss_history.append(val_loss)\n        train_acc_history.append(train_acc)\n        val_acc_history.append(val_acc)\n\n        print(f'Epoch {epoch+1}/{epochs}: Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}, '\n              f'Train Acc: {train_acc:.4f}, Val Acc: {val_acc:.4f}, AUC: {auc:.4f}')\n\n    # Load best model weights\n    if best_model is not None:\n        model.load_state_dict(best_model)\n\n    return model, train_loss_history, val_loss_history, train_acc_history, val_acc_history",
+    "reasoning": "",
+    "Outer_attempt": 1
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-12-26T16:30:36Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-12-26T16:30:36Z",
+        "metrics": {
+          ".\\outputs\\12-26\\FOURTOPS\\Q1\\script_mistralai_devstral-2512_free_1730_1.py": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 235,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 235,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2025-12-26T16:30:58Z",
+    "passed": false,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/12-26/FOURTOPS/Q1/script_mistralai_devstral-2512_free_1730_1.py\nargv2=--dryrun\nERROR during training: shape '[-1, 18, 5]' is invalid for input of size 12000\n",
+      "stderr": "mkdir -p failed for path /home/sandbox/.config/matplotlib: [Errno 30] Read-only file system: '/home/sandbox/.config'\nMatplotlib created a temporary cache directory at /tmp/matplotlib-3_vw5iwa because there was an issue with the default path (/home/sandbox/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.\n/opt/venv/lib/python3.12/site-packages/torch/optim/lr_scheduler.py:62: UserWarning: The verbose parameter is deprecated. Please use get_last_lr() to access the learning rate.\n  warnings.warn(\nTraceback (most recent call last):\n  File \"/workspace/outputs/12-26/FOURTOPS/Q1/script_mistralai_devstral-2512_free_1730_1.py\", line 337, in <module>\n    _run(dryrun=\"--dryrun\" in sys.argv)\n  File \"/workspace/outputs/12-26/FOURTOPS/Q1/script_mistralai_devstral-2512_free_1730_1.py\", line 298, in _run\n    trained_model, tr_loss, va_loss, tr_acc, va_acc = train_model(\n                                                      ^^^^^^^^^^^^\n  File \"/workspace/outputs/12-26/FOURTOPS/Q1/script_mistralai_devstral-2512_free_1730_1.py\", line 195, in train_model\n    outputs = model(xb)\n              ^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py\", line 1739, in _wrapped_call_impl\n    return self._call_impl(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py\", line 1750, in _call_impl\n    return forward_call(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/outputs/12-26/FOURTOPS/Q1/script_mistralai_devstral-2512_free_1730_1.py\", line 152, in forward\n    obj_features = obj_features.view(-1, 18, 5)\n                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nRuntimeError: shape '[-1, 18, 5]' is invalid for input of size 12000\n"
+    },
+    "return_code": 1
+  }
+}

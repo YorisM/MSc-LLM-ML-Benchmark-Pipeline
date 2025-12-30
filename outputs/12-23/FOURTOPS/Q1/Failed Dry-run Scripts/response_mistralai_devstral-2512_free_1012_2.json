@@ -1,0 +1,71 @@
+{
+  "LLMGeneration": {
+    "model": "mistralai/devstral-2512:free",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 3666,
+    "prompt_chars": 14077,
+    "response_tokens": 1912,
+    "response_chars": 7429,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0,
+    "generation_ms": 82622,
+    "code": "# ---------- IMPORTS ----------\nfrom sklearn.preprocessing import StandardScaler\nfrom torch.nn import Linear, ReLU, Dropout, BatchNorm1d, Sequential, Sigmoid\nfrom torch.optim import Adam\nfrom torch.nn import BCEWithLogitsLoss\nfrom torch.optim.lr_scheduler import ReduceLROnPlateau\nimport torch.nn.functional as F\n\n# ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.scaler = StandardScaler()\n        self.mask_value = -999.0  # Special value to mark padding\n\n    def make_loader_cfg(self) -> dict:\n        return {\n            \"dataset_builder\": \"llm_script:FourTopsDataset\",\n            \"dataset_kwargs\": {},\n            \"loader_class\": \"torch.utils.data:DataLoader\",\n            \"batch_size\": 1024,\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": True,\n            \"collate\": None,\n            \"extra_loader_kwargs\": {},\n            \"eval_overrides\": {\"shuffle\": False},\n        }\n\n    def fit(self, X, y=None):\n        # Reshape to 2D for scaling: [n_events, n_features]\n        # Replace padding zeros with mask_value to avoid scaling them\n        X_masked = X.clone()\n        X_masked[X_masked == 0] = self.mask_value\n        # Flatten all features except global ones (first 2)\n        flat_X = X_masked[:, 2:].reshape(-1, 5)\n        # Scale non-zero features\n        self.scaler.fit(flat_X)\n        return self\n\n    def transform(self, X):\n        X = X.clone()\n        # Apply scaling to non-global features\n        flat_X = X[:, 2:].reshape(-1, 5)\n        scaled_flat = self.scaler.transform(flat_X)\n        X[:, 2:] = scaled_flat.reshape(X.shape[0], -1)\n        # Restore padding zeros\n        X[X == self.mask_value] = 0\n        return X\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# ---------- MODEL DEFINITION ----------\nclass BinaryClassifier(nn.Module):\n    def __init__(self, sample_object):\n        super().__init__()\n        # Extract dimensions from sample\n        self.n_global = 2\n        self.n_objects = 18\n        self.n_obj_features = 5\n\n        # Global features branch\n        self.global_branch = Sequential(\n            Linear(self.n_global, 64),\n            ReLU(),\n            BatchNorm1d(64),\n            Dropout(0.3),\n            Linear(64, 32),\n            ReLU(),\n            BatchNorm1d(32),\n            Dropout(0.2)\n        )\n\n        # Object features branch (per-object processing)\n        self.obj_processor = Sequential(\n            Linear(self.n_obj_features, 32),\n            ReLU(),\n            BatchNorm1d(32),\n            Dropout(0.2)\n        )\n\n        # Attention mechanism for objects\n        self.attention = nn.Sequential(\n            Linear(32, 16),\n            nn.Tanh(),\n            Linear(16, 1)\n        )\n\n        # Combined features\n        self.combined = Sequential(\n            Linear(32 + 32, 128),\n            ReLU(),\n            BatchNorm1d(128),\n            Dropout(0.3),\n            Linear(128, 64),\n            ReLU(),\n            BatchNorm1d(64),\n            Dropout(0.2),\n            Linear(64, 1)\n        )\n\n    def forward(self, batch_x):\n        # batch_x shape: [batch_size, 92]\n        # Split into global and object features\n        global_feat = batch_x[:, :2]  # [batch_size, 2]\n        obj_feats = batch_x[:, 2:].reshape(-1, self.n_objects, self.n_obj_features)  # [batch_size, 18, 5]\n\n        # Process global features\n        global_out = self.global_branch(global_feat)  # [batch_size, 32]\n\n        # Process object features\n        obj_feats = self.obj_processor(obj_feats.reshape(-1, self.n_obj_features))  # [batch_size*18, 32]\n        obj_feats = obj_feats.reshape(-1, self.n_objects, 32)  # [batch_size, 18, 32]\n\n        # Attention mechanism\n        attention_weights = self.attention(obj_feats)  # [batch_size, 18, 1]\n        attention_weights = F.softmax(attention_weights, dim=1)  # [batch_size, 18, 1]\n        attended_obj = torch.sum(attention_weights * obj_feats, dim=1)  # [batch_size, 32]\n\n        # Combine features\n        combined = torch.cat([global_out, attended_obj], dim=1)  # [batch_size, 64]\n        out = self.combined(combined)  # [batch_size, 1]\n\n        return out\n\ndef make_model(example_object):\n    return BinaryClassifier(example_object)\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 50\n\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    device = torch.device(\"cuda\" if torch.cuda.is_available() else \"cpu\")\n    model = model.to(device)\n\n    criterion = BCEWithLogitsLoss()\n    optimizer = Adam(model.parameters(), lr=0.001, weight_decay=1e-5)\n    scheduler = ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=5, verbose=False)\n\n    best_val_auc = 0\n    patience = 10\n    patience_counter = 0\n\n    train_loss_history = []\n    val_loss_history = []\n    train_acc_history = []\n    val_acc_history = []\n\n    for epoch in range(epochs):\n        model.train()\n        train_loss = 0\n        train_correct = 0\n        train_total = 0\n\n        for batch_x, batch_y in train_loader:\n            batch_x, batch_y = batch_x.to(device), batch_y.to(device).float()\n\n            optimizer.zero_grad()\n            outputs = model(batch_x)\n            loss = criterion(outputs.squeeze(), batch_y)\n            loss.backward()\n            optimizer.step()\n\n            train_loss += loss.item() * batch_y.size(0)\n            preds = (torch.sigmoid(outputs) > 0.5).float()\n            train_correct += (preds.squeeze() == batch_y).sum().item()\n            train_total += batch_y.size(0)\n\n        train_loss = train_loss / train_total\n        train_acc = train_correct / train_total\n\n        # Validation\n        model.eval()\n        val_loss = 0\n        val_correct = 0\n        val_total = 0\n        all_preds = []\n        all_labels = []\n\n        with torch.no_grad():\n            for batch_x, batch_y in val_loader:\n                batch_x, batch_y = batch_x.to(device), batch_y.to(device).float()\n                outputs = model(batch_x)\n                loss = criterion(outputs.squeeze(), batch_y)\n\n                val_loss += loss.item() * batch_y.size(0)\n                preds = (torch.sigmoid(outputs) > 0.5).float()\n                val_correct += (preds.squeeze() == batch_y).sum().item()\n                val_total += batch_y.size(0)\n\n                all_preds.extend(torch.sigmoid(outputs).cpu().numpy())\n                all_labels.extend(batch_y.cpu().numpy())\n\n        val_loss = val_loss / val_total\n        val_acc = val_correct / val_total\n\n        # Calculate AUC\n        from sklearn.metrics import roc_auc_score\n        try:\n            val_auc = roc_auc_score(all_labels, all_preds)\n        except:\n            val_auc = 0\n\n        # Early stopping and learning rate scheduling\n        scheduler.step(val_auc)\n\n        train_loss_history.append(train_loss)\n        val_loss_history.append(val_loss)\n        train_acc_history.append(train_acc)\n        val_acc_history.append(val_acc)\n\n        if val_auc > best_val_auc:\n            best_val_auc = val_auc\n            patience_counter = 0\n            best_model = model.state_dict()\n        else:\n            patience_counter += 1\n            if patience_counter >= patience:\n                print(f\"Early stopping at epoch {epoch}\")\n                break\n\n    # Load best model\n    model.load_state_dict(best_model)\n\n    return model, train_loss_history, val_loss_history, train_acc_history, val_acc_history",
+    "reasoning": "",
+    "Outer_attempt": 2
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-12-23T09:12:53Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-12-23T09:12:53Z",
+        "metrics": {
+          ".\\outputs\\12-23\\FOURTOPS\\Q1\\script_mistralai_devstral-2512_free_1012_2.py": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 248,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 248,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2025-12-23T09:13:12Z",
+    "passed": false,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/12-23/FOURTOPS/Q1/script_mistralai_devstral-2512_free_1012_2.py\nargv2=--dryrun\n",
+      "stderr": "+ exec\n+ PY=outputs/12-23/FOURTOPS/Q1/script_mistralai_devstral-2512_free_1012_2.py\n+ shift\n++ tr -d '\\r\\n'\n++ echo --dryrun\n++ xargs\n+ DRY=--dryrun\n+ [[ outputs/12-23/FOURTOPS/Q1/script_mistralai_devstral-2512_free_1012_2.py == \\/\\u\\s\\r\\/\\l\\o\\c\\a\\l\\/\\b\\i\\n\\/\\t\\r\\a\\i\\n\\.\\s\\h ]]\n+ [[ --dryrun =~ (--dryrun|--dry-run) ]]\n+ TIMEOUT=3600\n+ : 0\n+ : 0\n+ ulimit -t 3600\n+ ((  MEMORY_LIMIT_GB > 0  ))\n+ ((  PIDS_LIMIT > 0  ))\n+ timeout --signal=KILL 3600s python outputs/12-23/FOURTOPS/Q1/script_mistralai_devstral-2512_free_1012_2.py --dryrun\nmkdir -p failed for path /home/sandbox/.config/matplotlib: [Errno 30] Read-only file system: '/home/sandbox/.config'\nMatplotlib created a temporary cache directory at /tmp/matplotlib-lhywg0da because there was an issue with the default path (/home/sandbox/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.\nTraceback (most recent call last):\n  File \"/workspace/outputs/12-23/FOURTOPS/Q1/script_mistralai_devstral-2512_free_1012_2.py\", line 350, in <module>\n    _run(dryrun=\"--dryrun\" in sys.argv)\n  File \"/workspace/outputs/12-23/FOURTOPS/Q1/script_mistralai_devstral-2512_free_1012_2.py\", line 298, in _run\n    train_ds     = build_dataset(spec, (X_train, Y_train), pre, train=True)\n                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/utils/llm_io.py\", line 518, in build_dataset\n    return builder(events, preproc, train=train, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/outputs/12-23/FOURTOPS/Q1/script_mistralai_devstral-2512_free_1012_2.py\", line 42, in __init__\n    self.X = pre.transform(X) if pre is not None else X\n             ^^^^^^^^^^^^^^^^\n  File \"/workspace/outputs/12-23/FOURTOPS/Q1/script_mistralai_devstral-2512_free_1012_2.py\", line 96, in transform\n    X[:, 2:] = scaled_flat.reshape(X.shape[0], -1)\n    ~^^^^^^^\nTypeError: can't assign a numpy.ndarray to a torch.FloatTensor\n"
+    },
+    "return_code": 1
+  }
+}

@@ -1,47 +1,20 @@
 # run_scripts.py
 
-# Imports
-import os, sys, config, subprocess, logging, time, argparse, psutil, json
+import os, sys, re, config, subprocess, logging, time, argparse, psutil, json, pathlib
 import pandas as pd
 
 from tqdm import tqdm
 from pathlib import Path
+from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
-
 from utils.utils import append_to_response_json, iter_input_dir, SKIP_DIRS
+
 
 # Execution Flow
 # (main.py)  ─▶ execute_scripts_in_batch(...)
 #                 └─▶ run_single_script(..., dryrun=?, use_docker=?)
 #                        └─▶ execute_script(...)
 
-def naive_safety_check(script_path):
-    """
-    Perform a basic (naive) safety check on the script by scanning for disallowed keywords.
-    """
-
-    dangerous_keywords = [
-        'os.system',        # executing system commands
-        'subprocess.Popen', # launching subprocesses
-        'exec(',            # executing arbitrary code
-        '__import__',       # dynamic import of modules
-        'import socket',    # network operations
-        'shutil.rmtree'     # potentially dangerous file operations
-    ]
-    
-    try:
-        with open(script_path, "r", encoding="utf-8") as f:
-            code = f.read()
-    except Exception as e:
-        logging.error(f"Error reading {script_path}: {e}")
-        return False
-
-    for keyword in dangerous_keywords:
-        if keyword in code:
-            logging.error(f"Script {script_path} contains dangerous keyword: {keyword}")
-            return False
-    logging.info("Successfully passed naive safety check.")    
-    return True
 
 def _find_scripts(base_folder: str | Path) -> list[str]:
     scripts: list[str] = []
@@ -55,16 +28,54 @@ def _find_scripts(base_folder: str | Path) -> list[str]:
     logging.info("Collected %d valid scripts for execution", len(scripts))
     return scripts
 
-def execute_script(
-    script_path: str,
-    timeout: float,
-    dryrun: bool = False,
-    use_docker: bool = True,
-    safety_check: callable = None
-):
-    
+def _challenge_from_script(script_path: str) -> str:
     """
-    Unified runner: does an optional naive_safety_check(), then runs the script
+    Derive the challenge name from a script path without hardcoding names.
+    Works for:
+      - .../challenges/<CHALLENGE>/...
+      - .../outputs/<DATE>/<CHALLENGE>/Q<NUM>/...
+      - any path containing .../<CHALLENGE>/Q<NUM>/...
+    Case-insensitive; Windows/Unix separators supported.
+    """
+
+    s = script_path.replace("\\", "/")
+
+    # .../challenges/FOURTOPS/Q1/script_x.py  ->  FOURTOPS
+    m = re.search(r"/challenges/([^/]+)/", s, flags=re.IGNORECASE)
+    if m:
+        return m.group(1)
+
+    # 2) Outputs layout: outputs/<DATE>/<CHALLENGE>/(Q\d+|anything)/
+    m = re.search(r"/outputs/[^/]+/([^/]+)/", s, flags=re.IGNORECASE)
+    if m:
+        return m.group(1)
+
+    # 3) Generic: capture the segment preceding Q<number>
+    m = re.search(r"/([^/]+)/Q\d+/", s, flags=re.IGNORECASE)
+    if m:
+        return m.group(1)
+
+    # 4) Fallback: try the parent directory name (second last segment)
+    parts = [p for p in s.split("/") if p]
+    if len(parts) >= 2:
+        cand = parts[-2]
+        logging.warning("Falling back to parent folder as challenge: %s (path=%s)", cand, script_path)
+        return cand
+
+    raise ValueError("Cannot derive challenge from path " + script_path)
+
+def _mount_args(challenge: str, host_root: str) -> list[str]:
+    base = pathlib.Path(host_root) / "challenges" / challenge / "data"
+    return [
+        "-v", f"{host_root}:/workspace:rw",
+        "-v", f"{base/'train'}:/data/train:ro",
+        "-v", f"{host_root}/outputs:/workspace/out:rw"
+    ]
+
+def execute_script(script_path: str, timeout: float, dryrun: bool = False, use_docker: bool = True):
+    """
+    Unified runner:
+
     Returns:
       (script_path: str,
        success: bool,
@@ -76,11 +87,6 @@ def execute_script(
     """
 
     logging.info(f"{'Dry-run' if dryrun else 'Run'} start: {script_path}")
-    
-    # safety
-    if safety_check and not safety_check(script_path):
-        logging.error("Safety check failed: %s", script_path)
-        return False, None, "", "Safety check", 0.0, 0.0
     
     # Debugging Block
     logging.debug(f"Script to run inside container: {script_path}")
@@ -102,22 +108,47 @@ def execute_script(
         if config.MEMORY_LIMIT_GB != 0:
             cmd.append(f"--memory={config.MEMORY_LIMIT_GB}g")
         if config.PIDS_LIMIT != 0:
-            cmd.append(f"--pids-limit={config.PIDS_LIMIT}")    
+            cmd.append(f"--pids-limit={config.PIDS_LIMIT}")
+
+        llm_io_py       = (Path(mount_src) / "utils" / "llm_io.py").resolve()
+        loaderspec_py   = (Path(mount_src) / "utils" / "loaderspec.py").resolve()
+        suffix_utils_py = (Path(mount_src) / "utils" / "suffix_utils.py").resolve() 
 
         cmd += [
-            "--network", "none",
+            "--gpus", "all",
+            "--network", "none", 
+            "--read-only", 
+            "--cap-drop", "ALL",
             "--security-opt", f"seccomp=docker/seccomp_profile.json",
-            "-v", f"{mount_src}:/workspace:rw",
-            "-v", f"{mount_src}/challenges/FOURTOPS/data:/data:ro",
+            "--tmpfs", "/tmp:rw,noexec,nosuid",
+            "--tmpfs", "/dev/shm:rw",
             "-e", f"DRYRUN_TIMEOUT_S={config.DRYRUN_TIMEOUT_S}",
             "-e", f"TRAIN_TIMEOUT_S={config.TRAIN_TIMEOUT_S}",
             "-e", f"EVAL_TIMEOUT_S={config.EVAL_TIMEOUT_S}",
+            "-e", "PYTHONPATH=/workspace",
             "-w", "/workspace",
-            "llm-training-sandbox:latest",
-            rel_script,
-            "--dryrun" if dryrun else ""
+
+            # mount volume
+            "-v", f"{llm_io_py}:/workspace/utils/llm_io.py:ro",
+            "-v", f"{loaderspec_py}:/workspace/utils/loaderspec.py:ro",
+            "-v", f"{suffix_utils_py}:/workspace/utils/suffix_utils.py:ro",
         ]
-     
+
+        # add volumes
+        logging.debug("Deriving challenge from path: %s", script_path)
+        challenge = _challenge_from_script(script_path)
+        cmd += _mount_args(challenge, mount_src)
+
+        # select entrypoint + image
+        cmd += [
+            "--entrypoint", "/usr/local/bin/train.sh",
+            "llm-sandbox:latest",
+            rel_script
+        ]
+
+        if dryrun:
+            cmd.append("--dryrun")
+
         logging.debug("DOCKER CMD: %s", " ".join(cmd))
 
         proc = psutil.Process()
@@ -155,6 +186,14 @@ def execute_script(
             except json.JSONDecodeError:
                 logging.warning("Malformed TRAIN_METRICS in %s", script_path)
             break
+    gpu_metrics = None
+    for line in reversed(out.splitlines()):
+        if line.startswith("#GPU_METRICS#"):
+            try:
+                gpu_metrics = json.loads(line[len("#GPU_METRICS#"):])
+            except json.JSONDecodeError:
+                logging.warning("Malformed GPU_METRICS in %s", script_path)
+            break
 
     # Process metrics
     mem_after = proc.memory_info().rss
@@ -173,22 +212,26 @@ def execute_script(
         "disk_write_mb":    round(io.write_bytes / 1e6, 1),
         "max_rss_kb":       max_rss,
         "training_time_s":  round(duration, 2),
-        "gpu_memory_mb":    None,     # patched later when CUDA available
+        "gpu_name":         gpu_metrics.get("name") if gpu_metrics else None,
+        "gpu_total_mb":     gpu_metrics.get("total_mb") if gpu_metrics else None,
+        "gpu_peak_alloc_mb":gpu_metrics.get("peak_alloc_mb") if gpu_metrics else None,
+        "cuda_available":   gpu_metrics.get("cuda_available") if gpu_metrics else None,
     }
 
-    if metrics_json:
-        # derive companion JSON path: script_X.py -> response_X.json
-        base = os.path.basename(script_path).replace("script_", "response_")
-        json_file = os.path.join(os.path.dirname(script_path),
-                                    os.path.splitext(base)[0] + ".json")
+    # derive companion JSON path: script_X.py -> response_X.json
+    base = os.path.basename(script_path).replace("script_", "response_")
+    json_file = os.path.join(os.path.dirname(script_path),
+                                os.path.splitext(base)[0] + ".json")
+
+    STD = {
+        "stdout": out, 
+        "stderr": err
+    }
     
-        STD = {
-            "stdout": out, 
-            "stderr": err
-        }
-        
+    if not dryrun:
         append_to_response_json(json_file, "Training",
-            {
+            {   
+                "__timestamp": datetime.now(timezone.utc).isoformat(),
                 "passed": bool(success),
                 "resources": resources,
                 "metrics": metrics_json,
@@ -207,7 +250,6 @@ def run_single_script(script_path: str, *, dryrun: bool = False,
         timeout       = t,
         dryrun        = dryrun,
         use_docker    = use_docker,
-        safety_check  = naive_safety_check,
     )
 
 def execute_scripts_in_batch(base_folder, max_workers=1, *, dryrun=False, use_docker=True):
@@ -254,6 +296,7 @@ def execute_scripts_in_batch(base_folder, max_workers=1, *, dryrun=False, use_do
             "max_rss_kb",      # int
         ],
     )
+
     summary_path = os.path.join(base_folder, "summary.csv")
     df.to_csv(summary_path, index=False)
     logging.info("Wrote summary to %s", summary_path)

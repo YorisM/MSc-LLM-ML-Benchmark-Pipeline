@@ -1,0 +1,10 @@
+{
+  "anthropic_claude-4-sonnet-20250522": {
+    "ok": true,
+    "load_s": 3.61,
+    "eval_s": 2.05,
+    "FitAccuracy": 0.06690024925927668,
+    "accuracy": 0.03092813808023327,
+    "missing_files": []
+  }
+}

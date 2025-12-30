@@ -1,0 +1,76 @@
+{
+  "LLMGeneration": {
+    "model": "openai/o4-mini-high-2025-04-16",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 3777,
+    "prompt_chars": 15777,
+    "response_tokens": 13953,
+    "response_chars": 2455,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.0632247,
+    "generation_ms": 119404,
+    "code": "from sklearn.cluster import DBSCAN\nimport numpy as np\nimport torch\nfrom torch import nn\n\nclass MyPreprocessor:\n    def __init__(self):\n        pass\n\n    def _raw_reshape(self, data):\n        return data\n\n    def make_loader_cfg(self):\n        # Process one event per batch so clustering is per-event\n        return {\"batch_size\": 1, \"num_workers\": 0}\n\n    def fit(self, data):\n        return self\n\n    def transform(self, data):\n        # Identity transform\n        return data\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\nclass HitClassifier(nn.Module):\n    def __init__(self, in_features):\n        super().__init__()\n        # No learnable parameters; clustering-only model\n\n    def forward(self, batch_x):\n        # batch_x: Tensor of shape (N,4) columns = (r, theta, z, layer_id)\n        # Convert to CPU numpy for DBSCAN\n        X = batch_x.detach().cpu().numpy()        # (N,4)\n        r     = X[:, 0]                           # (N,)\n        theta = X[:, 1]                           # (N,)\n        z     = X[:, 2]                           # (N,)\n        # Convert cylindrical to Cartesian for clustering\n        coords = np.stack([\n            r * np.cos(theta),                    # (N,)\n            r * np.sin(theta),                    # (N,)\n            z                                     # (N,)\n        ], axis=1)                                # (N,3)\n        # DBSCAN clusters neighboring hits into tracks\n        clustering = DBSCAN(eps=5.0, min_samples=4).fit(coords)\n        labels = clustering.labels_               # (N,), -1 for noise\n        # Remap labels: non-noise clusters -> 0..C-1, noise each as unique id (>C-1)\n        unique = np.unique(labels)\n        # Map old non-negative labels to new contiguous ids\n        label_map = {lab: i for i, lab in enumerate(unique) if lab >= 0}\n        next_noise_id = len(label_map)\n        remapped = np.empty_like(labels)\n        for idx, lab in enumerate(labels):\n            if lab >= 0:\n                remapped[idx] = label_map[lab]\n            else:\n                remapped[idx] = next_noise_id\n                next_noise_id += 1\n        preds = torch.from_numpy(remapped).to(batch_x.device)\n        return preds\n\ndef make_model(in_features):\n    return HitClassifier(in_features)\n\nEPOCHS = 1\n\ndef train_model(model, train_loader, val_loader, epochs):\n    # No training required for clustering-based model\n    return model, [], [], [], []",
+    "reasoning": "",
+    "Outer_attempt": 1
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-12-12T18:51:29Z",
+    "PyLint": {
+      "passed": false,
+      "messages": [
+        {
+          "type": "error",
+          "module": "script_openai_o4-mini-high-2025-04-16_1951_1",
+          "obj": "",
+          "line": 9,
+          "column": 0,
+          "endLine": 9,
+          "endColumn": 40,
+          "path": "outputs\\12-12\\TRACKFORMERS\\Q1\\script_openai_o4-mini-high-2025-04-16_1951_1.py",
+          "symbol": "import-error",
+          "message": "Unable to import 'utils.llm_io'",
+          "message-id": "E0401"
+        }
+      ]
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-12-12T18:51:29Z",
+        "metrics": {
+          ".\\./outputs/12-12/TRACKFORMERS/Q1/script_openai_o4-mini-high-2025-04-16_1951_1.py": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 171,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 171,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  }
+}

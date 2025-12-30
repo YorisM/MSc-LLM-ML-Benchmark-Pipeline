@@ -1,0 +1,89 @@
+{
+  "LLMGeneration": {
+    "model": "x-ai/grok-code-fast-1",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 3555,
+    "prompt_chars": 14903,
+    "response_tokens": 9761,
+    "response_chars": 10309,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.01531794,
+    "generation_ms": 59681,
+    "code": "# ---------- IMPORTS ----------\n# NOTE: Some imports (torch, nn, numpy, DataLoader) are already available (see prefix).\n# Only import extra std-lib modules or modules available in the environment, i.e: torch, scipy, sklearn (sub-)modules you actually use.\n# <LLM: Import modules>\nfrom torch_geometric.nn import GCNConv\nimport torch_geometric.utils as pyg_utils\nfrom torch_geometric.data import Data\nimport torch.nn.functional as F\nimport hdbscan\nimport torch.optim as optim\nfrom torch.optim.lr_scheduler import StepLR\n\n# -------- (OPTIONAL) CUSTOM DATASET  --------\n# def make_dataset(events, pre, train: bool, **kwargs):\n#   REQUIREMENT: If you want a custom dataset: in make_loader_cfg set dataset_builder to \"llm_script:make_dataset\"\n#   k = kwargs.get(\"k\", 16)\n#   <LLM: Insert custom dataset logic here>\n#   return CustomDataset(events, pre, train=train, k=k)\n\n# ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    # Must implement:\n    #   - fit()\n    #   - transform()\n\n    # REQUIREMENTS\n    #   - IMPORTANT: All state must be picklable with the std-lib pickle module.\n    #   - May allocate NumPy arrays or Torch tensors internally, but: transform() must be deterministic.\n    #   - Store only derived parameters needed for transform i.e. do not store the raw data itself in the preprocessor object.\n\n    # TIPS\n    #   When modifying data features or feature engineering: annotate tensor size as comments after each tensor operation to reduce dimension mismatches.\n\n    # <LLM: Write code to preprocess the data> \n    def __init__(self):\n        # <LLM: Define and initialize any stateful components here>\n        pass\n\n    def make_loader_cfg(self) -> dict: \n        return {\n            \"dataset_builder\": \"llm_script:make_dataset\",\n            \"dataset_kwargs\": {\"k\": 5},\n\n            \"loader_class\": \"torch_geometric.loader:DataLoader\",    # or torch_geometric.loader:DataLoader\n            \"batch_size\": 4,  # small batch size due to variable graphs\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": False,\n\n            # NO custom collate callables allowed. Choose one:\n            \"collate\": None,  # None for PyG default\n\n            \"extra_loader_kwargs\": {},\n\n            # evaluation overrides (optional):\n            \"eval_overrides\": {\"shuffle\": False}\n        }\n\n    def fit(self, data):\n        # <LLM: Extract statistics or fit transform>\n        return self\n\n    def transform(self, data):\n        # <LLM: Apply preprocessing logic, return torch.Tensor>\n        return data # must return an indexable, picklable object\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# ---------- MODEL ARCHITECTURE ----------\nclass HitClassifier(nn.Module):\n    def __init__(self, example_batch_x):\n        super().__init__()\n        # IMPORTANT: Default harness input:\n        #   batch_x is ragged list[Tensor], one per event, each shaped [N_hits, F].\n        #   Infer F from example_batch_x (do NOT assume an int is passed).\n\n        # <LLM: Define and initialize any stateful components here>\n        # e.g. infer in_features from example_batch_x and build layers\n\n        in_features = 4  # r, theta, z, layer_id\n        self.conv1 = GCNConv(in_features, 128)\n        self.conv2 = GCNConv(128, 256)\n        self.conv3 = GCNConv(256, 128)\n\n    def get_embeddings(self, batch_x):\n        x_emb = self.conv1(batch_x.x, batch_x.edge_index)\n        x_emb = F.relu(x_emb)\n        x_emb = self.conv2(x_emb, batch_x.edge_index)\n        x_emb = F.relu(x_emb)\n        x_emb = self.conv3(x_emb, batch_x.edge_index)\n        return x_emb  # [N, 128]\n\n    def forward(self, batch_x):\n        # IMPORTANT Input contract:\n        #   forward() MUST handle ragged list[Tensor] and may optionally support a single padded Tensor / PyG Batch.\n        #   Harness calls:\n        #       view = normalise_batch(batch, device=device)\n        #       out  = model(view.batch_x)\n        # \n        # IMPORTANT Output contract:\n        #   forward(batch_x) must return predicted integer labels (dtype long/int64) with one label per hit (>0); predicted noise may be -1.\n\n        # <LLM: Define your model's forward pass here>\n        x_emb = self.get_embeddings(batch_x)\n        device = batch_x.x.device\n        labels = torch.zeros(len(batch_x.x), dtype=torch.long, device=device) - 1  # [N], default -1 for noise\n        for graph_id in torch.unique(batch_x.batch, sorted=True):\n            mask = batch_x.batch == graph_id\n            embed_graph = x_emb[mask]  # [N_graph, 128]\n            clusterer = hdbscan.HDBSCAN(min_cluster_size=4, prediction_data=True)\n            cluster_labels_np = clusterer.fit_predict(embed_graph.detach().cpu().numpy())  # numpy array\n            cluster_labels = torch.from_numpy(cluster_labels_np).to(device)  # [N_graph], int (-1 or 0,1,...)\n            unique_clusters = torch.unique(cluster_labels)\n            unique_clusters = unique_clusters[unique_clusters >= 0]\n            # assign labels starting from 1 for each cluster\n            for new_label, cl in enumerate(unique_clusters):\n                cluster_mask = cluster_labels == cl\n                labels[mask][cluster_mask] = new_label + 1  # 1, 2, 3, ...\n        # split into list per graph [N_i]\n        labels_list = []\n        for graph_id in torch.unique(batch_x.batch, sorted=True):\n            mask = batch_x.batch == graph_id\n            labels_list.append(labels[mask])\n        return labels_list\n\ndef make_model(example_batch_x):\n    return HitClassifier(example_batch_x)\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 50   # <LLM: adjust if you wish>   \ndef train_model(model, train_loader, val_loader, epochs):\n    # If your method is non-parametric, train_model may be a no-op that returns the unmodified model and empty metric lists, otherwise:\n\n    # REQUIREMENTS \n    #   - Do NOT pass \"verbose=\" to any PyTorch scheduler (not supported in this image).\n    #   - Must return trained_model, train_loss, val_loss, train_acc, val_acc\n    #   - Implement early-stopping.\n    #   - Use CUDA - torch.cuda.is_available()\n    #   - Forward signature must match.\n\n    # <LLM: Write code to define training loop>\n    # <LLM: Implement early stopping if possible>\n    optimizer = optim.Adam(model.parameters(), lr=1e-3)\n    scheduler = StepLR(optimizer, step_size=max(epochs//3, 1), gamma=0.5)\n    tr_loss, va_loss = [], []\n    tr_acc, va_acc = [], []  # dummy placeholders\n    patience = 10\n    best_loss = float('inf')\n    patience_counter = 0\n\n    for epoch in range(epochs):\n        model.train()\n        epoch_tr_loss = 0.0\n        for batch in train_loader:\n            view = normalise_batch(batch, device=device)\n            x_emb = model.get_embeddings(view.batch_x)\n            loss = 0.0\n            graphs = torch.unique(view.batch_x.batch)\n            for g_id in graphs:\n                mask = view.batch_x.batch == g_id\n                y = view.batch_x.y[mask]\n                emb = x_emb[mask]\n                mask2 = y > 0\n                if mask2.sum() == 0:\n                    continue\n                y2 = y[mask2]\n                emb2 = emb[mask2]\n                num_tracks = len(torch.unique(y2))\n                if num_tracks == 0:\n                    continue\n                # means [num_tracks, 128]\n                means = pyg_utils.scatter('mean', emb2, y2 - 1, dim=0, dim_size=num_tracks)\n                loss += F.mse_loss(emb2, means[y2 - 1].expand_as(emb2))\n            if len(graphs) > 0:\n                loss /= len(graphs)\n            else:\n                loss = 0.0\n            optimizer.zero_grad()\n            loss.backward()\n            optimizer.step()\n            epoch_tr_loss += loss.item()\n        tr_loss.append(epoch_tr_loss / len(train_loader))\n\n        # validation loss\n        model.eval()\n        epoch_va_loss = 0.0\n        with torch.no_grad():\n            for batch in val_loader:\n                view = normalise_batch(batch, device=device)\n                x_emb = model.get_embeddings(view.batch_x)\n                loss = 0.0\n                graphs = torch.unique(view.batch_x.batch)\n                for g_id in graphs:\n                    mask = view.batch_x.batch == g_id\n                    y = view.batch_x.y[mask]\n                    emb = x_emb[mask]\n                    mask2 = y > 0\n                    if mask2.sum() == 0:\n                        continue\n                    y2 = y[mask2]\n                    emb2 = emb[mask2]\n                    num_tracks = len(torch.unique(y2))\n                    if num_tracks == 0:\n                        continue\n                    means = pyg_utils.scatter('mean', emb2, y2 - 1, dim=0, dim_size=num_tracks)\n                    loss += F.mse_loss(emb2, means[y2 - 1].expand_as(emb2))\n                if len(graphs) > 0:\n                    loss /= len(graphs)\n                else:\n                    loss = 0.0\n                epoch_va_loss += loss.item()\n        va_loss.append(epoch_va_loss / len(val_loader))\n\n        # early stopping on val_loss\n        if va_loss[-1] < best_loss:\n            best_loss = va_loss[-1]\n            patience_counter = 0\n        else:\n            patience_counter += 1\n        if patience_counter >= patience:\n            break\n\n    # dummy acc\n    tr_acc = [0.0] * len(tr_loss)\n    va_acc = [0.0] * len(va_loss)\n\n    return model, tr_loss, va_loss, tr_acc, va_acc\n\ndef make_dataset(events, pre, train: bool, **kwargs):\n    k = kwargs.get(\"k\", 5)\n    from torch_geometric.data import Dataset as PyGDataset\n    data_list = []\n    for evt in events:\n        X, y = split_X_y(evt)\n        # X: [N,4] float32\n        r, theta, z, layer_id = X[:, 0], X[:, 1], X[:, 2], X[:, 3]\n        pos = torch.stack([r * torch.cos(theta), r * torch.sin(theta), z], dim=1)  # [N, 3]\n        edge_index = pyg_utils.knn_graph(pos.float(), k=k)\n        d = Data(x=X.float(), y=y.long(), pos=pos.float(), edge_index=edge_index)\n        data_list.append(d)\n\n    class CustomDataset(PyGDataset):\n        def __init__(self, data_list):\n            super().__init__()\n            self.data_list = data_list\n        def len(self):\n            return len(self.data_list)\n        def get(self, idx):\n            return self.data_list[idx]\n\n    return CustomDataset(data_list)",
+    "reasoning": "",
+    "Outer_attempt": 1
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-12-17T22:57:04Z",
+    "PyLint": {
+      "passed": false,
+      "messages": [
+        {
+          "type": "error",
+          "module": "script_x-ai_grok-code-fast-1_2356_1",
+          "obj": "train_model",
+          "line": 204,
+          "column": 24,
+          "endLine": 204,
+          "endColumn": 91,
+          "path": "outputs\\17-12\\TRACKFORMERS\\Q1\\script_x-ai_grok-code-fast-1_2356_1.py",
+          "symbol": "redundant-keyword-arg",
+          "message": "Argument 'dim' passed by position and keyword in function call",
+          "message-id": "E1124"
+        },
+        {
+          "type": "error",
+          "module": "script_x-ai_grok-code-fast-1_2356_1",
+          "obj": "train_model",
+          "line": 237,
+          "column": 28,
+          "endLine": 237,
+          "endColumn": 95,
+          "path": "outputs\\17-12\\TRACKFORMERS\\Q1\\script_x-ai_grok-code-fast-1_2356_1.py",
+          "symbol": "redundant-keyword-arg",
+          "message": "Argument 'dim' passed by position and keyword in function call",
+          "message-id": "E1124"
+        }
+      ]
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-12-17T22:57:04Z",
+        "metrics": {
+          ".\\./outputs/17-12/TRACKFORMERS/Q1/script_x-ai_grok-code-fast-1_2356_1.py": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 230,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 230,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  }
+}

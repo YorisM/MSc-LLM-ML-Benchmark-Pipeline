@@ -1,0 +1,76 @@
+{
+  "LLMGeneration": {
+    "model": "x-ai/grok-code-fast-1",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 3507,
+    "prompt_chars": 13777,
+    "response_tokens": 4829,
+    "response_chars": 9344,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.00732282,
+    "generation_ms": 25702,
+    "code": "# <start code template>\n# ---------- IMPORTS ----------\n# NOTE: Some imports (torch, nn, numpy, DataLoader) are already available (see prefix).\n# Only import extra std-lib modules or modules available in the environment, i.e: torch, scipy, sklearn (sub-)modules you actually use.\n# <LLM: Import modules>\nimport torch_geometric\nfrom torch_geometric.data import Data\nfrom sklearn.metrics import roc_auc_score\n\n#  -------- (OPTIONAL) CUSTOM DATASET  --------\n# def make_dataset(events, pre, train: bool, **kwargs):\n#   REQUIREMENT: If you want a custom dataset: in make_loader_cfg set dataset_builder to \"llm_script:make_dataset\"\n#   k = kwargs.get(\"k\", 16)\n#   <LLM: Insert custom dataset logic here>\n#   return CustomDataset(events, pre, train=train, k=k)\n\n# ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    # Must implement:\n    #   - fit() \n    #   - transform()\n\n    # DATA SPECIFICS\n    # Total flat length per event (X_train & X_val): 92\n    # Index  0 :  missing-ET magnitude  (E_T_miss)\n    # Index  1 :  missing-ET azimuth    (phi_Et_miss)\n    # Indices  2-6  : object 1  ->  obj_1, E_1, p_T1, eta_1, phi_1\n    # Indices  7-11 : object 2  ->  obj_2, E_2 , p_T_2 , eta_2 , phi_2\n    # ...\n    # Indices 87-91 : object 18 ->  obj_18, E_18 , p_T_18 , eta_18 , phi_18\n    # Global features       = 2\n    # Per-object slice size = 5\n    # Max objects encoded   = 18\n\n    # TIPS\n    # When modifying data features or feature engineering: annotate tensor size as comments after \n    # each tensor operation to reduce dimension mismatches.\n\n    # REQUIREMENTS\n    # IMPORTANT: All state must be picklable with the std-lib pickle module.\n    # May allocate NumPy arrays or Torch tensors internally, but:\n    # transform() must be deterministic.\n    # Store only derived parameters needed for transform i.e. do not store the raw data\n    # itself in the preprocessor object.\n\n    # <LLM: Write code to preprocess the data> \n\n    def __init__(self):\n        # <LLM: Define and initialize any stateful components here>\n        self.means = None\n        self.stds = None\n\n    def make_loader_cfg(self):\n        # LoaderSpec-first: evaluator rebuilds loaders from this.\n        return {\n            \"dataset_builder\": \"llm_script:FourTopsDataset\",   # default harness dataset\n            \"dataset_kwargs\": {},\n\n            \"loader_class\": \"torch_geometric.loader:DataLoader\",     # or torch.utils.data:DataLoader\n            \"batch_size\": 512,\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": False,\n\n            # collate must be builtin string or None (torch default collate / PyG)\n            \"collate\": None,\n\n            \"extra_loader_kwargs\": {},\n            \"eval_overrides\": {\"shuffle\": False},\n        }\n\n    def fit(self, X, y=None):\n        # <LLM: Extract statistics for transform>\n        self.means = torch.mean(X, dim=0)\n        self.stds = torch.std(X, dim=0)\n        self.stds = torch.where(self.stds == 0, torch.ones_like(self.stds), self.stds)\n        return self\n\n    def transform(self, X):\n        # <LLM: Apply pre-processing logic>\n        if self.means is not None:\n            X = (X - self.means) / self.stds  # [N,92]\n\n        N = X.size(0)\n        data_list = []\n        for i in range(N):\n            event = X[i]  # [92]\n            global_et = event[:2]  # [2]\n            objects = event[2:].reshape(18, 5)  # [18,5]\n\n            # Create 19 nodes: 18 objects + 1 global\n            node_features = torch.zeros(19, 5)  # [19,5]\n            # Global node: obj_id = -1, E_T_miss, 0, 0, phi_E_t_miss\n            node_features[0, 0] = -1\n            node_features[0, 1] = global_et[0]  # E_T_miss\n            node_features[0, 2] = 0  # p_T\n            node_features[0, 3] = 0  # eta\n            node_features[0, 4] = global_et[1]  # phi\n            # Object nodes: [obj_id, E, p_T, eta, phi]\n            node_features[1:19] = objects  # [18,5]\n\n            # Positions: [eta, phi] for geometric edges (if needed)\n            pos = torch.zeros(19, 2)  # [19,2]\n            pos[0] = torch.tensor([0, global_et[1]])  # arbitrary eta=0 for global\n            pos[1:19] = objects[:, 3:5]  # [18,2] eta, phi\n\n            # Fully connected edges: all pairs including self? but no self-loops\n            num_nodes = 19\n            edge_list = []\n            for src in range(num_nodes):\n                for dst in range(num_nodes):\n                    if src != dst:\n                        edge_list.append([src, dst])\n            edge_index = torch.tensor(edge_list, dtype=torch.long).T.contiguous()  # [2, 19*18]\n\n            data = Data(x=node_features, edge_index=edge_index, pos=pos)  # pos for potential use\n            data_list.append(data)\n\n        return data_list  # list of Data objects, length N\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# ---------- MODEL DEFINITION ----------\nclass BinaryClassifier(nn.Module):\n    def __init__(self, sample_object):\n        super().__init__()\n        # <LLM: Define and initialize any stateful components here>\n        self.conv1 = torch_geometric.nn.GCNConv(5, 128)\n        self.conv2 = torch_geometric.nn.GCNConv(128, 128)\n        self.conv3 = torch_geometric.nn.GCNConv(128, 128)\n        self.pool = torch_geometric.nn.global_mean_pool\n        self.dropout = nn.Dropout(0.3)\n        self.fc1 = nn.Linear(128, 64)\n        self.fc2 = nn.Linear(64, 1)\n\n    # <LLM: optionally build extra layers here>\n\n    def forward(self, data):\n        # <LLM: Define your model's forward pass here>\n        x, edge_index, batch = data.x, data.edge_index, data.batch  # batch is added by collate\n        x = self.conv1(x, edge_index).relu()\n        x = self.dropout(x)\n        x = self.conv2(x, edge_index).relu()\n        x = self.dropout(x)\n        x = self.conv3(x, edge_index).relu()\n        x = self.dropout(x)\n        x = self.pool(x, batch)  # [batch_size, 128]\n        x = self.fc1(x).relu()\n        x = self.fc2(x)  # [batch_size, 1]\n        return x.squeeze(-1)  # [batch_size]\n\ndef make_model(example_object):\n    return BinaryClassifier(example_object)\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 20   # <LLM: adjust if you wish>\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    # REQUIREMENTS \n    #   Do NOT pass \"verbose=\" to any PyTorch scheduler (not supported in this image).\n    #   Must return trained_model, train_loss, val_loss, train_acc, val_acc\n    #   Use CUDA - torch.cuda.is_available()\n    #   Implement early-stopping.\n    #   Forward signature must match.\n\n    # <LLM: Write code to define training loop>\n    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)\n    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', patience=3, factor=0.5)\n    criterion = nn.BCEWithLogitsLoss()\n\n    train_loss = []\n    val_loss = []\n    train_acc = []\n    val_acc = []\n\n    best_val_auc = 0.0\n    patience = 5\n    patience_counter = 0\n    best_model_state = None\n\n    for epoch in range(epochs):\n        model.train()\n        tl = 0\n        correct = 0\n        total = 0\n        all_logits = []\n        all_labels = []\n        for batch in train_loader:\n            batch = batch.to(device)\n            optimizer.zero_grad()\n            logits = model(batch)\n            loss = criterion(logits, batch.y.float())\n            loss.backward()\n            optimizer.step()\n            tl += loss.item()\n            probs = torch.sigmoid(logits)\n            all_logits.extend(logits.detach().cpu().numpy())\n            all_labels.extend(batch.y.cpu().numpy())\n            preds = (probs > 0.5).float()\n            correct += (preds == batch.y).sum().item()\n            total += batch.y.size(0)\n        train_loss.append(tl / len(train_loader))\n        train_acc.append(correct / total)\n        train_auc = roc_auc_score(all_labels, all_logits)\n\n        model.eval()\n        vl = 0\n        correct = 0\n        total = 0\n        all_logits = []\n        all_labels = []\n        with torch.no_grad():\n            for batch in val_loader:\n                batch = batch.to(device)\n                logits = model(batch)\n                loss = criterion(logits, batch.y.float())\n                vl += loss.item()\n                probs = torch.sigmoid(logits)\n                all_logits.extend(logits.cpu().numpy())\n                all_labels.extend(batch.y.cpu().numpy())\n                preds = (probs > 0.5).float()\n                correct += (preds == batch.y).sum().item()\n                total += batch.y.size(0)\n        val_auc = roc_auc_score(all_labels, all_logits)\n        val_loss.append(vl / len(val_loader))\n        val_acc.append(correct / total)\n        scheduler.step(val_auc)  # step on AUC\n\n        if val_auc > best_val_auc:\n            best_val_auc = val_auc\n            patience_counter = 0\n            best_model_state = model.state_dict()\n        else:\n            patience_counter += 1\n            if patience_counter >= patience:\n                break\n\n    # Load best model\n    if best_model_state:\n        trained_model.load_state_dict(best_model_state)\n    trained_model = model\n\n    return trained_model, train_loss, val_loss, train_acc, val_acc\n\n# IMPORTANT: DO NOT execute the pipeline here – the harness will do that.\n# <end code template>",
+    "reasoning": "",
+    "Outer_attempt": 5
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-12-19T09:14:59Z",
+    "PyLint": {
+      "passed": false,
+      "messages": [
+        {
+          "type": "error",
+          "module": "script_x-ai_grok-code-fast-1_1014_5",
+          "obj": "train_model",
+          "line": 292,
+          "column": 8,
+          "endLine": 292,
+          "endColumn": 21,
+          "path": "outputs\\12-19\\FOURTOPS\\Q1\\script_x-ai_grok-code-fast-1_1014_5.py",
+          "symbol": "used-before-assignment",
+          "message": "Using variable 'trained_model' before assignment",
+          "message-id": "E0601"
+        }
+      ]
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-12-19T09:14:59Z",
+        "metrics": {
+          ".\\outputs\\12-19\\FOURTOPS\\Q1\\script_x-ai_grok-code-fast-1_1014_5.py": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 237,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 237,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  }
+}

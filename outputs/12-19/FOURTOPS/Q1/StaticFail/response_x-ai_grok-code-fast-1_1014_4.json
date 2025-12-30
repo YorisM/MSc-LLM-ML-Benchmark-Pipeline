@@ -1,0 +1,89 @@
+{
+  "LLMGeneration": {
+    "model": "x-ai/grok-code-fast-1",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 3507,
+    "prompt_chars": 13777,
+    "response_tokens": 3974,
+    "response_chars": 9379,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.00604032,
+    "generation_ms": 24645,
+    "code": "# ---------- IMPORTS ----------\nfrom torch.utils.data import DataLoader\nfrom torch_geometric.loader import DataLoader as PyGDataLoader\nfrom torch_geometric.data import Data\nfrom torch.nn import Linear, Sequential\nimport torch.nn.functional as F\nfrom sklearn.metrics import roc_auc_score\nimport numpy as np\n\n# -------- (OPTIONAL) CUSTOM DATASET  --------\ndef make_dataset(events, pre, train: bool = True, **kwargs):\n    X, y = events\n    self.X = X\n    self.y = y\n    return CustomDataset(X, y)\n\nclass CustomDataset(Dataset):\n    def __init__(self, X, y):\n        self.X = X\n        self.y = y\n    def __len__(self):\n        return len(self.y)\n    def __getitem__(self, idx):\n        return self.X[idx], self.y[idx]\n\n# ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.obj_means = None\n        self.obj_stds = None\n        self.obj_ids = None\n        self.glob_means = None\n        self.glob_stds = None\n        self.obj_id_to_idx = None\n\n    def make_loader_cfg(self):\n        return {\n            \"dataset_builder\": \"llm_script:make_dataset\",\n            \"dataset_kwargs\": {},\n\n            \"loader_class\": \"torch_geometric.loader:DataLoader\",\n            \"batch_size\": 512,\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": False,\n\n            # collate must be builtin string or None (torch default collate / PyG)\n            \"collate\": None,\n\n            \"extra_loader_kwargs\": {},\n            \"eval_overrides\": {\"shuffle\": False},\n        }\n\n    def fit(self, X, y=None):\n        # Extract statistics\n\n        # Global features: indices 0,1\n        glob = X[:, :2].numpy()\n        self.glob_means = glob.mean(axis=0)\n        self.glob_stds = glob.std(axis=0) + 1e-8\n\n        # Object features: for each object slot, if obj_id != 0, collect features\n        obj_ids = set()\n        obj_features = []\n        for i in range(18):\n            start = 2 + i*5\n            obj_slice = X[:, start:start+5].numpy()  # obj_id, E, pT, eta, phi\n            # Assume valid if obj_id > 0\n            valid = obj_slice[:, 0] > 0\n            if valid.any():\n                obj_ids.update(obj_slice[valid, 0].astype(int).tolist())\n                # Collect E, pT, eta, phi for normalization\n                valid_features = obj_slice[valid, 1:].reshape(-1, 4)\n                obj_features.append(valid_features)\n        self.obj_ids = sorted(list(obj_ids))\n        self.obj_id_to_idx = {oid: idx for idx, oid in enumerate(self.obj_ids)}\n\n        if obj_features:\n            all_obj_features = np.concatenate(obj_features, axis=0)\n            self.obj_means = all_obj_features.mean(axis=0)\n            self.obj_stds = all_obj_features.std(axis=0) + 1e-8\n        return self\n\n    def transform(self, X):\n        data_list = []\n        for idx in range(X.shape[0]):\n            event = X[idx].numpy()\n            # Global\n            glob = (event[:2] - self.glob_means) / self.glob_stds\n            # Objects\n            nodes = []\n            for i in range(18):\n                start = 2 + i*5\n                obj_slice = event[start:start+5]\n                obj_id, E, pT, eta, phi = obj_slice\n                if obj_id > 0:\n                    # One-hot obj_id\n                    one_hot = np.zeros(len(self.obj_ids))\n                    if int(obj_id) in self.obj_id_to_idx:\n                        one_hot[self.obj_id_to_idx[int(obj_id)]] = 1\n                    # Normalize continuous\n                    cont = (np.array([E, pT, eta, phi]) - self.obj_means) / self.obj_stds\n                    # Node: one_hot + cont, shape (len(obj_ids) + 4,)\n                    node_feat = np.concatenate([one_hot, cont])\n                    nodes.append(node_feat)\n            if nodes:\n                x = torch.tensor(np.stack(nodes), dtype=torch.float32)\n                num_nodes = x.shape[0]\n                # Fully connected edges\n                edge_index = torch.combinations(torch.arange(num_nodes), r=2, with_replacement=False).t()\n                edge_index = torch.cat([edge_index, edge_index.flip(0)], dim=1)  # bidirectional\n                # Glob can be added later in model or not\n                data = Data(x=x, edge_index=edge_index, glob=torch.tensor(glob, dtype=torch.float32))\n                data_list.append(data)\n            else:\n                # If no objects, maybe create a dummy with zeros\n                dummy_x = torch.zeros((1, len(self.obj_ids) + 4), dtype=torch.float32)\n                dummy_edge = torch.empty((2, 0), dtype=torch.long)\n                data = Data(x=dummy_x, edge_index=dummy_edge, glob=torch.tensor(glob, dtype=torch.float32))\n                data_list.append(data)\n        return data_list\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# ---------- MODEL DEFINITION ----------\nclass BinaryClassifier(nn.Module):\n    def __init__(self, sample_batch):\n        super().__init__()\n        self.glob_dim = 2  # Et_miss, phi\n        self.node_dim = sample_batch.x.shape[1]\n        assert self.node_dim == 10  # assuming 6 obj_ids + 4\n\n        self.conv1 = torch_geometric.nn.GCNConv(self.node_dim, 64)\n        self.conv2 = torch_geometric.nn.GCNConv(64, 128)\n        self.norm1 = nn.BatchNorm1d(64)\n        self.norm2 = nn.BatchNorm1d(128)\n        self.pool = torch_geometric.nn.global_sum_pool\n        self.glob_lin = Linear(self.glob_dim, 32)\n        self.classifier = Sequential(\n            Linear(128 + 32, 64),\n            nn.ReLU(),\n            nn.Dropout(0.3),\n            Linear(64, 1)\n        )\n\n    def forward(self, batch):\n        x, edge_index, glob = batch.x, batch.edge_index, batch.glob if hasattr(batch, 'glob') else None\n        if glob is None:\n            glob = torch.zeros(batch.batch.shape[0], self.glob_dim, device=x.device).mean(dim=0).expand(x.shape[0]//batch.num_graphs, -1)  # placeholder\n\n        # GNN\n        x = self.conv1(x, edge_index).relu()\n        x = self.norm1(x)\n        x = self.conv2(x, edge_index).relu()\n        x = self.norm2(x)\n\n        # Pool per event\n        batch_size = batch.batch.max().item() + 1 if batch.batch is not None else 1\n        graph_x = self.pool(x, batch.batch)  # (batch_size, 128)\n\n        # Glob features per batch\n        if hasattr(batch, 'glob'):\n            glob_processed = self.glob_lin(batch.glob)  # (batch_size, 32) if glob is batched per graph\n        else:\n            glob_processed = torch.zeros(batch_size, 32, device=graph_x.device)\n\n        combined = torch.cat([graph_x, glob_processed], dim=1)\n        out = self.classifier(combined)\n        return out\n\ndef make_model(example_batch):\n    return BinaryClassifier(example_batch)\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 30\n\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)\n    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5)\n    criterion = nn.BCEWithLogitsLoss()\n\n    model.to(device)\n    best_val_loss = float('inf')\n    patience = 10\n    counter = 0\n\n    train_loss_hist = []\n    val_loss_hist = []\n    train_acc_hist = []\n    val_acc_hist = []\n\n    for epoch in range(epochs):\n        model.train()\n        total_loss = 0\n        total_acc = 0\n        total = 0\n        for batch in train_loader:\n            batch = batch.to(device)\n            optimizer.zero_grad()\n            outputs = model(batch).squeeze()\n            loss = criterion(outputs, batch.y.float())\n            loss.backward()\n            optimizer.step()\n            total_loss += loss.item() * batch.num_graphs\n            preds = (torch.sigmoid(outputs) > 0.5).int()\n            total_acc += (preds == batch.y).sum().item()\n            total += batch.num_graphs\n        train_loss = total_loss / total\n        train_acc = total_acc / total\n        train_loss_hist.append(train_loss)\n        train_acc_hist.append(train_acc)\n\n        model.eval()\n        total_loss = 0\n        total_acc = 0\n        total = 0\n        all_preds = []\n        all_labels = []\n        with torch.no_grad():\n            for batch in val_loader:\n                batch = batch.to(device)\n                outputs = model(batch).squeeze()\n                loss = criterion(outputs, batch.y.float())\n                total_loss += loss.item() * batch.num_graphs\n                preds = (torch.sigmoid(outputs) > 0.5).int()\n                total_acc += (preds == batch.y).sum().item()\n                total += batch.num_graphs\n                all_preds.extend(torch.sigmoid(outputs).cpu().numpy())\n                all_labels.extend(batch.y.cpu().numpy())\n\n        val_loss = total_loss / total\n        val_acc = total_acc / total\n        val_loss_hist.append(val_loss)\n        val_acc_hist.append(val_acc)\n\n        scheduler.step(val_loss)\n\n        # Early stopping\n        if val_loss < best_val_loss - 1e-4:\n            best_val_loss = val_loss\n            counter = 0\n            best_model = model.state_dict()\n        else:\n            counter += 1\n            if counter >= patience:\n                print(f\"Early stopping at epoch {epoch}\")\n                break\n\n    model.load_state_dict(best_model if 'best_model' in locals() else model.state_dict())\n    return model, train_loss_hist, val_loss_hist, train_acc_hist, val_acc_hist",
+    "reasoning": "",
+    "Outer_attempt": 4
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-12-19T09:14:22Z",
+    "PyLint": {
+      "passed": false,
+      "messages": [
+        {
+          "type": "error",
+          "module": "script_x-ai_grok-code-fast-1_1014_4",
+          "obj": "make_dataset",
+          "line": 65,
+          "column": 4,
+          "endLine": 65,
+          "endColumn": 8,
+          "path": "outputs\\12-19\\FOURTOPS\\Q1\\script_x-ai_grok-code-fast-1_1014_4.py",
+          "symbol": "undefined-variable",
+          "message": "Undefined variable 'self'",
+          "message-id": "E0602"
+        },
+        {
+          "type": "error",
+          "module": "script_x-ai_grok-code-fast-1_1014_4",
+          "obj": "make_dataset",
+          "line": 66,
+          "column": 4,
+          "endLine": 66,
+          "endColumn": 8,
+          "path": "outputs\\12-19\\FOURTOPS\\Q1\\script_x-ai_grok-code-fast-1_1014_4.py",
+          "symbol": "undefined-variable",
+          "message": "Undefined variable 'self'",
+          "message-id": "E0602"
+        }
+      ]
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-12-19T09:14:22Z",
+        "metrics": {
+          ".\\outputs\\12-19\\FOURTOPS\\Q1\\script_x-ai_grok-code-fast-1_1014_4.py": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 283,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 283,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  }
+}

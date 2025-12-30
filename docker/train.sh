@@ -6,6 +6,11 @@ echo "argv2=$2"
 
 set -euo pipefail
 
+# Outputs trace to stderr -- usefull for debugging
+# export BASH_XTRACEFD=2   # send `set -x` trace to stderr
+# set -x                   # print each command as it runs
+# exec 1>&2
+
 PY="$1";  shift || true                         #   first arg = user script
 DRY="$(echo "${1:-}" | tr -d '\r\n' | xargs)"   # second arg = --dryrun / --dry-run (trim CR/LF & spaces)
 
@@ -54,13 +59,62 @@ if [[ "$DRY" =~ (--dryrun|--dry-run) ]]; then
   exit 0
 fi
 
-# ───────────────  hash expected artefacts  ────────────────
-MODEL_DIR="$(dirname "$PY")"                 # …/outputs/<DATE>/<CHALLENGE>/<Q>/<MODEL>
-MODEL_NAME="$(basename "$MODEL_DIR")"        # <MODEL>
-
+# ─────────────── hash expected artefacts ────────────────
+MODEL_DIR="$(dirname "$PY")"
 pushd "$MODEL_DIR" >/dev/null
 shopt -s nullglob
-sha256sum *_state.pt *_model.pkl *_preproc.pkl > "${MODEL_NAME}_manifest.sha256"
+
+# Find a reference artefact to derive the stem (prefer *_model.pkl)
+ref=""
+for cand in *_model.pkl *_state.pt *_preproc.pkl; do
+  [[ -e "$cand" ]] || continue
+  ref="$cand"
+  break
+done
+
+if [[ -z "$ref" ]]; then
+  echo "No artefacts found to derive manifest name in $MODEL_DIR" >&2
+  exit 1
+fi
+
+# Derive the stem from the reference artefact filename
+stem="$ref"
+case "$ref" in
+  *_model.pkl)   stem="${ref%_model.pkl}" ;;
+  *_state.pt)    stem="${ref%_state.pt}" ;;
+  *_preproc.pkl) stem="${ref%_preproc.pkl}" ;;
+  *_loaderspec.json) stem="${ref%__loaderspec.json}" ;;
+  *)             stem="${ref%.*}" ;;
+esac
+
+# Manifest is "<stem>_manifest.sha256"
+MANIFEST="${stem}_manifest.sha256"
+
+# Only hash artefacts that share this stem
+files=( "${stem}_state.pt" "${stem}_model.pkl" "${stem}_preproc.pkl" "${stem}_loaderspec.json" )
+have=()
+for f in "${files[@]}"; do
+  [[ -e "$f" ]] && have+=("$f")
+done
+
+# Require ALL artefacts are present (except state.pt)
+req=( "${stem}_loaderspec.json" "${stem}_model.pkl" "${stem}_preproc.pkl")
+for f in "${req[@]}"; do
+  if [[ ! -e "$f" ]]; then
+    echo "Missing required artefact: $f" >&2
+    exit 1
+  fi
+done
+
+if ((${#have[@]}==0)); then
+  echo "No artefacts matching ${stem}_* to hash" >&2
+  exit 1
+fi
+
+sha256sum "${have[@]}" > "$MANIFEST"
 shopt -u nullglob
-echo "Hash manifest written → ${MODEL_NAME}_manifest.sha256"
+echo "Hash manifest written → $MANIFEST"
+
 popd >/dev/null
+
+# docker build -f docker/Dockerfile.sandbox -t llm-sandbox:latest .

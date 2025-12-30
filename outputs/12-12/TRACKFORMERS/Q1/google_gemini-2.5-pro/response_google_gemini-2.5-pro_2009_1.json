@@ -1,0 +1,141 @@
+{
+  "LLMGeneration": {
+    "model": "google/gemini-2.5-pro",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 4372,
+    "prompt_chars": 15777,
+    "response_tokens": 17135,
+    "response_chars": 12155,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.176815,
+    "generation_ms": 150308,
+    "code": "# 0. ---------- IMPORTS ----------\n# NOTE: Some imports (torch, numpy, DataLoader) are already available (see prefix).\n# Only import extra std-lib modules, torch, scipy, sklearn (sub-)modules you actually use.\nimport torch.nn.functional as F\nfrom torch_geometric.nn import EdgeConv, knn_graph\nfrom sklearn.cluster import DBSCAN\nfrom sklearn.metrics import fowlkes_mallows_score\nimport itertools\n\n# 1. ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    # Must implement:\n    #   - fit()\n    #   - transform()\n\n    # REQUIREMENTS\n    #   - IMPORTANT: All state must be picklable with the std-lib pickle module.\n    #   - May allocate NumPy arrays or Torch tensors internally, but: transform() must be deterministic.\n    #   - Store only derived parameters needed for transform i.e. do not store the raw data itself in the preprocessor object.\n\n    # TIPS\n    #   When modifying data features or feature engineering: annotate tensor size as comments after each tensor operation to reduce dimension mismatches.\n\n    def __init__(self):\n        # We will store the mean and standard deviation for x, y, z coordinates.\n        self.mean = None\n        self.std = None\n\n    def _raw_reshape(self, data: torch.Tensor) -> torch.Tensor:\n        # Convert cylindrical to Cartesian coordinates for graph construction\n        # and standardisation, as Euclidean distances are more natural in Cartesian space.\n        # input `data` format: [N_hits, 4] (hit_r, hit_theta, hit_z, layer_id)\n        r, theta, z, layer_id = data[:, 0], data[:, 1], data[:, 2], data[:, 3]\n\n        x = r * torch.cos(theta)\n        y = r * torch.sin(theta)\n\n        # New feature matrix: (x, y, z, layer_id). \n        # layer_id is kept as-is, not normalized, as it's a categorical identifier.\n        return torch.stack([x, y, z, layer_id], dim=1) # [N_hits, 4]\n\n    def make_loader_cfg(self):\n        # Using batch_size=1 simplifies processing variable-sized events,\n        # as each batch corresponds to a single event and its graph.\n        return {\"batch_size\": 1}\n\n    def fit(self, events: list):\n        # Calculate mean and std for the first 3 features (x, y, z)\n        # across the entire training dataset for normalization.\n\n        all_features = []\n        # Use a large subset of events to estimate statistics.\n        for evt in events[:2000]: \n            X_raw, _ = _split_X_y(evt)\n            # We only need the features that will be normalized (x,y,z).\n            reshaped_X = self._raw_reshape(X_raw)\n            all_features.append(reshaped_X[:, :3]) # Append only x, y, z\n\n        if not all_features:\n            self.mean = torch.zeros(3)\n            self.std = torch.ones(3)\n            return self\n\n        full_feature_tensor = torch.cat(all_features, dim=0) # [Total_hits, 3]\n        self.mean = torch.mean(full_feature_tensor, dim=0)\n        self.std = torch.std(full_feature_tensor, dim=0)\n        # Avoid division by zero in case a dimension has zero variance.\n        self.std[self.std == 0] = 1.0\n\n        return self\n\n    def transform(self, data: torch.Tensor) -> torch.Tensor:\n        # Apply the preprocessing: Cartesian conversion and feature normalization.\n        reshaped_data = self._raw_reshape(data)\n\n        if self.mean is None or self.std is None:\n            raise RuntimeError(\"Preprocessor must be fit before transform is called.\")\n\n        # Normalize x, y, z features using the pre-computed stats.\n        norm_features = (reshaped_data[:, :3] - self.mean) / self.std # [N_hits, 3]\n\n        # Combine normalized features with the non-normalized layer_id.\n        transformed_data = torch.cat([norm_features, reshaped_data[:, 3:4]], dim=1) # [N_hits, 4]\n\n        return transformed_data\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# 2. ---------- MODEL ARCHITECTURE ----------\nclass HitClassifier(nn.Module):\n    def __init__(self, in_features, emb_dim=8, k_neighbors=8, dbscan_eps=0.25, dbscan_min_samples=2):\n        super().__init__()\n        self.in_features = in_features\n        self.emb_dim = emb_dim\n        self.k_neighbors = k_neighbors\n        self.dbscan_eps = dbscan_eps\n        self.dbscan_min_samples = dbscan_min_samples\n\n        # Define GNN layers using EdgeConv, which is effective for point cloud tasks.\n        # It operates on local neighborhoods, dynamically defined in feature space.\n\n        nn1 = nn.Sequential(nn.Linear(2 * in_features, 64), nn.ReLU(), nn.Linear(64, 64), nn.ReLU())\n        self.gcn1 = EdgeConv(nn1, aggr='max')\n\n        nn2 = nn.Sequential(nn.Linear(2 * 64, 128), nn.ReLU(), nn.Linear(128, 128), nn.ReLU())\n        self.gcn2 = EdgeConv(nn2, aggr='max')\n\n        nn3 = nn.Sequential(nn.Linear(2 * 128, 256), nn.ReLU(), nn.Linear(256, 256), nn.ReLU())\n        self.gcn3 = EdgeConv(nn3, aggr='max')\n\n        # Final MLP to project concatenated GNN outputs to the embedding space.\n        self.emb_mlp = nn.Sequential(\n            nn.Linear(in_features + 64 + 128 + 256, 256), nn.ReLU(),\n            nn.Linear(256, 128), nn.ReLU(),\n            nn.Linear(128, self.emb_dim)\n        )\n\n    def create_graph(self, x: torch.Tensor) -> torch.Tensor:\n        # Build a k-NN graph for the current event's hits.\n        # Since batch_size=1, we can pass batch=None.\n        edge_index = knn_graph(x, k=self.k_neighbors, batch=None, loop=False)\n        return edge_index\n\n    def get_embeddings(self, x: torch.Tensor) -> torch.Tensor:\n        # Construct graph and pass through GNN layers.\n        edge_index = self.create_graph(x)\n\n        # GNN layers with skip connections concatenated at the end.\n        x1 = self.gcn1(x, edge_index)           # [N_hits, 64]\n        x2 = self.gcn2(x1, edge_index)          # [N_hits, 128]\n        x3 = self.gcn3(x2, edge_index)          # [N_hits, 256]\n\n        # Concatenate features from all layers (DenseNet-like) for a rich representation.\n        out = torch.cat([x, x1, x2, x3], dim=1) # [N_hits, in + 64 + 128 + 256]\n\n        # Project to embedding space.\n        embs = self.emb_mlp(out)                # [N_hits, emb_dim]\n\n        # Normalize embeddings to lie on a unit hypersphere. This stabilizes training\n        # with a contrastive loss and makes clustering distances more uniform.\n        embs = F.normalize(embs, p=2, dim=1)    # [N_hits, emb_dim]\n        return embs\n\n    def forward(self, batch_x: torch.Tensor) -> torch.Tensor:\n        # batch_x shape: [N_hits_in_event, features] due to batch_size=1\n\n        embs = self.get_embeddings(batch_x)\n\n        # Use different behavior for training (metric learning) and inference (clustering).\n        if self.training:\n            # During training, return embeddings for calculation of the contrastive loss.\n            return embs\n        else:\n            # During inference, perform clustering on embeddings to predict track IDs.\n            embs_cpu = embs.detach().cpu().numpy()\n\n            # DBSCAN is robust to noise and doesn't require pre-specifying the number of tracks.\n            clusterer = DBSCAN(eps=self.dbscan_eps, min_samples=self.dbscan_min_samples, metric='euclidean')\n            labels = clusterer.fit_predict(embs_cpu)\n\n            return torch.from_numpy(labels).to(batch_x.device)\n\ndef make_model(in_features: int) -> HitClassifier:\n    # in_features will be 4 (x_norm, y_norm, z_norm, layer_id)\n    return HitClassifier(in_features)\n\n# 3. ---------- MODEL TRAINING ----------\nEPOCHS = 50 \n\ndef contrastive_loss(embs: torch.Tensor, y_true: torch.Tensor, margin: float = 0.8, device='cpu'):\n    # Implements contrastive loss by sampling positive (same track) and negative (different track) pairs.\n    labels = y_true.cpu().numpy()\n    unique_labels, counts = np.unique(labels, return_counts=True)\n    true_track_ids = unique_labels[counts > 1]\n\n    if len(true_track_ids) == 0:\n        return torch.tensor(0.0, device=device)\n\n    # Sample positive pairs\n    pos_pairs = [list(itertools.combinations(np.where(labels == track_id)[0], 2)) for track_id in true_track_ids]\n    pos_pairs = [pair for sublist in pos_pairs for pair in sublist]\n\n    if not pos_pairs:\n        return torch.tensor(0.0, device=device)\n\n    # Subsample to a manageable number to keep training steps fast.\n    if len(pos_pairs) > 2000:\n        pos_pairs = [pos_pairs[i] for i in np.random.choice(len(pos_pairs), 2000, replace=False)]\n\n    # Sample an equal number of negative pairs.\n    neg_pairs = []\n    n_hits = len(labels)\n    n_samples = len(pos_pairs)\n\n    attempts, max_attempts = 0, 5 * n_samples # Safety break\n    while len(neg_pairs) < n_samples and attempts < max_attempts:\n        i, j = np.random.randint(0, n_hits, 2)\n        if labels[i] != labels[j]:\n            neg_pairs.append((i, j))\n        attempts += 1\n\n    if not neg_pairs:\n        return torch.tensor(0.0, device=device)\n\n    pos_pairs_tensor = torch.LongTensor(pos_pairs).to(device)\n    neg_pairs_tensor = torch.LongTensor(neg_pairs).to(device)\n\n    # Calculate L2 distance for positive and negative pairs in the embedding space.\n    pos_dist = F.pairwise_distance(embs[pos_pairs_tensor[:, 0]], embs[pos_pairs_tensor[:, 1]])\n    neg_dist = F.pairwise_distance(embs[neg_pairs_tensor[:, 0]], embs[neg_pairs_tensor[:, 1]])\n\n    # Contrastive Loss: pull positive pairs together, push negative pairs apart by a margin.\n    loss = torch.mean(pos_dist) + torch.mean(F.relu(margin - neg_dist))\n    return loss\n\ndef train_model(model, train_loader, val_loader, epochs):\n    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-5)\n    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(\n        optimizer, mode='max', factor=0.5, patience=5, verbose=False\n    )\n\n    train_loss, val_loss = [], []\n    train_acc, val_acc = [], []\n\n    best_val_acc = -1.0\n    patience_counter = 0\n    patience = 10\n\n    for epoch in range(epochs):\n        # --- Training Phase ---\n        model.train()\n        epoch_train_loss = 0.0\n        for batch in train_loader:\n            view = normalise_batch(batch, device=device)\n            X, y_true = view.batch_x, view.batch_y\n            optimizer.zero_grad()\n            embs = model(X) # Returns embeddings in training mode\n            loss = contrastive_loss(embs, y_true, device=device)\n            if loss.item() > 0:\n                loss.backward()\n                optimizer.step()\n            epoch_train_loss += loss.item()\n\n        avg_train_loss = epoch_train_loss / len(train_loader)\n        train_loss.append(avg_train_loss)\n        train_acc.append(0)  # Omit train accuracy calculation for speed.\n\n        # --- Validation Phase ---\n        model.eval()\n        epoch_val_acc = 0.0\n        with torch.no_grad():\n            for batch in val_loader:\n                view = normalise_batch(batch, device=device)\n                X, y_true = view.batch_x, view.batch_y\n                pred_ids = model(X) # Returns cluster IDs in eval mode\n\n                # Use Fowlkes-Mallows score as a fast proxy for clustering quality.\n                # It compares the similarity of two clusterings (predicted vs true).\n                acc = fowlkes_mallows_score(y_true.cpu().numpy(), pred_ids.cpu().numpy())\n                epoch_val_acc += acc\n\n        avg_val_acc = epoch_val_acc / len(val_loader)\n        val_acc.append(avg_val_acc)\n        val_loss.append(0) # Not calculating validation loss for simplicity, focus on accuracy proxy.\n\n        print(f\"Epoch {epoch+1}/{epochs} | Train Loss: {avg_train_loss:.4f} | Val Acc (F-M): {avg_val_acc:.4f}\")\n\n        scheduler.step(avg_val_acc)\n\n        # --- Early Stopping ---\n        if avg_val_acc > best_val_acc:\n            best_val_acc = avg_val_acc\n            patience_counter = 0\n        else:\n            patience_counter += 1\n            if patience_counter >= patience:\n                print(f\"Early stopping at epoch {epoch+1} as validation accuracy did not improve.\")\n                break\n\n    return model, train_loss, val_loss, train_acc, val_acc",
+    "reasoning": "",
+    "Outer_attempt": 1
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-12-12T19:09:48Z",
+    "PyLint": {
+      "passed": false,
+      "messages": [
+        {
+          "type": "error",
+          "module": "script_google_gemini-2.5-pro_2009_1",
+          "obj": "contrastive_loss",
+          "line": 286,
+          "column": 15,
+          "endLine": 286,
+          "endColumn": 94,
+          "path": "outputs\\12-12\\TRACKFORMERS\\Q1\\script_google_gemini-2.5-pro_2009_1.py",
+          "symbol": "not-callable",
+          "message": "F.pairwise_distance is not callable",
+          "message-id": "E1102"
+        },
+        {
+          "type": "error",
+          "module": "script_google_gemini-2.5-pro_2009_1",
+          "obj": "contrastive_loss",
+          "line": 286,
+          "column": 40,
+          "endLine": 286,
+          "endColumn": 56,
+          "path": "outputs\\12-12\\TRACKFORMERS\\Q1\\script_google_gemini-2.5-pro_2009_1.py",
+          "symbol": "unsubscriptable-object",
+          "message": "Value 'pos_pairs_tensor' is unsubscriptable",
+          "message-id": "E1136"
+        },
+        {
+          "type": "error",
+          "module": "script_google_gemini-2.5-pro_2009_1",
+          "obj": "contrastive_loss",
+          "line": 286,
+          "column": 70,
+          "endLine": 286,
+          "endColumn": 86,
+          "path": "outputs\\12-12\\TRACKFORMERS\\Q1\\script_google_gemini-2.5-pro_2009_1.py",
+          "symbol": "unsubscriptable-object",
+          "message": "Value 'pos_pairs_tensor' is unsubscriptable",
+          "message-id": "E1136"
+        },
+        {
+          "type": "error",
+          "module": "script_google_gemini-2.5-pro_2009_1",
+          "obj": "contrastive_loss",
+          "line": 287,
+          "column": 15,
+          "endLine": 287,
+          "endColumn": 94,
+          "path": "outputs\\12-12\\TRACKFORMERS\\Q1\\script_google_gemini-2.5-pro_2009_1.py",
+          "symbol": "not-callable",
+          "message": "F.pairwise_distance is not callable",
+          "message-id": "E1102"
+        },
+        {
+          "type": "error",
+          "module": "script_google_gemini-2.5-pro_2009_1",
+          "obj": "contrastive_loss",
+          "line": 287,
+          "column": 40,
+          "endLine": 287,
+          "endColumn": 56,
+          "path": "outputs\\12-12\\TRACKFORMERS\\Q1\\script_google_gemini-2.5-pro_2009_1.py",
+          "symbol": "unsubscriptable-object",
+          "message": "Value 'neg_pairs_tensor' is unsubscriptable",
+          "message-id": "E1136"
+        },
+        {
+          "type": "error",
+          "module": "script_google_gemini-2.5-pro_2009_1",
+          "obj": "contrastive_loss",
+          "line": 287,
+          "column": 70,
+          "endLine": 287,
+          "endColumn": 86,
+          "path": "outputs\\12-12\\TRACKFORMERS\\Q1\\script_google_gemini-2.5-pro_2009_1.py",
+          "symbol": "unsubscriptable-object",
+          "message": "Value 'neg_pairs_tensor' is unsubscriptable",
+          "message-id": "E1136"
+        }
+      ]
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-12-12T19:09:48Z",
+        "metrics": {
+          ".\\./outputs/12-12/TRACKFORMERS/Q1/script_google_gemini-2.5-pro_2009_1.py": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 283,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 283,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  }
+}

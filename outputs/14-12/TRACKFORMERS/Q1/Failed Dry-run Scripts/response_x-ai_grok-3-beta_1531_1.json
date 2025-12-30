@@ -1,0 +1,71 @@
+{
+  "LLMGeneration": {
+    "model": "x-ai/grok-3-beta",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 3731,
+    "prompt_chars": 16011,
+    "response_tokens": 1521,
+    "response_chars": 6545,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.0340035,
+    "generation_ms": 29819,
+    "code": "# 0. ---------- IMPORTS ----------\nimport torch.nn.functional as F\nfrom torch_geometric.nn import GCNConv, global_mean_pool\nfrom torch_geometric.data import Data, Batch\nfrom sklearn.preprocessing import StandardScaler\nimport numpy as np\n\n# 1.1 -------- OPTIONAL: CUSTOM DATASET / DATA-CLASS --------\ndef make_dataset(events, pre, train: bool):\n    return None  # Use default EventDataset\n\n# 1.2 ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.scaler = StandardScaler()\n\n    def _raw_reshape(self, data):           \n        return data  # Returns identity by default\n\n    def make_loader_cfg(self):\n        return {\n            \"loader_class\": \"torch.utils.data.DataLoader\",\n            \"batch_size\": 128,\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": True\n        }\n\n    def fit(self, data):\n        # Concatenate all features from all events for fitting the scaler\n        all_features = []\n        for evt in data:\n            X, _ = _split_X_y(evt)\n            all_features.append(X.numpy())\n        all_features = np.concatenate(all_features, axis=0)\n        self.scaler.fit(all_features)\n        return self\n\n    def transform(self, data):\n        # Scale the features using the fitted scaler\n        data_np = data.numpy()\n        data_scaled = self.scaler.transform(data_np)\n        return torch.from_numpy(data_scaled).float()  # Shape: [N_hits, 4]\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# 2. ---------- MODEL ARCHITECTURE ----------\nclass HitClassifier(nn.Module):\n    def __init__(self, example_batch_x):\n        super().__init__()\n        self.in_features = example_batch_x[0].shape[1]  # Infer input dimension (4 features)\n        self.hidden_dim = 64\n        self.num_classes = 50  # Approximate maximum number of tracks per event\n\n        # GCN layers for graph-based learning\n        self.conv1 = GCNConv(self.in_features, self.hidden_dim)\n        self.conv2 = GCNConv(self.hidden_dim, self.hidden_dim)\n        self.conv3 = GCNConv(self.hidden_dim, self.hidden_dim)\n\n        # Final classification layer\n        self.fc = nn.Linear(self.hidden_dim, self.num_classes)\n\n    def forward(self, batch_x):\n        # Handle ragged list of tensors (one per event)\n        if isinstance(batch_x, list):\n            graphs = []\n            for x in batch_x:\n                # Create a simple fully-connected graph for each event\n                N = x.shape[0]\n                edge_index = torch.ones(2, N * (N - 1) // 2, dtype=torch.long, device=x.device)\n                idx = 0\n                for i in range(N):\n                    for j in range(i + 1, N):\n                        edge_index[0, idx] = i\n                        edge_index[1, idx] = j\n                        idx += 1\n                graph = Data(x=x, edge_index=edge_index)  # Shape: x=[N_hits, 4], edge_index=[2, N*(N-1)/2]\n                graphs.append(graph)\n            batch = Batch.from_data_list(graphs).to(device)\n        else:\n            batch = batch_x  # Already a batch (unlikely in this case)\n\n        # GCN forward pass\n        x = batch.x\n        edge_index = batch.edge_index\n\n        x = self.conv1(x, edge_index)  # Shape: [total_hits, hidden_dim]\n        x = F.relu(x)\n        x = self.conv2(x, edge_index)  # Shape: [total_hits, hidden_dim]\n        x = F.relu(x)\n        x = self.conv3(x, edge_index)  # Shape: [total_hits, hidden_dim]\n        x = F.relu(x)\n\n        # Classification per hit\n        out = self.fc(x)  # Shape: [total_hits, num_classes]\n        pred = torch.argmax(out, dim=-1)  # Shape: [total_hits]\n        return pred.long()  # Return integer labels\n\ndef make_model(example_batch_x):\n    return HitClassifier(example_batch_x)\n\n# 3. ---------- MODEL TRAINING ----------\nEPOCHS = 20   \ndef train_model(model, train_loader, val_loader, epochs):\n    optimizer = torch.optim.Adam(model.parameters(), lr=0.01)\n    criterion = nn.CrossEntropyLoss(ignore_index=-1)  # Ignore noise labels if any\n    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=2)\n\n    best_val_acc = 0.0\n    patience = 5\n    trigger_times = 0\n\n    train_loss_list = []\n    val_loss_list = []\n    train_acc_list = []\n    val_acc_list = []\n\n    for epoch in range(epochs):\n        # Training loop\n        model.train()\n        tr_loss = 0.0\n        tr_correct = 0\n        tr_total = 0\n\n        for batch in train_loader:\n            view = normalise_batch(batch, device=device)\n            optimizer.zero_grad()\n            out = model(view.batch_x)  # Shape: [total_hits]\n            target = view.batch_y.view(-1).to(device)  # Shape: [total_hits]\n            loss = criterion(out, target)\n            loss.backward()\n            optimizer.step()\n\n            tr_loss += loss.item()\n            tr_correct += (out == target).sum().item()\n            tr_total += target.numel()\n\n        tr_loss_avg = tr_loss / len(train_loader)\n        tr_acc = tr_correct / tr_total if tr_total > 0 else 0.0\n\n        # Validation loop\n        model.eval()\n        val_loss = 0.0\n        val_correct = 0\n        val_total = 0\n\n        with torch.no_grad():\n            for batch in val_loader:\n                view = normalise_batch(batch, device=device)\n                out = model(view.batch_x)  # Shape: [total_hits]\n                target = view.batch_y.view(-1).to(device)  # Shape: [total_hits]\n                loss = criterion(out, target)\n\n                val_loss += loss.item()\n                val_correct += (out == target).sum().item()\n                val_total += target.numel()\n\n        val_loss_avg = val_loss / len(val_loader)\n        val_acc = val_correct / val_total if val_total > 0 else 0.0\n\n        # Store metrics\n        train_loss_list.append(tr_loss_avg)\n        val_loss_list.append(val_loss_avg)\n        train_acc_list.append(tr_acc)\n        val_acc_list.append(val_acc)\n\n        # Scheduler step based on validation loss\n        scheduler.step(val_loss_avg)\n\n        # Early stopping\n        if val_acc > best_val_acc:\n            best_val_acc = val_acc\n            trigger_times = 0\n        else:\n            trigger_times += 1\n            if trigger_times >= patience:\n                print(f\"Early stopping at epoch {epoch+1}\")\n                break\n\n    return model, train_loss_list, val_loss_list, train_acc_list, val_acc_list",
+    "reasoning": "",
+    "Outer_attempt": 1
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-12-14T14:31:13Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-12-14T14:31:13Z",
+        "metrics": {
+          ".\\./outputs/14-12/TRACKFORMERS/Q1/script_x-ai_grok-3-beta_1531_1.py": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 254,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 254,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2025-12-14T14:33:57Z",
+    "passed": false,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/14-12/TRACKFORMERS/Q1/script_x-ai_grok-3-beta_1531_1.py\nargv2=--dryrun\n",
+      "stderr": "+ exec\n+ PY=outputs/14-12/TRACKFORMERS/Q1/script_x-ai_grok-3-beta_1531_1.py\n+ shift\n++ echo --dryrun\n++ xargs\n++ tr -d '\\r\\n'\n+ DRY=--dryrun\n+ [[ outputs/14-12/TRACKFORMERS/Q1/script_x-ai_grok-3-beta_1531_1.py == \\/\\u\\s\\r\\/\\l\\o\\c\\a\\l\\/\\b\\i\\n\\/\\t\\r\\a\\i\\n\\.\\s\\h ]]\n+ [[ --dryrun =~ (--dryrun|--dry-run) ]]\n+ TIMEOUT=3600\n+ : 0\n+ : 0\n+ ulimit -t 3600\n+ ((  MEMORY_LIMIT_GB > 0  ))\n+ ((  PIDS_LIMIT > 0  ))\n+ timeout --signal=KILL 3600s python outputs/14-12/TRACKFORMERS/Q1/script_x-ai_grok-3-beta_1531_1.py --dryrun\nmkdir -p failed for path /home/sandbox/.config/matplotlib: [Errno 30] Read-only file system: '/home/sandbox/.config'\nMatplotlib created a temporary cache directory at /tmp/matplotlib-u6m2xb78 because there was an issue with the default path (/home/sandbox/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.\nERROR during training: 'list' object has no attribute 'view'\nTraceback (most recent call last):\n  File \"/workspace/outputs/14-12/TRACKFORMERS/Q1/script_x-ai_grok-3-beta_1531_1.py\", line 347, in <module>\n    _run(dryrun=\"--dryrun\" in sys.argv)\n  File \"/workspace/outputs/14-12/TRACKFORMERS/Q1/script_x-ai_grok-3-beta_1531_1.py\", line 298, in _run\n    trained_model, tr_loss, va_loss, tr_acc, va_acc = train_model(\n                                                      ^^^^^^^^^^^^\n  File \"/workspace/outputs/14-12/TRACKFORMERS/Q1/script_x-ai_grok-3-beta_1531_1.py\", line 206, in train_model\n    target = view.batch_y.view(-1).to(device)  # Shape: [total_hits]\n             ^^^^^^^^^^^^^^^^^\nAttributeError: 'list' object has no attribute 'view'\n"
+    },
+    "return_code": 1
+  }
+}

@@ -5,6 +5,8 @@ from challenges.challenges import Challenge, Question
 fourtop_challenge = Challenge(
     name = "FOURTOPS",
 
+    version = "v2.3.0",
+
     dataset = {
     "X_train": "./challenges/FOURTOPS/data/train/X_train.csv",
     "Y_train": "./challenges/FOURTOPS/data/train/Y_train.csv",
@@ -13,43 +15,21 @@ fourtop_challenge = Challenge(
     },
 
     problem_description = r"""** Problem Description **
-A major task in particle physics is the measurement of rare signal 
-processes with very small cross-sections. With the unprecedented amount of 
-data provided by the upcoming runs of the Large Hadron Collider (LHC), 
-one can start to measure these processes. An example is the recent 
-observation of four top quarks originating from a single proton-proton 
-collision event. Accurate classification of these events is crucial, 
-as even a small reduction in background noise on the order of a few tens 
-of percent while maintaining the same signal detection efficiency can lead 
-to a profound increase in sensitivity.
+A major task in particle physics is the measurement of rare signal processes with very small cross-sections. With the unprecedented amount of data provided by the upcoming runs of the Large Hadron Collider (LHC), one can start to measure these processes. An example is the recent observation of four top quarks originating from a single proton-proton collision event. Accurate classification of these events is crucial, as even a small reduction in background noise on the order of a few tens of percent while maintaining the same signal detection efficiency can lead to a profound increase in sensitivity.
 """,
 
     dataset_description = r"""** Dataset Description **
-The dataset used for this problem consists of simulated proton-proton 
-collision at a center of mass energy of 13 TeV. The signal process is defined as 
-$pp \rightarrow t \bar{t} t \bar{t}$. The relevant production processes of the
-backgrounds are $t \bar{t} + X$ where $X = Z, W^+, W^+W^-$.
+The dataset used for this problem consists of simulated proton-proton collision at a center of mass energy of 13 TeV. The signal process is defined as $pp \rightarrow t \bar{t} t \bar{t}$. The relevant production processes of the backgrounds are $t \bar{t} + X$ where $X = Z, W^+, W^+W^-$. 
 
-The dataset includes 302072 events, of which roughly 50\% is signal and 50\%
-are background processes. All background processes have an equal number of events. 
-There is no cut on the maximum number of objects and there is no order.    
+The dataset includes 302072 events, of which roughly 50% is signal and 50% are background processes. All background processes have an equal number of events. Maximum objects encoded per event is 18 and there is no specific order. The contents of the datasets (X_train & X_val) are given below. 
 
-The contents of the datasets (X_train \& X_val) are given below.
 IMPORTANT: The specific line format of the dataset is as follows:
 
 $$E_{T}^{miss}, \phi_{E_t}^{miss}, obj_1, E_1, p_{T1}, \eta_1, \phi_1, obj_2, E_2, p_{t2}, \eta_2, \phi_2, ...$$
 
-Such that each object is represented by a string that starts with an identifier "$obj_n$", which is an
-integer value representing a particular object in the event. The object identifier is
-followed by its kinematic properties in the form of a four-vector containing the full 
-energy "E" and the transverse momentum "p\_T" in units of MeV, as well as the pseudo-rapidity 
-"$\eta$" and the azimuthal angle "$\phi$". The other three quantities are "weight" given by the cross-section
-of the process divided by the total number of events generated. "$E_{T}^{miss}$" is the magnitude of the
-missing transverse energy in units of MeV and "$\phi_{E_T}^{miss}$" is the azimuthal angle of the missing
-transverse energy.
+Such that each object is represented by five consecutive numerical features. The first is an integer identifier "$obj_n$" representing a particular object in the event. The object identifier is followed by its kinematic properties in the form of a four-vector containing the full energy "E" and the transverse momentum "p_T" in units of MeV, as well as the pseudo-rapidity "$\eta$" and the azimuthal angle "$\phi$". The other two quantities are "$E_{T}^{miss}$", the magnitude of the missing transverse energy in units of MeV and "$\phi_{E_T}^{miss}$" is the azimuthal angle of the missing transverse energy.
 
-Since the length of the events is variable, the data is zero-padded to the largest number of objects
-found in the events within the entire dataset. The dataset is fairly sparse and not pre-processed.
+Since the length of the original events is variable, the data is zero-padded to the largest number of objects found in the events within the entire dataset. The dataset is fairly sparse and not pre-processed.
 
 The relevant datasets are pytorch tensors with the following properties:
 
@@ -58,26 +38,28 @@ Name: Y_train, shape: [241657], dtype: torch.int64,
 Name: X_val, shape: [30272, 92], dtype: torch.float32, 
 Name: Y_val, shape: [30272], dtype: torch.int64
 
-IMPORTANT: Each of these tensors are pre-loaded and available.
+IMPORTANT: You do not need to read files, the harness provides X_train, Y_train, X_val, Y_val as PyTorch tensors.
 """,
 
     evaluation_metric = r"""** Evaluation Metric **
-The evaluation metric for this classification task is the area under the curve (AUC),
-specified by the area under the receiver operating characteristic (ROC) curve. 
-The AUC summarizes a model's ability to distinguish between positive and 
-negative classes. The higher the score the better.
+The evaluation metric for this classification task is the area under the curve (AUC), specified by the area under the receiver operating characteristic (ROC) curve. The AUC summarizes a model's ability to distinguish between positive and negative classes. The higher the score the better.
 """,
 
     prefix = r"""
-# ----------------  START HARNESS WRAPPER PREFIX (FOR CONTEXT)  ---------------- 
+# ----------------  START HARNESS PREFIX WRAPPER (FOR CONTEXT)  ---------------- 
 # Environment: python 3.12, torch 2.6.0, torch_geometric 2.6.1, numpy 2.3.1, 
-# scipy 1.16.0, scikit-learn 1.7.0
-import os, sys, pickle, torch, torch_geometric, gc, json, importlib
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
+# scipy 1.16.0, scikit-learn 1.7.0, hdbscan v0.8.40
+import os, sys, torch, torch_geometric, gc, json
+import pandas as pd, numpy as np
 from torch import nn
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset
+from utils.llm_io import normalise_batch, assert_binary_output, build_dataset, build_dataloader
+from utils.loaderspec import build_spec_from_preproc, enforce_pyg_policy
+from utils.suffix_utils import base_from_argv0, plot_train_val, persist_artefacts
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+if device.type == "cuda":
+    torch.backends.cudnn.benchmark = True
 
 torch.manual_seed(42)                        
 os.environ["PYTHONHASHSEED"] = "42"
@@ -96,82 +78,61 @@ def load_data():
     return (torch.from_numpy(X_train), torch.from_numpy(Y_train),
             torch.from_numpy(X_val), torch.from_numpy(Y_val))
 
-class PairDataset(Dataset):
-    def __init__(self, x, y):
-        self.x = x
+class FourTopsDataset(Dataset):
+    def __init__(self, events, pre, train: bool = True, **kwargs):
+        X, y = events
+        self.X = pre.transform(X) if pre is not None else X
         self.y = y
-
     def __len__(self):
-        return len(self.y)
-        
+        return int(self.y.shape[0])
     def __getitem__(self, idx):
-    
-        if isinstance(self.x, (tuple, list)) and all(torch.is_tensor(t) for t in self.x):
-            return (tuple(t[idx] for t in self.x), self.y[idx])
-        else:
-            return (self.x[idx], self.y[idx])
+        return self.X[idx], self.y[idx]
 
-def _make_dataset(x, y):
-    custom = globals().get("make_dataset", None)
-    if callable(custom):
-        ds = custom(x, y)
-        if ds is not None:
-            return ds
-    return PairDataset(x, y)
-
-def make_loaders(X_train, Y_train, X_val, Y_val, *, batch=512, collate_fn=None, loader_cls=None, workers=0):
-    train_ds = _make_dataset(X_train, Y_train)
-    val_ds   = _make_dataset(X_val , Y_val)
-
-    if loader_cls is None: 
-        loader_cls = DataLoader
-
-    train_ld = loader_cls(train_ds, batch_size=batch, shuffle=True, num_workers=0, 
-                        collate_fn=collate_fn)
-    val_ld   = loader_cls(val_ds, batch_size=batch, shuffle=False, num_workers=0,
-                        collate_fn=collate_fn)
-
-    return train_ld, val_ld
-
-# ----------------  END HARNESS WRAPPER PREFIX (FOR CONTEXT)  ----------------                        
-# -------------------------- START OF LLM BLOCK ------------------------------
+# ----------------  END HARNESS PREFIX WRAPPER (FOR CONTEXT)  ----------------                         
 """,
 
     code_template = r"""** Code Template **
+# -------------------------- START OF LLM BLOCK ------------------------------
 # <start code template>
-# 0. ---------- IMPORTS ----------
+# ---------- IMPORTS ----------
 # NOTE: Some imports (torch, nn, numpy, DataLoader) are already available (see prefix).
-# Only import extra std-lib modules, torch, scipy, sklearn (sub-)modules you actually use.
+# Only import extra std-lib modules or modules available in the environment, i.e: torch, scipy, sklearn (sub-)modules you actually use.
 # <LLM: Import modules>
 
-# 2. ---------- PRE-PROCESSING ----------
-class MyPreprocessor:
-    # Must implement:
-    #   - fit() 
-    #   - transform()
+#  -------- (OPTIONAL) CUSTOM DATASET  --------
+# class CustomDataset(Dataset):
+#  REQUIREMENT: If you want a custom dataset: in make_loader_cfg set dataset_builder to "llm_script:CustomDataset"
+#    def __init__(self, events, pre, train: bool = True, **kwargs):
+#        X, y = events
+#        self.X = pre.transform(X) if pre is not None else X
+#        self.y = y
+#    def __len__(self):
+#        return int(self.y.shape[0])
+#    def __getitem__(self, idx):
+#        return self.X[idx], self.y[idx]
 
-    # DATA SPECIFICS
-    # Total flat length per event (X_train & X_val): 92
-    # Index  0 :  missing-ET magnitude  (E_T_miss)
-    # Index  1 :  missing-ET azimuth    (phi_Et_miss)
-    # Indices  2-6  : object 1  ->  obj_1, E_1, p_T1, eta_1, phi_1
-    # Indices  7-11 : object 2  ->  obj_2, E_2 , p_T_2 , eta_2 , phi_2
-    # ...
-    # Indices 88-92 : object 18 ->  obj_18, E_18 , p_T_18 , eta_18 , phi_18
-    # Global features       = 2
-    # Per-object slice size = 5
-    # Max objects encoded   = 18
+# ----------- (OPTIONAL) PRE-PROCESSING ----------
+class MyPreprocessor:
+    # REQUIREMENTS
+    #   - IMPORTANT: All state must be picklable with the std-lib pickle module.
+    #   - May allocate NumPy arrays or Torch tensors internally, but: transform() must be deterministic.
+    #   - Store only derived parameters needed for transform i.e. do not store the raw data itself in the preprocessor object.
 
     # TIPS
-    # When modifying data features or feature engineering: annotate tensor size as comments after 
-    # each tensor operation to reduce dimension mismatches.
+    #   - When modifying data features or feature engineering: annotate tensor size as comments after 
+    #   - each tensor operation to reduce dimension mismatches.
 
-    # REQUIREMENTS
-    # IMPORTANT: All state must be picklable with the std-lib pickle module.
-    # May allocate NumPy arrays or Torch tensors internally, but:
-    # transform() must be deterministic.
-    # Store only derived parameters needed for transform i.e. do not store the raw data
-    # itself in the preprocessor object.
+    # DATA SPECIFICS
+    #    Total flat length per event (X_train & X_val): 92
+    #    Index  0 :  missing-ET magnitude  (E_T_miss)
+    #    Index  1 :  missing-ET azimuth    (phi_Et_miss)
+    #    Indices  2-6  : object 1  ->  obj_1, E_1, p_T1, eta_1, phi_1
+    #    Indices  7-11 : object 2  ->  obj_2, E_2 , p_T_2 , eta_2 , phi_2
+    #    ...
+    #    Indices 87-91 : object 18 ->  obj_18, E_18 , p_T_18 , eta_18 , phi_18
+    #    Global features       = 2
+    #    Per-object slice size = 5
+    #    Max objects encoded   = 18
 
     # <LLM: Write code to preprocess the data> 
 
@@ -179,42 +140,57 @@ class MyPreprocessor:
         # <LLM: Define and initialize any stateful components here>
         pass
 
-    def _raw_reshape(self, X):           
-        # <LLM: Apply optional raw data reshaping logic here>
-        return X # Returns identify by default
+    def make_loader_cfg(self) -> dict:
+        # LoaderSpec-first: evaluator rebuilds loaders from this.
+        return {
+            "dataset_builder": "llm_script:FourTopsDataset",   # default harness dataset
+            "dataset_kwargs": {},
 
-    # Uncomment to implement custom collate function.    
-    # @staticmethod
-    # def _collate_fn(batch: list):
-    #    <LLM: Apply optional custom collate logic here>
+            "loader_class": "torch.utils.data:DataLoader",     # or torch_geometric.loader:DataLoader
+            "batch_size": 512,
+            "shuffle": True,
+            "num_workers": 0,
+            "pin_memory": False,
 
-    def make_loader_cfg(self):
-        # Return dict or None.  If dict, evaluator uses it to rebuild loader:
-        #{
-        #   "loader_class": "torch.utils.data.DataLoader",
-        #   "collate_fn": "self._collate_fn",
-        #   "batch_size": 256,
-        #   "shuffle": False,
-        #   "num_workers": 0
-        #}
-        return None
+            # NO custom collate callables allowed. Choose one: 
+            "collate": None, # (or "ragged_xy" or "identity" - If loader_class is torch_geometric.loader:DataLoader, set "collate": None.)
+
+            "extra_loader_kwargs": {},
+
+            # evaluation overrides (optional):
+            "eval_overrides": {"shuffle": False},
+        }
 
     def fit(self, X, y=None):
-        # <LLM: Extract statistics for fit transform>
+        # <LLM: Extract statistics for transform>
         return self
 
     def transform(self, X):
         # <LLM: Apply pre-processing logic>
         return X # must return an indexable, picklable object
 
-    def fit_transform(self, X, y=None):
-        self.fit(X, y)
-        return self.transform(X)
-
 def make_preprocessor():
     return MyPreprocessor()
 
-# 2. ---------- MODEL DEFINITION ----------
+# ---------- MODEL DEFINITION ----------
+# Model batch contract:
+#   Your DataLoader batch is NOT guaranteed to be a single Tensor.
+#   Depending your dataset/loader choice, a batch can be:
+#      - (X, y) tuple OR [X, y] list  (common for default PyTorch/PyG collation)
+#      - ragged: X is list[Tensor] and y is list[Tensor] (one Tensor per event)
+#      - multi-input: (X1, X2, ..., y) OR [X1, X2, ..., y]
+#      - dict-like: {"x": X, "y": y} (or inputs/labels variants)
+#      - PyG: torch_geometric.data.Data or torch_geometric.data.Batch
+#
+# ALWAYS adapt the raw batch using:
+#     view = normalise_batch(batch, device=device)
+#
+# normalise_batch returns a BatchView with:
+#   view.batch_x : the model inputs (Tensor / list[Tensor] / tuple / dict / PyG Batch)
+#   view.batch_y : labels if present, else None
+#
+# IMPORTANT: normalise_batch(..., device=device) moves ALL contained tensors to device (recursively). Do NOT call .to(device) on the raw batch object.
+
 class BinaryClassifier(nn.Module):
     def __init__(self, sample_object):
         super().__init__()
@@ -222,49 +198,47 @@ class BinaryClassifier(nn.Module):
 
     # <LLM: optionally build extra layers here>
 
-    def forward(self, *data):
+    def forward(self, batch_x):
+        # IMPORTANT output must be logits/probabilities per event
         # <LLM: Define your model's forward pass here>
         pass
 
 def make_model(example_object):
     return BinaryClassifier(example_object)
 
-# 3. ---------- MODEL TRAINING ----------
+# ---------- MODEL TRAINING ----------
 EPOCHS = 10   # <LLM: adjust if you wish>
 def train_model(model: nn.Module, train_loader, val_loader, epochs: int):
-    # REQUIREMENTS 
-    #   Do NOT pass "verbose=" to any PyTorch scheduler (not supported in this image).
-    #   Must return trained_model, train_loss, val_loss, train_acc, val_acc
-    #   Implement early-stopping.
-    #   Forward signature must match.
+    # REQUIREMENTS
+    #   - Must return: trained_model, train_loss, val_loss, train_acc, val_acc
+    #   - Do NOT:
+    #       - pass "verbose=" to any PyTorch scheduler (not supported in this image).
+    #       - batch = batch.to(device)
+    #       - xb, yb = batch
+    #       - for xb, yb in loader: ...
 
-    # <LLM: Write code to define training loop>
+    # Canonical batch handling (use this inside every loop):
+    # for batch in train_loader:
+    #     view = normalise_batch(batch, device=device)
+    #     xb, yb = view.batch_x, view.batch_y
+    #     out = model(xb)
+    
+    # <LLM: Write code to define training loop, use the code above>
     # <LLM: Implement early stopping if possible>
     return trained_model, train_loss, val_loss, train_acc, val_acc
 
-# IMPORTANT: DO NOT execute the pipeline here – the harness will do that.
+# DO NOT execute the pipeline here – the harness will do that.
 # <end code template>
+# ---------------------------  END OF LLM-CODE BLOCK  ---------------------------
 """,
 
     suffix = r"""
-# ---------------------------  END OF LLM-CODE BLOCK ---------------------------
-# ----------------  START HARNESS WRAPPER SUFFIX (FOR CONTEXT)  ---------------- 
-
-def _import_dotted(path: str):
-    mod, name = path.rsplit(".", 1)
-    module = importlib.import_module(mod)
-    return getattr(module, name)
-
-def _plot(series_train, series_val, name, out_path):
-    plt.figure()
-    epochs = range(1, len(series_train) + 1)
-    plt.plot(epochs, series_train, label=f"Train {name}")
-    plt.plot(epochs, series_val,   label=f"Val {name}")
-    plt.title(name); plt.xlabel("Epoch"); plt.legend()
-    plt.savefig(out_path); plt.close()
+# ----------------  START HARNESS SUFFIX WRAPPER (FOR CONTEXT)  ---------------- 
 
 def _run(dryrun=False):
-    # 1. Load & preprocess
+    sys.modules.setdefault("llm_script", sys.modules[__name__])
+
+    # Load & preprocess
     X_train, Y_train, X_val, Y_val = load_data()
     if dryrun:
         idx = torch.randperm(X_train.shape[0])[:400]
@@ -272,24 +246,23 @@ def _run(dryrun=False):
         idx = torch.randperm(X_val.shape[0])[:20]
         X_val, Y_val = X_val[idx], Y_val[idx]
     pre     = make_preprocessor().fit(X_train, Y_train)
-    X_train = pre.transform(X_train)
-    X_val   = pre.transform(X_val)
+    
+    # Build LoaderSpec
+    spec = build_spec_from_preproc(pre, script_module="llm_script")
+    spec = enforce_pyg_policy(spec, require_torch_collate=False)
 
-    collate = getattr(pre, "_collate_fn", None)
-    cfg     = getattr(pre, "make_loader_cfg", lambda: None)() or {}
-    loader_cls = _import_dotted(cfg["loader_class"]) if "loader_class" in cfg else None
-    train_loader, val_loader = make_loaders(X_train, Y_train, X_val, Y_val, 
-                                            batch      = cfg.get("batch_size", 512), 
-                                            collate_fn = collate,
-                                            loader_cls = loader_cls,
-                                            workers    = cfg.get("num_workers", 0))
+    # Build loaders - preproc in dataset
+    train_ds     = build_dataset(spec, (X_train, Y_train), pre, train=True)
+    val_ds       = build_dataset(spec, (X_val,   Y_val),   pre, train=False)
+    train_loader = build_dataloader(spec, train_ds, is_eval=False)
+    val_loader   = build_dataloader(spec, val_ds,   is_eval=True)
 
-    # 2. Build model
-    first_batch    = next(iter(train_loader))
-    example_sample = first_batch[0]
-    model          = make_model(example_sample)
+    # Build model
+    first_batch = next(iter(train_loader))
+    view        = normalise_batch(first_batch, device=device)
+    model       = make_model(view.batch_x).to(device)
 
-    # 3. Train model
+    # Train model
     n_epochs = 1 if dryrun else globals().get("EPOCHS", 10)
     try:
         trained_model, tr_loss, va_loss, tr_acc, va_acc = train_model(
@@ -298,35 +271,28 @@ def _run(dryrun=False):
         print("ERROR during training:", e)
         raise
 
-    # 4. Dry-run safety check
+    # Dry-run safety check
     if dryrun:
-        sample, _ = first_batch
         try:
-            _ = trained_model(*sample) if isinstance(sample, (tuple, list)) else trained_model(sample)
+            with torch.no_grad():
+                view = normalise_batch(first_batch, device=device)
+                out  = trained_model(view.batch_x)
+                scores, kind = assert_binary_output(view, out)
         except Exception as e:
             raise RuntimeError("Sanity-check forward pass failed") from e
-        return
 
-    # 5. Persist artefacts
     if not dryrun:
-        base = os.path.splitext(os.path.basename(sys.argv[0]))[0].removeprefix("script_")
+        # Persist artefacts
+        base = base_from_argv0()
+        persist_artefacts(base, SCRIPT_DIR, trained_model, pre, spec)
 
-        pth_state   = os.path.join(SCRIPT_DIR, f"{base}_state.pt")
-        pth_model   = os.path.join(SCRIPT_DIR, f"{base}_model.pkl")
-        pth_preproc = os.path.join(SCRIPT_DIR, f"{base}_preproc.pkl")
-
-        torch.save(trained_model.state_dict(), pth_state)
-        with open(pth_model,   "wb") as f: pickle.dump(trained_model, f)
-        with open(pth_preproc, "wb") as f: pickle.dump(pre,           f)
-
-        # 6. Save plots
-        _plot(tr_loss, va_loss, "Loss",     os.path.join(SCRIPT_DIR, f"{base}_loss.png"))
-        _plot(tr_acc,  va_acc,  "Accuracy", os.path.join(SCRIPT_DIR, f"{base}_accuracy.png"))
-
-    # 7. Write JSON Summary
-    if not dryrun: 
+        # Save plots
+        plot_train_val(tr_loss, va_loss, f"{base} Loss", os.path.join(SCRIPT_DIR, f"{base}_loss.png"))
+        plot_train_val(tr_acc, va_acc, f"{base} Accuracy", os.path.join(SCRIPT_DIR, f"{base}_accuracy.png"))
+        
+        # Write JSON Summary
         summary = {
-            "epochs": n_epochs,
+            "epochs": n_epochs      if n_epochs else None,
             "train_loss": tr_loss   if tr_loss else None,
             "val_loss":   va_loss   if va_loss else None,
             "train_acc":  tr_acc    if tr_acc else None,
@@ -341,29 +307,22 @@ if __name__ == "__main__":
     _run(dryrun="--dryrun" in sys.argv)
 
 # ----------------  END HARNESS WRAPPER SUFFIX (FOR CONTEXT)  ---------------- 
-
 """,
 
     questions = [
-        Question("Q1", r""" ** IMPORTANT: Your Challenge **
-Write Python code for a binary classification model focusing on maximising the AUC using the code template above. 
-You may freely choose any pre-processing methods and techniques as well as model architecture and training conventions.
-Do absolutely everything in your power to achieve the highest possible AUC.                 
-""")
-,
+#        Question("Q1", r""" ** IMPORTANT: Your Challenge **
+#Write Python code for a binary classification model focusing on maximising the AUC using the code template above. You may freely choose any pre-processing methods and techniques as well as model architecture and training conventions. Do absolutely everything in your power to achieve the highest possible AUC.                 
+#""")
+#,
 
        Question("Q2", r"""** IMPORTANT: Your Challenge **
-Write Python code for a binary classification model focusing on maximising the AUC using the code template above. 
-You may freely choose any pre-processing methods and techniques as well as model architecture and training conventions.
+Write Python code for a binary classification model focusing on maximising the AUC using the code template above. You may freely choose any pre-processing methods and techniques as well as model architecture and training conventions.
                 
 You may optionally leverage the following particle-physics insights (strongly recommended if possible):
 
-Pairwise Particle Features: It has been shown that explicitly computing pairwise particle features, particularly 
-the invariant mass $m_{ij} = $ and the angular distance $\delta R_{ij} = \sqrt{(\eta_i - \eta_j)^2 + (\phi_i - \phi_j)^2}$
-can significantly enhance the discriminative power of your model.
+Pairwise Particle Features: It has been shown that explicitly computing pairwise particle features, particularly the invariant mass $m_{ij} = $ and the angular distance $\delta R_{ij} = \sqrt{(\eta_i - \eta_j)^2 + (\phi_i - \phi_j)^2}$ can significantly enhance the discriminative power of your model.
                 
-Model Architecture: It has been shown that Transformer models and Graph Neural Networks are particularly well-suited
-for this task.
+Model Architecture: It has been shown that Transformer models and Graph Neural Networks are particularly well-suited for this task.
 
 Do absolutely everything in your power to achieve the highest possible AUC.
 """)

@@ -1,0 +1,76 @@
+{
+  "LLMGeneration": {
+    "model": "google/gemini-2.5-pro",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 4293,
+    "prompt_chars": 15575,
+    "response_tokens": 14746,
+    "response_chars": 8149,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.15282625,
+    "generation_ms": 126893,
+    "code": "# <start code template>\n# 0. ---------- IMPORTS ----------\n# NOTE: Some imports (torch, numpy, DataLoader) are already available (see prefix).\n# Only import extra std-lib modules, torch, scipy, sklearn (sub-)modules you actually use.\nfrom torch.nn import functional as F\nfrom torch_geometric.nn import EdgeConv\nfrom torch_geometric.utils import knn_graph\nfrom torch.optim.lr_scheduler import ReduceLROnPlateau\nimport collections\n\n# 1.1 -------- OPTIONAL: CUSTOM DATASET / DATA-CLASS  --------\n#   def make_dataset(events, pre, train: bool):\n#       # This solution uses the default dataset.\n#       return None\n\n# 1.2 ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    # Must implement:\n    #   - fit()\n    #   - transform()\n\n    def __init__(self):\n        self.coord_mean = None\n        self.coord_std = None\n        self.layer_id_mean = None\n        self.layer_id_std = None\n\n\n    def _raw_reshape(self, data):\n        return data\n\n    def make_loader_cfg(self):\n        # We process one event at a time to build per-event graphs.\n        return {\"batch_size\": 1}\n\n    def fit(self, data):\n        # data is a list of event dictionaries\n        all_coords = []\n        all_layer_ids = []\n        for evt in data:\n            X, _ = _split_X_y(evt)\n            r, theta, z, layer_id = X[:, 0], X[:, 1], X[:, 2], X[:, 3]\n            x = r * torch.cos(theta)\n            y = r * torch.sin(theta)\n            coords = torch.stack([x, y, z], dim=1)\n            all_coords.append(coords)\n            all_layer_ids.append(layer_id)\n\n        all_coords_cat = torch.cat(all_coords, dim=0)\n        self.coord_mean = all_coords_cat.mean(dim=0)\n        self.coord_std = all_coords_cat.std(dim=0)\n        self.coord_std[self.coord_std == 0] = 1.0 # Avoid division by zero\n\n        all_layer_ids_cat = torch.cat(all_layer_ids, dim=0)\n        self.layer_id_mean = all_layer_ids_cat.mean()\n        self.layer_id_std = all_layer_ids_cat.std()\n        if self.layer_id_std == 0:\n            self.layer_id_std = 1.0\n\n        return self\n\n    def transform(self, data):\n        # data is a tensor of hits for a single event\n        r, theta, z, layer_id = data[:, 0], data[:, 1], data[:, 2], data[:, 3]\n        x = r * torch.cos(theta)\n        y = r * torch.sin(theta)\n        coords = torch.stack([x, y, z], dim=1)\n\n        # Normalize coordinates\n        coords = (coords - self.coord_mean) / self.coord_std\n\n        # Normalize layer_id\n        layer_id_norm = (layer_id - self.layer_id_mean) / self.layer_id_std\n\n        # Combine features: (x_norm, y_norm, z_norm, layer_id_norm)\n        # return shape: (N_hits, 4)\n        return torch.cat([coords, layer_id_norm.unsqueeze(1)], dim=1)\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# 2. ---------- MODEL ARCHITECTURE ----------\nclass HitClassifier(nn.Module):\n    def __init__(self, in_features, emb_dim=8, k=16):\n        super().__init__()\n        self.k = k\n        self.emb_dim = emb_dim\n\n        # Define a helper for creating MLP blocks\n        def create_mlp(in_channels, channels, add_last_activation=True):\n            mlp_modules = []\n            for i, out_channels in enumerate(channels):\n                mlp_modules.append(nn.Linear(in_channels, out_channels))\n                if i < len(channels) - 1 or add_last_activation:\n                    mlp_modules.append(nn.BatchNorm1d(out_channels))\n                    mlp_modules.append(nn.ReLU())\n                in_channels = out_channels\n            return nn.Sequential(*mlp_modules)\n\n        # DGCNN-style feature extractor\n        self.conv1 = EdgeConv(create_mlp(2 * in_features, [64, 64]))\n        self.conv2 = EdgeConv(create_mlp(2 * 64, [64, 64]))\n        self.conv3 = EdgeConv(create_mlp(2 * 64, [128]))\n\n        # Final projection to embedding space\n        self.projection = create_mlp(128, [64, self.emb_dim], add_last_activation=False)\n\n    def forward(self, batch_x):\n        # batch_x corresponds to one event due to batch_size=1\n        # shape: (N_hits, in_features)\n\n        # Spatial coordinates for graph building\n        pos = batch_x[:, :3] # (x_norm, y_norm, z_norm)\n\n        # Dynamic graph construction and convolution\n        edge_index = knn_graph(pos, self.k, batch=None)\n        h1 = self.conv1(batch_x, edge_index)\n\n        edge_index = knn_graph(h1, self.k, batch=None)\n        h2 = self.conv2(h1, edge_index)\n\n        edge_index = knn_graph(h2, self.k, batch=None)\n        h3 = self.conv3(h2, edge_index)\n\n        # Project to final embedding space\n        out = self.projection(h3) # shape: (N_hits, emb_dim)\n\n        # L2-normalize embeddings for stable contrastive training\n        out = F.normalize(out, p=2, dim=1)\n        return out\n\ndef make_model(input_features):\n    return HitClassifier(input_features, emb_dim=8, k=16)\n\n# 3. ---------- MODEL TRAINING ----------\nEPOCHS = 30\ndef train_model(model, train_loader, val_loader, epochs):\n    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-5)\n    scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=3,\n                                  min_lr=1e-5)\n\n    def contrastive_loss(embeddings, y_true, margin=1.0):\n        valid_hits_mask = y_true > 0 # Ignore noise hits (track_id <= 0)\n        y_true_valid = y_true[valid_hits_mask]\n        embeddings_valid = embeddings[valid_hits_mask]\n\n        n = len(y_true_valid)\n        if n < 2:\n            return torch.tensor(0.0, device=embeddings.device)\n\n        # Get upper triangle indices to avoid duplicate pairs and self-pairs\n        triu_indices = torch.triu_indices(n, n, 1, device=embeddings.device)\n\n        # Pairwise adjacency and distances\n        adj_pairs = (y_true_valid[triu_indices[0]] == y_true_valid[triu_indices[1]])\n        dist_matrix = torch.cdist(embeddings_valid, embeddings_valid)\n        dist_pairs = dist_matrix[triu_indices[0], triu_indices[1]]\n\n        # Positive pairs loss (pull together)\n        pos_dists = dist_pairs[adj_pairs]\n        loss_pos = torch.mean(pos_dists**2) if pos_dists.numel() > 0 else 0.0\n\n        # Negative pairs loss (push apart)\n        neg_dists = dist_pairs[~adj_pairs]\n        loss_neg = torch.mean(torch.clamp(margin - neg_dists, min=0)**2) if neg_dists.numel() > 0 else 0.0\n\n        return loss_pos + loss_neg\n\n    train_loss, val_loss = [], []\n    best_val_loss = float('inf')\n    patience_counter = 0\n    patience = 7\n\n    for epoch in range(epochs):\n        model.train()\n        epoch_train_loss = 0.0\n        for batch in train_loader:\n            # batch_size=1 means batch is a list with one (X, y) tuple\n            X, y_true = batch[0]\n            X, y_true = X.to(device), y_true.to(device)\n\n            optimizer.zero_grad()\n            embeddings = model(X)\n            loss = contrastive_loss(embeddings, y_true)\n\n            if torch.is_grad_enabled():\n                loss.backward()\n                optimizer.step()\n\n            epoch_train_loss += loss.item()\n\n        train_loss.append(epoch_train_loss / len(train_loader))\n\n        model.eval()\n        epoch_val_loss = 0.0\n        with torch.no_grad():\n            for batch in val_loader:\n                X, y_true = batch[0]\n                X, y_true = X.to(device), y_true.to(device)\n\n                embeddings = model(X)\n                loss = contrastive_loss(embeddings, y_true)\n                epoch_val_loss += loss.item()\n\n        current_val_loss = epoch_val_loss / len(val_loader)\n        val_loss.append(current_val_loss)\n        scheduler.step(current_val_loss)\n\n        if current_val_loss < best_val_loss:\n            best_val_loss = current_val_loss\n            patience_counter = 0\n            # A mechanism to save the best model could be here, but for now we just track loss\n        else:\n            patience_counter += 1\n\n        if patience_counter >= patience:\n            print(f\"Early stopping at epoch {epoch+1}\")\n            break\n\n    # Return trained model and metrics. Accuracy is not tracked.\n    return model, train_loss, val_loss, [], []\n\n# <end code template>",
+    "reasoning": "",
+    "Outer_attempt": 1
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-12-13T18:27:14Z",
+    "PyLint": {
+      "passed": false,
+      "messages": [
+        {
+          "type": "error",
+          "module": "script_google_gemini-2.5-pro_1927_1",
+          "obj": "",
+          "line": 83,
+          "column": 0,
+          "endLine": 83,
+          "endColumn": 43,
+          "path": "outputs\\13-12\\TRACKFORMERS\\Q1\\script_google_gemini-2.5-pro_1927_1.py",
+          "symbol": "no-name-in-module",
+          "message": "No name 'knn_graph' in module 'torch_geometric.utils'",
+          "message-id": "E0611"
+        }
+      ]
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-12-13T18:27:14Z",
+        "metrics": {
+          ".\\./outputs/13-12/TRACKFORMERS/Q1/script_google_gemini-2.5-pro_1927_1.py": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 258,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 258,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  }
+}

@@ -1,8 +1,8 @@
 # evaluate_scripts.py
 
-import os, glob, logging, time, argparse, json
+import os, glob, logging, time, argparse, json, subprocess
 from pathlib import Path
-from typing import List, Tuple, Dict, Iterator
+from typing import List, Tuple, Dict
 from tqdm import tqdm
 from collections import defaultdict
 from challenges.FOURTOPS.evaluate_fourtops import load_FOURTOPS_test, evaluate_FOURTOPS
@@ -27,6 +27,60 @@ def _find_models(input_dir: str | Path) -> List[Tuple[str, str, str]]:
 
     return candidates
 
+def _docker_eval_cmd(project_root: Path,
+                    challenge: str,
+                    question_id: str,
+                    artefact_pkl: Path) -> list[str]:
+    """
+    Build the docker run command that executes predict.sh
+    inside llm-evaluation-sandbox:latest for a single model.
+    """
+
+    artefact_dir    = artefact_pkl.parent                  # .../outputs/<DATE>/<C>/<Q>/<MODEL>
+    data_test       = project_root / f"challenges/{challenge}/data/test"
+    evaluator_py    = project_root / f"challenges/{challenge}/evaluate_{challenge.lower()}.py"
+    llm_io_py       = project_root / "utils/llm_io.py"
+    loaderspec_py   = project_root / "utils/loaderspec.py"
+    suffix_utils_py = project_root / "utils/suffix_utils.py"
+
+    logging.debug("Artefact folder: %s", artefact_dir)
+    logging.debug("Data test folder: %s", data_test)
+
+    cmd = [
+        # args
+        "docker", "run", "--rm",
+        "--gpus", "all",
+        "--read-only",
+        "--cap-drop", "ALL",
+        "--network", "none",
+        "--security-opt", f"seccomp={project_root/'docker/seccomp_profile.json'}",
+        "--tmpfs", "/tmp:rw,noexec,nosuid",
+        "--tmpfs", "/dev/shm:rw",
+        
+        # tell predict.sh what to import
+        "-e", f"CHALLENGE={challenge}",
+        "-e", f"QUESTION={question_id}",
+
+        # Force CUDA to run synchronously
+        "-e", "CUDA_LAUNCH_BLOCKING=1",
+
+        # mounts
+        "-v", f"{data_test}:/workspace/challenges/{challenge}/data/test:ro",
+        "-v", f"{evaluator_py}:/workspace/challenges/{challenge}/evaluate_{challenge.lower()}.py:ro",
+        "-v", f"{llm_io_py}:/workspace/utils/llm_io.py:ro",
+        "-v", f"{loaderspec_py}:/workspace/utils/loaderspec.py:ro",
+        "-v", f"{suffix_utils_py}:/workspace/utils/suffix_utils.py:ro",
+        "-v", f"{artefact_dir}:/workspace/out:ro",
+
+        # entrypoint and workspace
+        "--entrypoint", "/usr/local/bin/predict.sh",
+        "llm-sandbox:latest",
+        f"/workspace/out/{artefact_pkl.name}",
+    ]
+
+    logging.debug("Docker command: %s", " ".join(cmd))
+    return cmd
+
 def verify_outputs(date_str: str, challenge: str) -> Dict[str, Dict[str, List[str]]]:
     """
     Verify that each model folder under ./outputs/<date>/<challenge>/… 
@@ -47,7 +101,8 @@ def verify_outputs(date_str: str, challenge: str) -> Dict[str, Dict[str, List[st
         "*_preproc.pkl",
         "*_loss.png",
         "*_accuracy.png",
-        "*_manifest.sha256"
+        "*_manifest.sha256",
+        "*_loaderspec.json"
     ]
 
     for qid in os.listdir(root):
@@ -92,7 +147,7 @@ challenge_evaluators = {
 
 def evaluate_results(input_dir: str | Path):
     """
-    Evluates every model that lives under input_dir
+    Evaluates every model that lives under input_dir
     """
 
     input_dir = Path(input_dir).resolve()
@@ -127,24 +182,27 @@ def evaluate_results(input_dir: str | Path):
         ]
 
         logging.info("Found %d model candidates for challenge %s: %s", len(candidates), challenge, candidates)
-
+ 
         # 4) evaluate each candidate
         q_summaries: dict[str, dict[str, dict]] = {}
-        for qid, model_name, pt_path in tqdm(candidates, desc=f"{challenge} models evaluation",
+        for qid, model_name, pt_path in tqdm(candidates,
+                                            desc=f"{challenge} models evaluation",
                                             leave=False):
-            
-            model_dir = Path(pt_path).parent
-            t0 = time.perf_counter() # start timer
+
+            model_dir  = Path(pt_path).parent
+            t0         = time.perf_counter()
+            cmd        = _docker_eval_cmd(Path.cwd(), challenge, qid, Path(pt_path))
 
             try:
-                test_loader = challenge_evaluators[challenge]["load_test"]
-                metrics = challenge_evaluators[challenge]["evaluate"](pt_path, test_loader)
-                eval_ok = True
-            except Exception as e:
-                logging.error("Evaluation failed for %s: %s", pt_path, e)
-                metrics = {}
+                result  = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+                eval_ok = (result.returncode == 0)
+                metrics = json.loads(result.stdout.strip()) if eval_ok else {}
+                if not eval_ok:
+                    logging.error("Container RC %s – stderr: %s", result.returncode, result.stderr)
+            except (subprocess.TimeoutExpired, json.JSONDecodeError) as e:
+                logging.error("Evaluation container failed for %s: %s", pt_path, e)
+                eval_ok, metrics = False, {}
 
-                eval_ok = False
             eval_time = time.perf_counter() - t0
 
             # Write Evaluation block response JSON
@@ -172,16 +230,16 @@ def evaluate_results(input_dir: str | Path):
         missing = challenge_evaluators[challenge]["test_outputs"](date_str, challenge)
         missing = {qid: m for qid, m in missing.items() if qid in allowed_qids}
 
-    # 6)  write <Q>_summary.json files
-    for qid, models_metrics in q_summaries.items():
-        out_path = challenge_root / qid / f"{qid}_summary.json"
-        for model_name, metrics in models_metrics.items():
-            metrics["missing_files"] = missing.get(qid, {}).get(model_name, [])
-        out_path.write_text(
-            json.dumps(models_metrics, cls=_NpEncoder, ensure_ascii=False, indent=2),
-            encoding="utf-8"
-        )
-        logging.info("Wrote summary to %s", out_path)
+        # 6)  write <Q>_summary.json files
+        for qid, models_metrics in q_summaries.items():
+            out_path = challenge_root / qid / f"{qid}_summary.json"
+            for model_name, metrics in models_metrics.items():
+                metrics["missing_files"] = missing.get(qid, {}).get(model_name, [])
+            out_path.write_text(
+                json.dumps(models_metrics, cls=_NpEncoder, ensure_ascii=False, indent=2),
+                encoding="utf-8"
+            )
+            logging.info("Wrote summary to %s", out_path)
 
 def main(date_str: str, challenge: str):
     input_root = os.path.join("outputs", date_str, challenge)

@@ -1,0 +1,82 @@
+{
+  "LLMGeneration": {
+    "model": "openai/gpt-5.1-codex-max",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 3409,
+    "prompt_chars": 14903,
+    "response_tokens": 10859,
+    "response_chars": 6610,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.11285125,
+    "generation_ms": 113051,
+    "code": "# ---------- IMPORTS ----------\n# NOTE: Some imports (torch, nn, numpy, DataLoader) are already available (see prefix).\n# Only import extra std-lib modules or modules available in the environment, i.e: torch, scipy, sklearn (sub-)modules you actually use.\nimport math\n\n# -------- (OPTIONAL) CUSTOM DATASET  --------\n# def make_dataset(events, pre, train: bool, **kwargs):\n#   REQUIREMENT: If you want a custom dataset: in make_loader_cfg set dataset_builder to \"llm_script:make_dataset\"\n#   k = kwargs.get(\"k\", 16)\n#   <LLM: Insert custom dataset logic here>\n#   return CustomDataset(events, pre, train=train, k=k)\n\n# ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    # Must implement:\n    #   - fit()\n    #   - transform()\n\n    # REQUIREMENTS\n    #   - IMPORTANT: All state must be picklable with the std-lib pickle module.\n    #   - May allocate NumPy arrays or Torch tensors internally, but: transform() must be deterministic.\n    #   - Store only derived parameters needed for transform i.e. do not store the raw data itself in the preprocessor object.\n\n    # TIPS\n    #   When modifying data features or feature engineering: annotate tensor size as comments after each tensor operation to reduce dimension mismatches.\n\n    def __init__(self):\n        pass\n\n    def make_loader_cfg(self) -> dict: \n        return {\n            \"dataset_builder\": \"utils.llm_io:EventDataset\",\n            \"dataset_kwargs\": {},\n\n            \"loader_class\": \"torch.utils.data:DataLoader\",    # or torch_geometric.loader:DataLoader\n            \"batch_size\": 16,\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": False,\n\n            # NO custom collate callables allowed. Choose one:\n            \"collate\": \"ragged_xy\",  # or \"identity\" or None\n\n            \"extra_loader_kwargs\": {},\n\n            # evaluation overrides (optional):\n            \"eval_overrides\": {\"shuffle\": False}\n        }\n\n    def fit(self, data):\n        return self\n\n    def transform(self, data):\n        return data # must return an indexable, picklable object\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# ---------- MODEL ARCHITECTURE ----------\nclass HitClassifier(nn.Module):\n    def __init__(self, example_batch_x):\n        super().__init__()\n        # No learnable parameters; deterministic clustering in forward.\n        self.theta_threshold = 0.12\n        self.skip_threshold = 0.15\n        self.w_z = 0.05\n\n    def forward(self, batch_x):\n        # Handle ragged list of events or single tensor.\n        if isinstance(batch_x, torch.Tensor):\n            batch_list = [batch_x]\n            single = True\n        elif isinstance(batch_x, list):\n            batch_list = batch_x\n            single = False\n        else:\n            # Fallback if PyG Batch is provided\n            if hasattr(batch_x, \"to_data_list\"):\n                batch_list = [d.x for d in batch_x.to_data_list()]\n                single = False\n            else:\n                batch_list = [batch_x]\n                single = True\n        outputs = []\n        for x in batch_list:\n            if x.numel() == 0:\n                outputs.append(torch.empty((0,), dtype=torch.long, device=x.device))\n                continue\n            device = x.device\n            x_cpu = x.detach().cpu()\n            r = x_cpu[:, 0].numpy()\n            theta = x_cpu[:, 1].numpy()\n            z = x_cpu[:, 2].numpy()\n            layer = x_cpu[:, 3].numpy().astype(int)\n            N = len(theta)\n            if N == 0:\n                outputs.append(torch.empty((0,), dtype=torch.long, device=device))\n                continue\n            z_std = float(np.std(z) + 1e-3)\n            layers_unique = sorted(list(set(layer.tolist())))\n            parent = list(range(N))\n            def find(a):\n                while parent[a] != a:\n                    parent[a] = parent[parent[a]]\n                    a = parent[a]\n                return a\n            def union(a, b):\n                ra, rb = find(a), find(b)\n                if ra == rb:\n                    return\n                parent[rb] = ra\n            layer_to_indices = {l: np.where(layer == l)[0] for l in layers_unique}\n            def angular_diff(a, b):\n                return np.abs(((a - b + math.pi) % (2 * math.pi)) - math.pi)\n            def connect_layers(l1, l2, thr):\n                idx1 = layer_to_indices.get(l1, [])\n                idx2 = layer_to_indices.get(l2, [])\n                if len(idx1) == 0 or len(idx2) == 0:\n                    return\n                for i in idx1:\n                    dt = angular_diff(theta[i], theta[idx2])\n                    dz = np.abs(z[i] - z[idx2]) / z_std\n                    dist = dt + self.w_z * dz\n                    j_sel = idx2[np.argmin(dist)]\n                    if dist.min() <= thr:\n                        union(i, j_sel)\n                for j in idx2:\n                    dt = angular_diff(theta[j], theta[idx1])\n                    dz = np.abs(z[j] - z[idx1]) / z_std\n                    dist = dt + self.w_z * dz\n                    i_sel = idx1[np.argmin(dist)]\n                    if dist.min() <= thr:\n                        union(i_sel, j)\n            for li in range(len(layers_unique) - 1):\n                l = layers_unique[li]\n                ln = layers_unique[li + 1]\n                connect_layers(l, ln, self.theta_threshold)\n            for li in range(len(layers_unique) - 2):\n                l = layers_unique[li]\n                ln = layers_unique[li + 2]\n                connect_layers(l, ln, self.skip_threshold)\n            root_to_indices = {}\n            for i in range(N):\n                rroot = find(i)\n                root_to_indices.setdefault(rroot, []).append(i)\n            labels = -torch.ones(N, dtype=torch.long)\n            cluster_id = 1\n            for inds in root_to_indices.values():\n                if len(inds) >= 4:\n                    for idx in inds:\n                        labels[idx] = cluster_id\n                    cluster_id += 1\n            outputs.append(labels.to(device))\n        if single:\n            return outputs[0]\n        return outputs\n\ndef make_model(example_batch_x):\n    return HitClassifier(example_batch_x)\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 1\ndef train_model(model, train_loader, val_loader, epochs):\n    # No training needed for deterministic model; return placeholders.\n    train_loss = [0.0 for _ in range(epochs)]\n    val_loss = [0.0 for _ in range(epochs)]\n    train_acc = [0.0 for _ in range(epochs)]\n    val_acc = [0.0 for _ in range(epochs)]\n    return model, train_loss, val_loss, train_acc, val_acc",
+    "reasoning": "",
+    "Outer_attempt": 1
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-12-17T22:48:50Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-12-17T22:48:50Z",
+        "metrics": {
+          ".\\./outputs/17-12/TRACKFORMERS/Q1/script_openai_gpt-5.1-codex-max_2348_1.py": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 192,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 192,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2025-12-17T22:49:09Z",
+    "passed": true,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/17-12/TRACKFORMERS/Q1/script_openai_gpt-5.1-codex-max_2348_1.py\nargv2=--dryrun\n",
+      "stderr": "+ exec\n+ PY=outputs/17-12/TRACKFORMERS/Q1/script_openai_gpt-5.1-codex-max_2348_1.py\n+ shift\n++ echo --dryrun\n++ tr -d '\\r\\n'\n++ xargs\n+ DRY=--dryrun\n+ [[ outputs/17-12/TRACKFORMERS/Q1/script_openai_gpt-5.1-codex-max_2348_1.py == \\/\\u\\s\\r\\/\\l\\o\\c\\a\\l\\/\\b\\i\\n\\/\\t\\r\\a\\i\\n\\.\\s\\h ]]\n+ [[ --dryrun =~ (--dryrun|--dry-run) ]]\n+ TIMEOUT=3600\n+ : 0\n+ : 0\n+ ulimit -t 3600\n+ ((  MEMORY_LIMIT_GB > 0  ))\n+ ((  PIDS_LIMIT > 0  ))\n+ timeout --signal=KILL 3600s python outputs/17-12/TRACKFORMERS/Q1/script_openai_gpt-5.1-codex-max_2348_1.py --dryrun\nmkdir -p failed for path /home/sandbox/.config/matplotlib: [Errno 30] Read-only file system: '/home/sandbox/.config'\nMatplotlib created a temporary cache directory at /tmp/matplotlib-7w89igwj because there was an issue with the default path (/home/sandbox/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.\n+ python_rc=0\n+ [[ 0 -ne 0 ]]\n+ [[ --dryrun =~ (--dryrun|--dry-run) ]]\n+ echo 'Dry-run: skipping artefact manifest'\nDry-run: skipping artefact manifest\n+ exit 0\n"
+    },
+    "return_code": 0
+  },
+  "Evaluation": {
+    "__timestamp": "2025-12-18T09:05:35Z",
+    "passed": true,
+    "metrics": {
+      "ok": true,
+      "load_s": 4.61,
+      "eval_s": 8.14,
+      "FitAccuracy": 0.2819275266895546
+    },
+    "runtime_s": 22.29
+  }
+}

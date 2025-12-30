@@ -1,0 +1,45 @@
+# docker/Dockerfile.sandbox
+FROM nvidia/cuda:12.6.0-runtime-ubuntu24.04
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONIOENCODING=utf8 \
+    PIP_NO_CACHE_DIR=1 \
+    VENV_PATH=/opt/venv
+
+# 1. System Python + venv tooling (no dev headers, no git)
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        python3 python3-venv python3-pip \
+        curl ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
+# 2. Virtualenv and PATH
+RUN python3 -m venv "$VENV_PATH"
+ENV PATH="$VENV_PATH/bin:$PATH"
+WORKDIR /workspace
+
+# 3. Python deps (runtime only)
+COPY Docker_requirements.txt .
+
+RUN python -m pip install -r Docker_requirements.txt --no-cache-dir && \
+    python -m pip install \
+      pyg_lib \
+      torch_scatter \
+      torch_sparse \
+      torch_cluster \
+      torch_spline_conv \
+      -f https://data.pyg.org/whl/torch-2.6.0+cu126.html --no-cache-dir
+
+# 4. Entrypoint scripts
+COPY docker/train.sh   /usr/local/bin/train.sh
+COPY docker/predict.sh /usr/local/bin/predict.sh
+RUN chmod +x /usr/local/bin/train.sh /usr/local/bin/predict.sh
+
+# 5. Non-root user
+RUN useradd -m -s /bin/bash sandbox
+USER sandbox
+
+# 6. Default entrypoint - may be overridden
+ENTRYPOINT ["/usr/local/bin/train.sh"]
+
+# docker build -f docker/Dockerfile.sandbox -t llm-sandbox:latest .

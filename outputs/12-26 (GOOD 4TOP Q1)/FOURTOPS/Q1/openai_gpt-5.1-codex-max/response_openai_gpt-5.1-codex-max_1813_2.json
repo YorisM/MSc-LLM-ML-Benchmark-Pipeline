@@ -1,0 +1,71 @@
+{
+  "LLMGeneration": {
+    "model": "openai/gpt-5.1-codex-max",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 3789,
+    "prompt_chars": 15289,
+    "response_tokens": 5711,
+    "response_chars": 6327,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.06184625,
+    "generation_ms": 44521,
+    "code": "# ---------- IMPORTS ----------\nimport math\nimport copy\nimport torch\nimport torch.nn.functional as F\nfrom torch import nn\nfrom torch.utils.data import DataLoader\n\n# ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.mean = None\n        self.std = None\n\n    def make_loader_cfg(self) -> dict:\n        return {\n            \"dataset_builder\": \"llm_script:FourTopsDataset\",\n            \"dataset_kwargs\": {},\n            \"loader_class\": \"torch.utils.data:DataLoader\",\n            \"batch_size\": 1024,\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": device.type == \"cuda\",\n            \"collate\": None,\n            \"extra_loader_kwargs\": {},\n            \"eval_overrides\": {\"shuffle\": False},\n        }\n\n    def fit(self, X, y=None):\n        with torch.no_grad():\n            Xf = X\n            mask = Xf != 0\n            counts = mask.sum(dim=0)  # [92]\n            eps = 1e-6\n            sums = (Xf * mask).sum(dim=0)  # [92]\n            mean = sums / (counts + eps)  # [92]\n            var = (mask * (Xf - mean) ** 2).sum(dim=0) / (counts + eps)  # [92]\n            std = torch.sqrt(var + eps)\n            mean = torch.where(counts > 0, mean, torch.zeros_like(mean))\n            std = torch.where(counts > 0, std, torch.ones_like(std))\n            std = torch.where(std > 0, std, torch.ones_like(std))\n            self.mean = mean\n            self.std = std\n        return self\n\n    def transform(self, X):\n        if self.mean is None or self.std is None:\n            return X\n        mean = self.mean.to(X.device)\n        std = self.std.to(X.device)\n        mask = X != 0\n        X_norm = torch.where(mask, (X - mean) / std, X)\n        return X_norm\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# ---------- MODEL DEFINITION ----------\nclass BinaryClassifier(nn.Module):\n    def __init__(self, sample_object):\n        super().__init__()\n        if isinstance(sample_object, torch.Tensor):\n            in_dim = sample_object.shape[-1]\n        else:\n            raise ValueError(\"Unsupported input type for model\")\n        hidden1 = 512\n        hidden2 = 256\n        hidden3 = 128\n        self.net = nn.Sequential(\n            nn.Linear(in_dim, hidden1),\n            nn.BatchNorm1d(hidden1),\n            nn.GELU(),\n            nn.Dropout(0.3),\n            nn.Linear(hidden1, hidden2),\n            nn.BatchNorm1d(hidden2),\n            nn.GELU(),\n            nn.Dropout(0.25),\n            nn.Linear(hidden2, hidden3),\n            nn.BatchNorm1d(hidden3),\n            nn.GELU(),\n            nn.Dropout(0.2),\n            nn.Linear(hidden3, 64),\n            nn.BatchNorm1d(64),\n            nn.GELU(),\n            nn.Dropout(0.1),\n            nn.Linear(64, 1),\n        )\n        self._init_weights()\n\n    def _init_weights(self):\n        for m in self.modules():\n            if isinstance(m, nn.Linear):\n                nn.init.xavier_uniform_(m.weight)\n                if m.bias is not None:\n                    nn.init.zeros_(m.bias)\n            if isinstance(m, nn.BatchNorm1d):\n                nn.init.ones_(m.weight)\n                nn.init.zeros_(m.bias)\n\n    def forward(self, batch_x):\n        x = batch_x  # [B, 92]\n        logits = self.net(x).squeeze(-1)  # [B]\n        return logits\n\ndef make_model(example_object):\n    return BinaryClassifier(example_object)\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 15\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    criterion = nn.BCEWithLogitsLoss()\n    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)\n    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=max(1, epochs), eta_min=1e-5)\n    scaler = torch.cuda.amp.GradScaler(enabled=(device.type == \"cuda\"))\n\n    train_loss_list = []\n    val_loss_list = []\n    train_acc_list = []\n    val_acc_list = []\n\n    best_val_loss = float(\"inf\")\n    best_state = None\n    patience = 4\n    patience_counter = 0\n\n    for epoch in range(epochs):\n        model.train()\n        running_loss = 0.0\n        correct = 0\n        total = 0\n        for batch in train_loader:\n            view = normalise_batch(batch, device=device)\n            xb, yb = view.batch_x, view.batch_y  # xb: [B,92], yb: [B]\n            optimizer.zero_grad()\n            with torch.cuda.amp.autocast(enabled=(device.type == \"cuda\")):\n                logits = model(xb)  # [B]\n                loss = criterion(logits, yb.float())\n            scaler.scale(loss).backward()\n            scaler.unscale_(optimizer)\n            torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)\n            scaler.step(optimizer)\n            scaler.update()\n\n            running_loss += loss.item() * yb.size(0)\n            preds = (torch.sigmoid(logits) > 0.5).long()\n            correct += (preds.view(-1) == yb).sum().item()\n            total += yb.size(0)\n        train_loss_epoch = running_loss / total\n        train_acc_epoch = correct / total\n        train_loss_list.append(train_loss_epoch)\n        train_acc_list.append(train_acc_epoch)\n\n        model.eval()\n        val_running_loss = 0.0\n        val_correct = 0\n        val_total = 0\n        with torch.no_grad():\n            for batch in val_loader:\n                view = normalise_batch(batch, device=device)\n                xb, yb = view.batch_x, view.batch_y\n                logits = model(xb)\n                loss = criterion(logits, yb.float())\n                val_running_loss += loss.item() * yb.size(0)\n                preds = (torch.sigmoid(logits) > 0.5).long()\n                val_correct += (preds.view(-1) == yb).sum().item()\n                val_total += yb.size(0)\n        val_loss_epoch = val_running_loss / val_total\n        val_acc_epoch = val_correct / val_total\n        val_loss_list.append(val_loss_epoch)\n        val_acc_list.append(val_acc_epoch)\n\n        scheduler.step()\n\n        if val_loss_epoch < best_val_loss - 1e-4:\n            best_val_loss = val_loss_epoch\n            best_state = copy.deepcopy(model.state_dict())\n            patience_counter = 0\n        else:\n            patience_counter += 1\n        if patience_counter >= patience:\n            break\n\n    if best_state is not None:\n        model.load_state_dict(best_state)\n\n    return model, train_loss_list, val_loss_list, train_acc_list, val_acc_list",
+    "reasoning": "",
+    "Outer_attempt": 2
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-12-26T17:14:16Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-12-26T17:14:16Z",
+        "metrics": {
+          ".\\outputs\\12-26\\FOURTOPS\\Q1\\script_openai_gpt-5.1-codex-max_1813_2.py": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 249,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 249,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2025-12-26T17:14:52Z",
+    "passed": true,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/12-26/FOURTOPS/Q1/script_openai_gpt-5.1-codex-max_1813_2.py\nargv2=--dryrun\nDry-run: skipping artefact manifest\n",
+      "stderr": "mkdir -p failed for path /home/sandbox/.config/matplotlib: [Errno 30] Read-only file system: '/home/sandbox/.config'\nMatplotlib created a temporary cache directory at /tmp/matplotlib-u68kolsm because there was an issue with the default path (/home/sandbox/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.\n/workspace/outputs/12-26/FOURTOPS/Q1/script_openai_gpt-5.1-codex-max_1813_2.py:164: FutureWarning: `torch.cuda.amp.GradScaler(args...)` is deprecated. Please use `torch.amp.GradScaler('cuda', args...)` instead.\n  scaler = torch.cuda.amp.GradScaler(enabled=(device.type == \"cuda\"))\n/workspace/outputs/12-26/FOURTOPS/Q1/script_openai_gpt-5.1-codex-max_1813_2.py:185: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.\n  with torch.cuda.amp.autocast(enabled=(device.type == \"cuda\")):\n"
+    },
+    "return_code": 0
+  }
+}

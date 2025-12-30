@@ -1,0 +1,85 @@
+{
+  "LLMGeneration": {
+    "model": "mistralai/mistral-large-2512",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 4131,
+    "prompt_chars": 15845,
+    "response_tokens": 2739,
+    "response_chars": 11071,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.006174,
+    "generation_ms": 44655,
+    "code": "# ---------- IMPORTS ----------\nfrom torch.utils.data import DataLoader\nfrom torch.optim import AdamW\nfrom torch.optim.lr_scheduler import ReduceLROnPlateau\nfrom sklearn.metrics import roc_auc_score\nimport torch.nn.functional as F\nfrom torch_geometric.nn import TransformerConv, global_mean_pool\nfrom torch_geometric.data import Data, Batch\nfrom torch_geometric.loader import DataLoader as PyGDataLoader\nimport math\n\n# ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.mean = None\n        self.std = None\n        self.obj_types = None\n        self.max_objects = 18\n        self.obj_feature_size = 5\n        self.global_feature_size = 2\n\n    def make_loader_cfg(self) -> dict:\n        return {\n            \"dataset_builder\": \"llm_script:FourTopsDataset\",\n            \"dataset_kwargs\": {},\n\n            \"loader_class\": \"torch_geometric.loader:DataLoader\",\n            \"batch_size\": 256,\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": False,\n\n            \"collate\": None,\n\n            \"extra_loader_kwargs\": {\"follow_batch\": [\"x\"]},\n\n            \"eval_overrides\": {\"shuffle\": False},\n        }\n\n    def fit(self, X, y=None):\n        # Calculate mean and std for normalization\n        self.mean = X.mean(dim=0, keepdim=True)\n        self.std = X.std(dim=0, keepdim=True)\n        self.std[self.std == 0] = 1.0  # Avoid division by zero\n\n        # Extract unique object types for embedding\n        obj_columns = X[:, 2::5]  # obj_n columns\n        self.obj_types = torch.unique(obj_columns).long()\n        self.num_obj_types = len(self.obj_types)\n\n        return self\n\n    def transform(self, X):\n        # Normalize data\n        X = (X - self.mean) / self.std\n\n        # Convert to PyG Data objects\n        data_list = []\n        batch_size = X.shape[0]\n\n        for i in range(batch_size):\n            event = X[i]\n\n            # Extract global features\n            global_features = event[:2]  # E_T_miss, phi_Et_miss\n\n            # Extract object features\n            objects = event[2:].reshape(-1, 5)  # [num_objects, 5]\n            mask = objects[:, 0] != 0  # obj_id != 0 means valid object\n            objects = objects[mask]\n\n            if len(objects) == 0:\n                continue  # skip events with no objects\n\n            # Get object features (E, p_T, eta, phi)\n            obj_features = objects[:, 1:]  # [num_objects, 4]\n\n            # Create node features: [obj_type_embedding, kinematic_features]\n            obj_ids = objects[:, 0].long()\n            obj_type_embedding = F.one_hot(obj_ids, num_classes=self.num_obj_types).float()\n\n            # Combine features\n            node_features = torch.cat([obj_type_embedding, obj_features], dim=1)  # [num_objects, num_obj_types + 4]\n\n            # Create edge_index for fully connected graph\n            num_nodes = node_features.shape[0]\n            edge_index = torch.combinations(torch.arange(num_nodes), r=2).t()\n            edge_index = torch.cat([edge_index, edge_index.flip(0)], dim=1)  # undirected graph\n\n            # Calculate pairwise features for edges\n            pos = obj_features[:, 1:3]  # eta, phi\n            delta_eta = pos[edge_index[0], 0] - pos[edge_index[1], 0]\n            delta_phi = pos[edge_index[0], 1] - pos[edge_index[1], 1]\n            delta_phi = (delta_phi + math.pi) % (2 * math.pi) - math.pi  # handle periodicity\n\n            delta_R = torch.sqrt(delta_eta**2 + delta_phi**2)\n\n            # Invariant mass calculation (approximate)\n            energy = obj_features[edge_index[0], 0] + obj_features[edge_index[1], 0]\n            pt = torch.sqrt(obj_features[edge_index[0], 1]**2 + obj_features[edge_index[1], 1]**2 +\n                           2 * obj_features[edge_index[0], 1] * obj_features[edge_index[1], 1] *\n                           torch.cos(delta_phi))\n            mass = torch.sqrt(energy**2 - pt**2)\n\n            # Edge features: [delta_R, invariant_mass]\n            edge_attr = torch.stack([delta_R, mass], dim=1)\n\n            # Create PyG Data object\n            data = Data(\n                x=node_features,\n                edge_index=edge_index,\n                edge_attr=edge_attr,\n                global_features=global_features,\n                num_nodes=num_nodes\n            )\n            data_list.append(data)\n\n        return data_list\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# ---------- MODEL DEFINITION ----------\nclass ParticleTransformer(nn.Module):\n    def __init__(self, num_obj_types, node_feature_size, edge_feature_size=2, hidden_dim=128, num_heads=4, num_layers=4):\n        super().__init__()\n        self.num_obj_types = num_obj_types\n        self.node_feature_size = node_feature_size\n        self.hidden_dim = hidden_dim\n\n        # Node embedding\n        self.obj_embedding = nn.Linear(num_obj_types, hidden_dim)\n        self.kinematic_embedding = nn.Linear(4, hidden_dim)\n        self.node_encoder = nn.Linear(2 * hidden_dim, hidden_dim)\n\n        # Edge embedding\n        self.edge_encoder = nn.Linear(edge_feature_size, hidden_dim)\n\n        # Transformer layers\n        self.transformer_layers = nn.ModuleList([\n            TransformerConv(\n                in_channels=hidden_dim,\n                out_channels=hidden_dim,\n                heads=num_heads,\n                concat=False,\n                beta=True,\n                edge_dim=hidden_dim\n            ) for _ in range(num_layers)\n        ])\n\n        # Global feature processing\n        self.global_encoder = nn.Linear(2, hidden_dim)\n\n        # Readout\n        self.readout = nn.Sequential(\n            nn.Linear(2 * hidden_dim, hidden_dim),\n            nn.ReLU(),\n            nn.Linear(hidden_dim, hidden_dim // 2),\n            nn.ReLU(),\n            nn.Linear(hidden_dim // 2, 1)\n        )\n\n    def forward(self, batch_x):\n        if isinstance(batch_x, Batch):\n            data = batch_x\n        else:\n            data = batch_x[0] if isinstance(batch_x, list) else batch_x\n\n        # Node features\n        obj_emb = self.obj_embedding(data.x[:, :self.num_obj_types])\n        kin_emb = self.kinematic_embedding(data.x[:, self.num_obj_types:])\n        x = self.node_encoder(torch.cat([obj_emb, kin_emb], dim=1))  # [num_nodes, hidden_dim]\n\n        # Edge features\n        edge_attr = self.edge_encoder(data.edge_attr)  # [num_edges, hidden_dim]\n\n        # Global features\n        global_feat = self.global_encoder(data.global_features)  # [batch_size, hidden_dim]\n\n        # Transformer layers\n        for layer in self.transformer_layers:\n            x = layer(x, data.edge_index, edge_attr)\n            x = F.relu(x)\n\n        # Global pooling\n        batch = data.batch if hasattr(data, 'batch') else torch.zeros(data.num_nodes, dtype=torch.long, device=x.device)\n        x_pool = global_mean_pool(x, batch)  # [batch_size, hidden_dim]\n\n        # Combine with global features\n        combined = torch.cat([x_pool, global_feat], dim=1)  # [batch_size, 2*hidden_dim]\n\n        # Readout\n        logits = self.readout(combined).squeeze(-1)  # [batch_size]\n\n        return logits\n\nclass BinaryClassifier(nn.Module):\n    def __init__(self, sample_object):\n        super().__init__()\n        # Determine dimensions from sample object\n        if isinstance(sample_object, Batch):\n            data = sample_object\n            num_obj_types = data.x.shape[1] - 4  # obj_type_embedding + 4 kinematic features\n            node_feature_size = data.x.shape[1]\n            edge_feature_size = data.edge_attr.shape[1] if data.edge_attr is not None else 2\n        else:\n            # Fallback values if sample_object is not a Batch\n            num_obj_types = 10  # reasonable default\n            node_feature_size = 14  # num_obj_types + 4 kinematic features\n            edge_feature_size = 2\n\n        self.model = ParticleTransformer(\n            num_obj_types=num_obj_types,\n            node_feature_size=node_feature_size,\n            edge_feature_size=edge_feature_size,\n            hidden_dim=128,\n            num_heads=4,\n            num_layers=4\n        )\n\n    def forward(self, batch_x):\n        return self.model(batch_x)\n\ndef make_model(example_object):\n    return BinaryClassifier(example_object)\n\n# ---------- MODEL TRAINING ----------\ndef compute_auc(y_true, y_pred):\n    if len(torch.unique(y_true)) < 2:\n        return 0.5  # return 0.5 if only one class present\n    return roc_auc_score(y_true.cpu().numpy(), y_pred.detach().cpu().numpy())\n\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    optimizer = AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)\n    scheduler = ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=3, verbose=True)\n    criterion = nn.BCEWithLogitsLoss()\n\n    best_auc = 0.0\n    best_model = None\n    train_losses = []\n    val_losses = []\n    train_aucs = []\n    val_aucs = []\n\n    for epoch in range(epochs):\n        model.train()\n        train_loss = 0.0\n        train_preds = []\n        train_targets = []\n\n        for batch in train_loader:\n            view = normalise_batch(batch, device=device)\n            xb, yb = view.batch_x, view.batch_y\n\n            optimizer.zero_grad()\n            logits = model(xb)\n            loss = criterion(logits, yb.float())\n            loss.backward()\n            optimizer.step()\n\n            train_loss += loss.item()\n            train_preds.append(torch.sigmoid(logits).detach())\n            train_targets.append(yb.detach())\n\n        train_loss /= len(train_loader)\n        train_preds = torch.cat(train_preds)\n        train_targets = torch.cat(train_targets)\n        train_auc = compute_auc(train_targets, train_preds)\n\n        # Validation\n        model.eval()\n        val_loss = 0.0\n        val_preds = []\n        val_targets = []\n\n        with torch.no_grad():\n            for batch in val_loader:\n                view = normalise_batch(batch, device=device)\n                xb, yb = view.batch_x, view.batch_y\n                logits = model(xb)\n                loss = criterion(logits, yb.float())\n                val_loss += loss.item()\n                val_preds.append(torch.sigmoid(logits).detach())\n                val_targets.append(yb.detach())\n\n        val_loss /= len(val_loader)\n        val_preds = torch.cat(val_preds)\n        val_targets = torch.cat(val_targets)\n        val_auc = compute_auc(val_targets, val_preds)\n\n        # Update learning rate\n        scheduler.step(val_auc)\n\n        # Store metrics\n        train_losses.append(train_loss)\n        val_losses.append(val_loss)\n        train_aucs.append(train_auc)\n        val_aucs.append(val_auc)\n\n        print(f\"Epoch {epoch+1}/{epochs} - Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}, \"\n              f\"Train AUC: {train_auc:.4f}, Val AUC: {val_auc:.4f}\")\n\n        # Early stopping\n        if val_auc > best_auc:\n            best_auc = val_auc\n            best_model = model.state_dict()\n\n    # Load best model\n    if best_model is not None:\n        model.load_state_dict(best_model)\n\n    return model, train_losses, val_losses, train_aucs, val_aucs",
+    "reasoning": "",
+    "Outer_attempt": 1
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-12-29T10:35:58Z",
+    "PyLint": {
+      "passed": true,
+      "messages": [
+        {
+          "type": "error",
+          "module": "script_mistralai_mistral-large-2512_1135_1",
+          "obj": "MyPreprocessor.transform",
+          "line": 130,
+          "column": 33,
+          "endLine": 130,
+          "endColumn": 83,
+          "path": "outputs\\12-29\\FOURTOPS\\Q2\\script_mistralai_mistral-large-2512_1135_1.py",
+          "symbol": "not-callable",
+          "message": "F.one_hot is not callable",
+          "message-id": "E1102"
+        }
+      ]
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-12-29T10:35:58Z",
+        "metrics": {
+          ".\\outputs\\12-29\\FOURTOPS\\Q2\\script_mistralai_mistral-large-2512_1135_1.py": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 299,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 299,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2025-12-29T10:36:21Z",
+    "passed": false,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/12-29/FOURTOPS/Q2/script_mistralai_mistral-large-2512_1135_1.py\nargv2=--dryrun\n",
+      "stderr": "mkdir -p failed for path /home/sandbox/.config/matplotlib: [Errno 30] Read-only file system: '/home/sandbox/.config'\nMatplotlib created a temporary cache directory at /tmp/matplotlib-85o_b_52 because there was an issue with the default path (/home/sandbox/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.\nTraceback (most recent call last):\n  File \"/workspace/outputs/12-29/FOURTOPS/Q2/script_mistralai_mistral-large-2512_1135_1.py\", line 435, in <module>\n    _run(dryrun=\"--dryrun\" in sys.argv)\n  File \"/workspace/outputs/12-29/FOURTOPS/Q2/script_mistralai_mistral-large-2512_1135_1.py\", line 383, in _run\n    train_ds     = build_dataset(spec, (X_train, Y_train), pre, train=True)\n                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/utils/llm_io.py\", line 764, in build_dataset\n    return builder(events, preproc, train=train, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/outputs/12-29/FOURTOPS/Q2/script_mistralai_mistral-large-2512_1135_1.py\", line 42, in __init__\n    self.X = pre.transform(X) if pre is not None else X\n             ^^^^^^^^^^^^^^^^\n  File \"/workspace/outputs/12-29/FOURTOPS/Q2/script_mistralai_mistral-large-2512_1135_1.py\", line 130, in transform\n    obj_type_embedding = F.one_hot(obj_ids, num_classes=self.num_obj_types).float()\n                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nRuntimeError: Class values must be non-negative.\n"
+    },
+    "return_code": 1
+  }
+}

@@ -1,0 +1,82 @@
+{
+  "LLMGeneration": {
+    "model": "openai/o4-mini-high-2025-04-16",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 3409,
+    "prompt_chars": 14903,
+    "response_tokens": 10209,
+    "response_chars": 3709,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.0463463,
+    "generation_ms": 119139,
+    "code": "import numpy as np\nimport torch\nfrom sklearn.linear_model import RANSACRegressor\nfrom torch import nn\n\nclass MyPreprocessor:\n    def __init__(self):\n        pass\n\n    def make_loader_cfg(self) -> dict:\n        return {\n            \"dataset_builder\": \"utils.llm_io:EventDataset\",\n            \"dataset_kwargs\": {},\n            \"loader_class\": \"torch.utils.data:DataLoader\",\n            \"batch_size\": 64,\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": False,\n            \"collate\": \"ragged_xy\",\n            \"extra_loader_kwargs\": {},\n            \"eval_overrides\": {\"shuffle\": False}\n        }\n\n    def fit(self, data):\n        return self\n\n    def transform(self, data):\n        return data\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\nclass HitClassifier(nn.Module):\n    def __init__(self, example_batch_x):\n        super().__init__()\n        # Minimum hits to form a valid track\n        self.min_hits = 4\n        # Factor for dynamic RANSAC inlier threshold\n        self.factor = 1.5\n\n    def forward(self, batch_x):\n        # batch_x: list of Tensors, each [N_i, 4]\n        preds = []\n        for x in batch_x:\n            # x_cpu: numpy array [N_i,4]\n            x_cpu = x.detach().cpu().numpy()\n            # radial coordinate r [N_i,1]\n            r = x_cpu[:, 0].reshape(-1, 1)\n            # z coordinate [N_i]\n            z = x_cpu[:, 2]\n            # layer ids [N_i]\n            layers = x_cpu[:, 3]\n            # number of unique layers\n            n_layers = np.unique(layers).shape[0]\n            # span of z\n            z_span = z.max() - z.min()\n            # dynamic residual threshold\n            if n_layers > 1:\n                residual_threshold = self.factor * z_span / (n_layers - 1)\n            else:\n                residual_threshold = z_span\n            # total hits\n            N_i = x_cpu.shape[0]\n            # initialize labels: -1 means noise/unassigned\n            labels = -1 * np.ones(N_i, dtype=np.int64)\n            # indices not yet assigned to a cluster\n            unassigned = np.arange(N_i)\n            cluster_id = 1\n            # iterative RANSAC to find linear tracks in r-z plane\n            while unassigned.shape[0] >= self.min_hits:\n                ransac = RANSACRegressor(\n                    min_samples=self.min_hits,\n                    residual_threshold=residual_threshold,\n                    random_state=42\n                )\n                try:\n                    # Fit z = f(r) on unassigned points\n                    ransac.fit(r[unassigned], z[unassigned])\n                except Exception:\n                    break\n                inlier_mask = ransac.inlier_mask_  # boolean mask [len(unassigned)]\n                if inlier_mask.sum() < self.min_hits:\n                    break\n                # map inliers back to original indices\n                inlier_idx = unassigned[inlier_mask]\n                labels[inlier_idx] = cluster_id\n                cluster_id += 1\n                # remove inliers from further consideration\n                unassigned = unassigned[~inlier_mask]\n            # convert to tensor and move to original device\n            preds.append(torch.from_numpy(labels).to(x.dtype).long().to(x.device))\n        return preds\n\ndef make_model(example_batch_x):\n    return HitClassifier(example_batch_x)\n\nEPOCHS = 10\n\ndef train_model(model, train_loader, val_loader, epochs):\n    # No trainable parameters, so skip training; return dummy metrics\n    train_loss = [0.0 for _ in range(epochs)]\n    val_loss = [0.0 for _ in range(epochs)]\n    train_acc = [0.0 for _ in range(epochs)]\n    val_acc = [0.0 for _ in range(epochs)]\n    return model, train_loss, val_loss, train_acc, val_acc",
+    "reasoning": "",
+    "Outer_attempt": 1
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-12-17T18:22:29Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-12-17T18:22:29Z",
+        "metrics": {
+          ".\\./outputs/17-12/TRACKFORMERS/Q1/script_openai_o4-mini-high-2025-04-16_1922_1.py": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 143,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 143,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2025-12-17T18:22:52Z",
+    "passed": true,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/17-12/TRACKFORMERS/Q1/script_openai_o4-mini-high-2025-04-16_1922_1.py\nargv2=--dryrun\n",
+      "stderr": "+ exec\n+ PY=outputs/17-12/TRACKFORMERS/Q1/script_openai_o4-mini-high-2025-04-16_1922_1.py\n+ shift\n++ echo --dryrun\n++ xargs\n++ tr -d '\\r\\n'\n+ DRY=--dryrun\n+ [[ outputs/17-12/TRACKFORMERS/Q1/script_openai_o4-mini-high-2025-04-16_1922_1.py == \\/\\u\\s\\r\\/\\l\\o\\c\\a\\l\\/\\b\\i\\n\\/\\t\\r\\a\\i\\n\\.\\s\\h ]]\n+ [[ --dryrun =~ (--dryrun|--dry-run) ]]\n+ TIMEOUT=3600\n+ : 0\n+ : 0\n+ ulimit -t 3600\n+ ((  MEMORY_LIMIT_GB > 0  ))\n+ ((  PIDS_LIMIT > 0  ))\n+ timeout --signal=KILL 3600s python outputs/17-12/TRACKFORMERS/Q1/script_openai_o4-mini-high-2025-04-16_1922_1.py --dryrun\nmkdir -p failed for path /home/sandbox/.config/matplotlib: [Errno 30] Read-only file system: '/home/sandbox/.config'\nMatplotlib created a temporary cache directory at /tmp/matplotlib-qa75c2kd because there was an issue with the default path (/home/sandbox/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.\n+ python_rc=0\n+ [[ 0 -ne 0 ]]\n+ [[ --dryrun =~ (--dryrun|--dry-run) ]]\n+ echo 'Dry-run: skipping artefact manifest'\nDry-run: skipping artefact manifest\n+ exit 0\n"
+    },
+    "return_code": 0
+  },
+  "Evaluation": {
+    "__timestamp": "2025-12-17T21:21:17Z",
+    "passed": true,
+    "metrics": {
+      "ok": true,
+      "load_s": 3.7,
+      "eval_s": 67.05,
+      "FitAccuracy": 0.0006878145134741099
+    },
+    "runtime_s": 77.55
+  }
+}

@@ -1,0 +1,71 @@
+{
+  "LLMGeneration": {
+    "model": "x-ai/grok-code-fast-1",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 3929,
+    "prompt_chars": 15289,
+    "response_tokens": 5667,
+    "response_chars": 9687,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.00858358,
+    "generation_ms": 29127,
+    "code": "# -------------------------- START OF LLM BLOCK ------------------------------\n# <start code template>\n# ---------- IMPORTS ----------\n# NOTE: Some imports (torch, nn, numpy, DataLoader) are already available (see prefix).\n# Only import extra std-lib modules or modules available in the environment, i.e: torch, scipy, sklearn (sub-)modules you actually use.\nfrom torch_geometric.data import Data\nfrom torch_geometric.nn import GCNConv, global_mean_pool\nfrom torch_geometric.loader import DataLoader as PyGDataLoader\n# <LLM: Import modules>\n\n#  -------- (OPTIONAL) CUSTOM DATASET  --------\n# class CustomDataset(Dataset):\n#  REQUIREMENT: If you want a custom dataset: in make_loader_cfg set dataset_builder to \"llm_script:CustomDataset\"\n#    def __init__(self, events, pre, train: bool = True, **kwargs):\n#        X, y = events\n#        self.X = pre.transform(X) if pre is not None else X\n#        self.y = y\n#    def __len__(self):\n#        return int(self.y.shape[0])\n#    def __getitem__(self, idx):\n#        return self.X[idx], self.y[idx]\n\n# ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    # REQUIREMENTS\n    #   - IMPORTANT: All state must be picklable with the std-lib pickle module.\n    #   - May allocate NumPy arrays or Torch tensors internally, but: transform() must be deterministic.\n    #   - Store only derived parameters needed for transform i.e. do not store the raw data itself in the preprocessor object.\n\n    # TIPS\n    #   - When modifying data features or feature engineering: annotate tensor size as comments after \n    #   - each tensor operation to reduce dimension mismatches.\n\n    # DATA SPECIFICS\n    #    Total flat length per event (X_train & X_val): 92\n    #    Index  0 :  missing-ET magnitude  (E_T_miss)\n    #    Index  1 :  missing-ET azimuth    (phi_Et_miss)\n    #    Indices  2-6  : object 1  ->  obj_1, E_1, p_T1, eta_1, phi_1\n    #    Indices  7-11 : object 2  ->  obj_2, E_2 , p_T_2 , eta_2 , phi_2\n    #    ...\n    #    Indices 87-91 : object 18 ->  obj_18, E_18 , p_T_18 , eta_18 , phi_18\n    #    Global features       = 2\n    #    Per-object slice size = 5\n    #    Max objects encoded   = 18\n\n    def __init__(self):\n        self.means = None\n        self.stds = None\n        self.global_means = None\n        self.global_stds = None\n\n    def make_loader_cfg(self) -> dict:\n        return {\n            \"dataset_builder\": \"llm_script:FourTopsDataset\",   # default harness dataset\n            \"dataset_kwargs\": {},\n            \"loader_class\": \"torch_geometric.loader:DataLoader\",     # use PyG DataLoader for graphs\n            \"batch_size\": 512,\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": False,\n            \"collate\": None,\n            \"extra_loader_kwargs\": {},\n            \"eval_overrides\": {\"shuffle\": False},\n        }\n\n    def fit(self, X, y=None):\n        X_np = X.numpy()\n        all_x = []  # Collect all non-zero object features across all events\n        for i in range(X_np.shape[0]):\n            x = X_np[i]\n            for j in range(18):\n                start = 2 + j * 5\n                obj_id = x[start]\n                E = x[start + 1]\n                pT = x[start + 2]\n                eta = x[start + 3]\n                phi = x[start + 4]\n                if E == 0 and pT == 0:  # Skip zero-padded\n                    continue\n                all_x.append([obj_id, E, pT, eta, phi])\n        all_x = np.array(all_x)\n        if len(all_x) > 0:\n            self.means = np.mean(all_x, axis=0)\n            self.stds = np.std(all_x, axis=0) + 1e-8\n        else:\n            self.means = np.zeros(5)\n            self.stds = np.ones(5)\n        # Globals\n        globals_ = X_np[:, :2]\n        self.global_means = np.mean(globals_, axis=0)\n        self.global_stds = np.std(globals_, axis=0) + 1e-8\n        return self\n\n    def transform(self, X):\n        data_list = []\n        X_np = X.numpy()\n        for i in range(X_np.shape[0]):\n            x = X_np[i]\n            E_T_miss = x[0]\n            phi_miss = x[1]\n            nodes = []\n            for j in range(18):\n                start = 2 + j * 5\n                obj_id = x[start]\n                E = x[start + 1]\n                pT = x[start + 2]\n                eta = x[start + 3]\n                phi = x[start + 4]\n                if E == 0 and pT == 0:  # Zero-padded\n                    continue\n                nodes.append([obj_id, E, pT, eta, phi])\n            if len(nodes) == 0:\n                nodes = [[0, 0, 0, 0, 0]]  # Dummy node\n            node_x = torch.tensor(nodes, dtype=torch.float32)  # [len(nodes), 5]\n            if self.means is not None:\n                node_x = (node_x - self.means.unsqueeze(0)) / self.stds.unsqueeze(0)  # Normalize\n            n = node_x.shape[0]\n            # Fully connected graph\n            edge_list = []\n            for a in range(n):\n                for b in range(n):\n                    if a != b:\n                        edge_list.extend([[a, b], [b, a]])\n            if edge_list:\n                edge_index = torch.tensor(edge_list, dtype=torch.long).t()  # [2, num_edges]\n            else:\n                edge_index = torch.tensor([], dtype=torch.long).view(2, 0)\n            u = torch.tensor([E_T_miss, phi_miss], dtype=torch.float32)  # [2]\n            if self.global_means is not None:\n                u = (u - self.global_means) / self.global_stds\n            data = Data(x=node_x, edge_index=edge_index, u=u)\n            data_list.append(data)\n        return data_list\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# ---------- MODEL DEFINITION ----------\nclass BinaryClassifier(nn.Module):\n    def __init__(self, sample_object):\n        super().__init__()\n        # sample_object is a PyG Batch, sample_object.x.shape[1] == 5 (normalized features)\n        input_dim = sample_object.x.shape[1]\n        self.conv1 = GCNConv(input_dim, 128)\n        self.conv2 = GCNConv(128, 256)\n        self.pool = global_mean_pool\n        self.fc1 = nn.Linear(256 + 2, 128)  # 256 from pool + 2 globals\n        self.fc2 = nn.Linear(128, 64)\n        self.fc3 = nn.Linear(64, 1)\n\n    def forward(self, batch):\n        x = batch.x  # Node features [total_nodes, 5]\n        edge_index = batch.edge_index  # Edges\n        u = batch.u  # Globals [batch_size, 2]\n        batch_index = batch.batch  # For pooling [total_nodes,]\n        x = self.conv1(x, edge_index)  # [total_nodes, 128]\n        x = nn.ReLU()(x)\n        x = self.conv2(x, edge_index)  # [total_nodes, 256]\n        x = nn.ReLU()(x)\n        pooled = self.pool(x, batch_index)  # [batch_size, 256]\n        combined = torch.cat([pooled, u], dim=1)  # [batch_size, 256+2=258]\n        x = self.fc1(combined)  # [batch_size, 128]\n        x = nn.ReLU()(x)\n        x = self.fc2(x)  # [batch_size, 64]\n        x = nn.ReLU()(x)\n        out = self.fc3(x).squeeze(-1)  # [batch_size,]\n        return out\n\ndef make_model(example_object):\n    return BinaryClassifier(example_object)\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 15  # Increased for better convergence\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-4)  # Added weight_decay for regularization\n    criterion = nn.BCEWithLogitsLoss()\n    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.5)  # Decay LR\n    best_val_loss = float('inf')\n    patience = 5\n    no_improve = 0\n    train_loss_hist = []\n    val_loss_hist = []\n    train_acc_hist = []\n    val_acc_hist = []\n    for epoch in range(epochs):\n        model.train()\n        total_loss = 0.0\n        total_acc = 0.0\n        count = 0\n        for batch in train_loader:\n            view = normalise_batch(batch, device=device)\n            xb = view.batch_x\n            yb = view.batch_y.float()\n            optimizer.zero_grad()\n            out = model(xb)\n            loss = criterion(out, yb)\n            loss.backward()\n            optimizer.step()\n            total_loss += loss.item() * xb.num_graphs\n            pred = (torch.sigmoid(out) > 0.5).float()  # For accuracy\n            acc = (pred == yb).float().mean().item()\n            total_acc += acc * xb.num_graphs\n            count += xb.num_graphs\n        train_loss = total_loss / count\n        train_acc = total_acc / count\n        train_loss_hist.append(train_loss)\n        train_acc_hist.append(train_acc)\n        model.eval()\n        total_loss = 0.0\n        total_acc = 0.0\n        count = 0\n        with torch.no_grad():\n            for batch in val_loader:\n                view = normalise_batch(batch, device=device)\n                xb = view.batch_x\n                yb = view.batch_y.float()\n                out = model(xb)\n                loss = criterion(out, yb)\n                total_loss += loss.item() * xb.num_graphs\n                pred = (torch.sigmoid(out) > 0.5).float()\n                acc = (pred == yb).float().mean().item()\n                total_acc += acc * xb.num_graphs\n                count += xb.num_graphs\n        val_loss = total_loss / count\n        val_acc = total_acc / count\n        val_loss_hist.append(val_loss)\n        val_acc_hist.append(val_acc)\n        scheduler.step()\n        # Early stopping\n        if val_loss < best_val_loss:\n            best_val_loss = val_loss\n            no_improve = 0\n        else:\n            no_improve += 1\n        if no_improve >= patience:\n            break\n    return model, train_loss_hist, val_loss_hist, train_acc_hist, val_acc_hist\n\n# DO NOT execute the pipeline here – the harness will do that.\n# <end code template>\n# ---------------------------  END OF LLM-CODE BLOCK  ---------------------------",
+    "reasoning": "",
+    "Outer_attempt": 3
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-12-26T16:39:00Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-12-26T16:39:00Z",
+        "metrics": {
+          ".\\outputs\\12-26\\FOURTOPS\\Q1\\script_x-ai_grok-code-fast-1_1738_3.py": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 268,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 268,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2025-12-26T16:39:19Z",
+    "passed": false,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/12-26/FOURTOPS/Q1/script_x-ai_grok-code-fast-1_1738_3.py\nargv2=--dryrun\n",
+      "stderr": "mkdir -p failed for path /home/sandbox/.config/matplotlib: [Errno 30] Read-only file system: '/home/sandbox/.config'\nMatplotlib created a temporary cache directory at /tmp/matplotlib-qy649cvt because there was an issue with the default path (/home/sandbox/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.\nTraceback (most recent call last):\n  File \"/workspace/outputs/12-26/FOURTOPS/Q1/script_x-ai_grok-code-fast-1_1738_3.py\", line 364, in <module>\n    _run(dryrun=\"--dryrun\" in sys.argv)\n  File \"/workspace/outputs/12-26/FOURTOPS/Q1/script_x-ai_grok-code-fast-1_1738_3.py\", line 312, in _run\n    train_ds     = build_dataset(spec, (X_train, Y_train), pre, train=True)\n                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/utils/llm_io.py\", line 632, in build_dataset\n    return builder(events, preproc, train=train, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/outputs/12-26/FOURTOPS/Q1/script_x-ai_grok-code-fast-1_1738_3.py\", line 42, in __init__\n    self.X = pre.transform(X) if pre is not None else X\n             ^^^^^^^^^^^^^^^^\n  File \"/workspace/outputs/12-26/FOURTOPS/Q1/script_x-ai_grok-code-fast-1_1738_3.py\", line 166, in transform\n    node_x = (node_x - self.means.unsqueeze(0)) / self.stds.unsqueeze(0)  # Normalize\n                       ^^^^^^^^^^^^^^^^^^^^\nAttributeError: 'numpy.ndarray' object has no attribute 'unsqueeze'. Did you mean: 'squeeze'?\n"
+    },
+    "return_code": 1
+  }
+}

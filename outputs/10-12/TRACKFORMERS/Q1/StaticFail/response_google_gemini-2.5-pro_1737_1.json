@@ -1,0 +1,76 @@
+{
+  "LLMGeneration": {
+    "model": "google/gemini-2.5-pro",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 4165,
+    "prompt_chars": 15081,
+    "response_tokens": 19139,
+    "response_chars": 10807,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.19659625,
+    "generation_ms": 174860,
+    "code": "# <start code template>\n# 0. ---------- IMPORTS ----------\n# NOTE: Some imports (torch, numpy, DataLoader) are already available (see prefix).\n# Only import extra std-lib modules, torch, scipy, sklearn (sub-)modules you actually use.\nfrom torch.optim.lr_scheduler import ReduceLROnPlateau\nfrom torch_geometric.nn import EdgeConv, knn_graph\nfrom torch_geometric.data import Data, Batch\n\n# 1. ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    # Must implement:\n    #   - fit()\n    #   - transform()\n\n    # REQUIREMENTS\n    #   IMPORTANT: All state must be picklable with the std-lib pickle module.\n    #   May allocate NumPy arrays or Torch tensors internally, but:\n    #   transform() must be deterministic.\n    #   fit(events) receives the *raw* event dicts list, not a tensor batch.\n    #   Store only derived parameters needed for transform i.e. do not store the raw data\n    #    itself in the preprocessor object.\n\n    # TIPS\n    #   When modifying data features or feature engineering: annotate tensor size as comments after \n    #   each tensor operation to reduce dimension mismatches.\n\n    def __init__(self):\n        self.mean = None\n        self.std = None\n\n    def _raw_reshape(self, data):           \n        return data # Returns identity by default\n\n    def make_loader_cfg(self):\n        return None\n\n    def fit(self, data):\n        all_coords = []\n        for evt in data:\n            r, theta, z = evt[\"hit_r\"], evt[\"hit_theta\"], evt[\"hit_z\"]\n            x = r * np.cos(theta)\n            y = r * np.sin(theta)\n            # Features to be scaled: r, z, x, y\n            coords = np.stack([r, z, x, y], axis=1) # [N_hits_evt, 4]\n            all_coords.append(coords)\n\n        all_coords_np = np.concatenate(all_coords, axis=0) # [Total_hits, 4]\n\n        self.mean = torch.from_numpy(all_coords_np.mean(axis=0)).float()\n        self.std = torch.from_numpy(all_coords_np.std(axis=0)).float()\n        # Add epsilon to std to avoid division by zero\n        self.std[self.std == 0] = 1.0\n        return self\n\n    def transform(self, data):\n        # data is a tensor [N_hits, 4] with (r, theta, z, layer_id)\n        r, theta, z, layer_id = data.T\n        x = r * torch.cos(theta)\n        y = r * torch.sin(theta)\n\n        # Features to scale: r, z, x, y\n        to_scale = torch.stack([r, z, x, y], dim=1) # [N_hits, 4]\n        scaled = (to_scale - self.mean.to(data.device)) / self.std.to(data.device) # [N_hits, 4]\n        r_s, z_s, x_s, y_s = scaled.T\n\n        # Final features: (r_scaled, theta, z_scaled, layer_id, x_scaled, y_scaled)\n        final_features = torch.stack([r_s, theta, z_s, layer_id, x_s, y_s], dim=1) # [N_hits, 6]\n        return final_features\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# 2. ---------- MODEL ARCHITECTURE ----------\nclass HitClassifier(nn.Module):\n    def __init__(self, in_features, hidden_dim=64, emb_dim=8, k_neighbors=9):\n        super().__init__()\n        self.k = k_neighbors\n        self.emb_dim = emb_dim\n\n        # Input projection to lift features to the hidden dimension\n        self.input_net = nn.Sequential(\n            nn.Linear(in_features, hidden_dim),\n            nn.Tanh(),\n            nn.Linear(hidden_dim, hidden_dim),\n            nn.Tanh()\n        )\n\n        # Graph learning layers\n        self.edge_conv1 = EdgeConv(nn.Sequential(\n            nn.Linear(2 * hidden_dim, hidden_dim), nn.ReLU(),\n            nn.Linear(hidden_dim, hidden_dim), nn.ReLU()\n        ), aggr='mean')\n\n        self.edge_conv2 = EdgeConv(nn.Sequential(\n            nn.Linear(2 * hidden_dim, hidden_dim), nn.ReLU(),\n            nn.Linear(hidden_dim, hidden_dim), nn.ReLU()\n        ), aggr='mean')\n\n        # Output projection to embedding space\n        self.output_net = nn.Sequential(\n            nn.Linear(hidden_dim, hidden_dim),\n            nn.ReLU(),\n            nn.Linear(hidden_dim, self.emb_dim)\n        )\n\n    def forward(self, batch):\n        # batch is a list of (X, y) tuples from the DataLoader\n        data_list = []\n        for X, y in batch:\n            # Use scaled Cartesian coordinates for nearest neighbor search\n            coords_for_knn = X[:, [4, 5, 2]] # x_s, y_s, z_s\n            edge_index = knn_graph(coords_for_knn, self.k, loop=False, flow='source_to_target')\n            data_list.append(Data(x=X, edge_index=edge_index, y=y))\n\n        # Create a single batch object for PyG\n        pyg_batch = Batch.from_data_list(data_list).to(device)\n\n        # GNN forward pass\n        h = self.input_net(pyg_batch.x) # [N_total_hits, hidden_dim]\n        h = self.edge_conv1(h, pyg_batch.edge_index) # [N_total_hits, hidden_dim]\n        h = self.edge_conv2(h, pyg_batch.edge_index) # [N_total_hits, hidden_dim]\n\n        # Project to embedding space\n        embeddings = self.output_net(h) # [N_total_hits, emb_dim]\n\n        # Return embeddings and a batch index vector to separate hits by event\n        return embeddings, pyg_batch.batch\n\ndef make_model(example_sample):\n    if isinstance(example_sample, (list, tuple)):\n        # example_sample is (X_tensor, y_tensor)\n        in_features = example_sample[0].shape[1]\n    else:\n        # Fallback if example_sample is just the feature tensor\n        in_features = example_sample.shape[1]\n    return HitClassifier(in_features=in_features)\n\n# 3. ---------- MODEL TRAINING ----------\nEPOCHS = 25\n\ndef _calculate_loss_acc(embeddings, batch_idx, y_trues, device):\n    \"\"\"Helper function to compute metric learning loss and a proxy accuracy.\"\"\"\n    total_loss = torch.tensor(0.0, device=device)\n    total_acc_hits = 0.0\n    total_acc_attempts = 0.0\n    margin = 1.0\n\n    num_events = int(batch_idx.max().item() + 1)\n\n    for i in range(num_events):\n        event_mask = (batch_idx == i)\n        event_embeddings = embeddings[event_mask]\n        event_y = y_trues[i].to(device)\n        n_hits = len(event_y)\n\n        if n_hits < 2:\n            continue\n\n        dists = torch.cdist(event_embeddings, event_embeddings)\n\n        is_same_track = event_y.unsqueeze(1) == event_y.unsqueeze(0)\n        # Positive pairs: same track, not noise (track_id > 0), not self-pair\n        is_pos = is_same_track & (event_y.unsqueeze(1) > 0) & ~torch.eye(n_hits, dtype=torch.bool, device=device)\n        # Negative pairs: different tracks\n        is_neg = ~is_same_track\n\n        # Pull loss (L2 distance for positive pairs)\n        pos_dists = dists[is_pos]\n        pull_loss = torch.pow(pos_dists, 2).mean() if pos_dists.numel() > 0 else torch.tensor(0.0, device=device)\n\n        # Push loss (hinge loss for negative pairs)\n        neg_dists = dists[is_neg]\n        push_loss = torch.pow(torch.relu(margin - neg_dists), 2).mean() if neg_dists.numel() > 0 else torch.tensor(0.0, device=device)\n\n        total_loss += pull_loss + push_loss\n\n        # Accuracy Calculation (proxy metric: triplet success rate)\n        for hit_idx in range(n_hits):\n            if event_y[hit_idx] <= 0: continue\n\n            pos_mask = is_pos[hit_idx]\n            neg_mask = is_neg[hit_idx] & (event_y > 0) # Compare to other tracks, not noise\n\n            if pos_mask.any() and neg_mask.any():\n                pos_idx = torch.where(pos_mask)[0][torch.randint(pos_mask.sum(), (1,))]\n                neg_idx = torch.where(neg_mask)[0][torch.randint(neg_mask.sum(), (1,))]\n\n                if dists[hit_idx, pos_idx] < dists[hit_idx, neg_idx]:\n                    total_acc_hits += 1\n                total_acc_attempts += 1\n\n    batch_loss = total_loss / num_events if num_events > 0 else torch.tensor(0.0, device=device)\n    batch_acc = total_acc_hits / total_acc_attempts if total_acc_attempts > 0 else 0.0\n    return batch_loss, batch_acc\n\ndef train_model(model, train_loader, val_loader, epochs):\n    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-5)\n    scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=3, min_lr=1e-6)\n\n    train_loss, val_loss = [], []\n    train_acc, val_acc = [], []\n    best_val_loss = float('inf')\n    epochs_no_improve = 0\n    patience = 5\n\n    for epoch in range(epochs):\n        # Training phase\n        model.train()\n        running_loss, running_acc, num_batches = 0.0, 0.0, 0\n        for batch in train_loader:\n            optimizer.zero_grad()\n            y_trues = [evt[1] for evt in batch]\n            embeddings, batch_idx = model(batch)\n            loss, acc = _calculate_loss_acc(embeddings, batch_idx, y_trues, device)\n\n            if torch.is_tensor(loss) and not torch.isnan(loss) and loss.requires_grad:\n              loss.backward()\n              optimizer.step()\n              running_loss += loss.item()\n              running_acc += acc\n              num_batches += 1\n\n        epoch_train_loss = running_loss / num_batches if num_batches > 0 else 0\n        epoch_train_acc = running_acc / num_batches if num_batches > 0 else 0\n        train_loss.append(epoch_train_loss)\n        train_acc.append(epoch_train_acc)\n\n        # Validation phase\n        model.eval()\n        running_loss, running_acc, num_batches = 0.0, 0.0, 0\n        with torch.no_grad():\n            for batch in val_loader:\n                y_trues = [evt[1] for evt in batch]\n                embeddings, batch_idx = model(batch)\n                loss, acc = _calculate_loss_acc(embeddings, batch_idx, y_trues, device)\n\n                if torch.is_tensor(loss) and not torch.isnan(loss):\n                  running_loss += loss.item()\n                  running_acc += acc\n                  num_batches += 1\n\n        epoch_val_loss = running_loss / num_batches if num_batches > 0 else 0\n        epoch_val_acc = running_acc / num_batches if num_batches > 0 else 0\n        val_loss.append(epoch_val_loss)\n        val_acc.append(epoch_val_acc)\n\n        scheduler.step(epoch_val_loss)\n\n        print(f\"Epoch {epoch+1}/{epochs} - \"\n              f\"Train Loss: {epoch_train_loss:.4f}, Train Acc: {epoch_train_acc:.4f} - \"\n              f\"Val Loss: {epoch_val_loss:.4f}, Val Acc: {epoch_val_acc:.4f}\")\n\n        # Early stopping logic\n        if epoch_val_loss < best_val_loss:\n            best_val_loss = epoch_val_loss\n            epochs_no_improve = 0\n            best_model_state = model.state_dict()\n        else:\n            epochs_no_improve += 1\n\n        if epochs_no_improve >= patience:\n            print(f\"Early stopping triggered after {epoch+1} epochs.\")\n            break\n\n    # Restore best model weights\n    if 'best_model_state' in locals():\n      model.load_state_dict(best_model_state)\n\n    return model, train_loss, val_loss, train_acc, val_acc\n\n# IMPORTANT: DO NOT execute the pipeline here – the harness will do that.\n# <end code template>",
+    "reasoning": "",
+    "Outer_attempt": 1
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-12-10T16:37:16Z",
+    "PyLint": {
+      "passed": false,
+      "messages": [
+        {
+          "type": "error",
+          "module": "script_google_gemini-2.5-pro_1737_1",
+          "obj": "train_model",
+          "line": 342,
+          "column": 28,
+          "endLine": 342,
+          "endColumn": 44,
+          "path": "outputs\\10-12\\TRACKFORMERS\\Q1\\script_google_gemini-2.5-pro_1737_1.py",
+          "symbol": "possibly-used-before-assignment",
+          "message": "Possibly using variable 'best_model_state' before assignment",
+          "message-id": "E0606"
+        }
+      ]
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-12-10T16:37:16Z",
+        "metrics": {
+          ".\\./outputs/10-12/TRACKFORMERS/Q1/script_google_gemini-2.5-pro_1737_1.py": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 289,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 289,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  }
+}

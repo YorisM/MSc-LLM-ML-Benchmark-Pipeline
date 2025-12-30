@@ -1,0 +1,71 @@
+{
+  "LLMGeneration": {
+    "model": "x-ai/grok-code-fast-1",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 3796,
+    "prompt_chars": 15778,
+    "response_tokens": 7538,
+    "response_chars": 9545,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.01138652,
+    "generation_ms": 68940,
+    "code": "# <start code template>\n# ---------- IMPORTS ----------\n# NOTE: Some imports (torch, nn, numpy, DataLoader) are already available (see prefix).\n# Only import extra std-lib modules or modules available in the environment, i.e: torch, scipy, sklearn (sub-)modules you actually use.\n# <LLM: Import modules>\nimport math\nimport torch.nn.functional as F\nfrom sklearn.preprocessing import StandardScaler\n\n# -------- (OPTIONAL) CUSTOM DATASET  --------\n# def make_dataset(events, pre, train: bool, **kwargs):\n#   REQUIREMENT: If you want a custom dataset: in make_loader_cfg set dataset_builder to \"llm_script:make_dataset\"\n#   k = kwargs.get(\"k\", 16)\n#   <LLM: Insert custom dataset logic here>\n#   return CustomDataset(events, pre, train=train, k=k)\n\n# ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    # Must implement:\n    #   - fit()\n    #   - transform()\n\n    # REQUIREMENTS\n    #   - IMPORTANT: All state must be picklable with the std-lib pickle module.\n    #   - May allocate NumPy arrays or Torch tensors internally, but: transform() must be deterministic.\n    #   - Store only derived parameters needed for transform i.e. do not store the raw data itself in the preprocessor object.\n\n    # TIPS\n    #   - IMPORTANT Default data flow: events[idx] -> split_X_y(evt) -> X, y\n    #   - When modifying data features or feature engineering: annotate tensor size as comments after each tensor operation to reduce dimension mismatches.\n\n    # <LLM: Write code to preprocess the data> \n\n    def __init__(self):\n        # <LLM: Define and initialize any stateful components here>\n        self.scaler = StandardScaler()\n\n    def make_loader_cfg(self) -> dict: \n        return {\n            \"dataset_builder\": \"utils.llm_io:EventDataset\",\n            \"dataset_kwargs\": {},\n\n            \"loader_class\": \"torch.utils.data:DataLoader\",    # or torch_geometric.loader:DataLoader\n            \"batch_size\": 64,\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": False,\n\n            # NO custom collate callables allowed. Choose one:\n            \"collate\": \"ragged_xy\",  # or \"identity\" or None\n\n            \"extra_loader_kwargs\": {},\n\n            # evaluation overrides (optional):\n            \"eval_overrides\": {\"shuffle\": False}\n        }\n\n    def fit(self, Xs):\n        # Xs: list of per-event X, each [N_hits_i, F_raw]\n        # Stack and fit scaler\n        X_all = np.vstack([x.numpy() for x in Xs])  # [total_hits, 4]\n        self.scaler.fit(X_all)\n        return self\n\n    def transform(self, X):\n        # X: one event array/tensor [N_hits, F_raw]\n        # Transform with scaler, then sort by z (index 2)\n        X_np = X.numpy()\n        X_scaled = self.scaler.transform(X_np)  # [N, 4]\n        sort_indices = np.argsort(X_scaled[:, 2])  # sort by z\n        X_sorted = X_scaled[sort_indices]  # [N, 4]\n        return torch.from_numpy(X_sorted)  # return [N,4] tensor\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# ---------- MODEL ARCHITECTURE ----------\nclass HitClassifier(nn.Module):\n    def __init__(self, example_batch_x):\n        super().__init__()\n        # IMPORTANT: Default harness input:\n        #   batch_x is ragged list[Tensor], one per event, each shaped [N_hits, F].\n        #   Infer F from example_batch_x (do NOT assume an int is passed).\n        self.feat_dim = example_batch_x[0].shape[1]  # F=4\n        self.d_model = 128\n        self.num_classes = 101  # 0 for noise, 1-100 for tracks\n        self.embed = nn.Linear(self.feat_dim, self.d_model)\n        encoder_layer = nn.TransformerEncoderLayer(d_model=self.d_model, nhead=8, dim_feedforward=512, dropout=0.1, batch_first=False)\n        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=4)\n        self.classifier = nn.Linear(self.d_model, self.num_classes)\n\n    def forward_logits(self, batch_x):\n        # Return list of [N, num_classes]\n        logits_list = []\n        for x in batch_x:\n            N = x.shape[0]\n            emd = self.embed(x)  # [N, d_model]\n            pos_emb = self._positional_encoding(N, self.d_model, x.device).unsqueeze(0)  # [1, N, d_model]\n            emd = emd.unsqueeze(0) + pos_emb  # [1, N, d_model]\n            out = self.transformer(emd)  # [1, N, d_model]\n            emd_out = out.squeeze(0)  # [N, d_model]\n            logits = self.classifier(emd_out)  # [N, num_classes]\n            logits_list.append(logits)\n        return logits_list\n\n    def _positional_encoding(self, seq_len, d_model, device):\n        position = torch.arange(seq_len, device=device).unsqueeze(1).float()\n        div_term = torch.exp(torch.arange(0, d_model, 2, device=device).float() * -(math.log(10000.0) / d_model))\n        pos_emb = torch.zeros(seq_len, d_model, device=device)\n        pos_emb[:, 0::2] = torch.sin(position * div_term)\n        pos_emb[:, 1::2] = torch.cos(position * div_term)\n        return pos_emb\n\n    def forward(self, batch_x):\n        # IMPORTANT Output contract:\n        #   forward(batch_x) must return predicted integer labels (dtype long/int64) with one label per hit (>0); predicted noise may be -1.\n        logits_list = self.forward_logits(batch_x)\n        preds_list = []\n        for logits in logits_list:\n            preds = torch.argmax(logits, dim=-1)\n            preds = torch.where(preds == 0, torch.tensor(-1, dtype=torch.long), preds)\n            preds_list.append(preds)\n        return preds_list\n\ndef make_model(example_batch_x):\n    return HitClassifier(example_batch_x)\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 20   # <LLM: adjust if you wish>   \ndef train_model(model, train_loader, val_loader, epochs):\n    # If your method is non-parametric, train_model may be a no-op that returns the unmodified model and empty metric lists, otherwise:\n\n    # REQUIREMENTS \n    #   Do NOT pass \"verbose=\" to any PyTorch scheduler (not supported in this image).\n    #   Must return trained_model, train_loss, val_loss, train_acc, val_acc\n    #   Implement early-stopping.\n    #   Use CUDA - torch.cuda.is_available()\n    #   Forward signature must match.\n\n    # <LLM: Write code to define training loop>\n    # <LLM: Implement early stopping if possible>\n    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-5)\n    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.8)\n    early_stopping_patience = 5\n    best_val_loss = float('inf')\n    patience_counter = 0\n    best_model_state = None\n\n    train_losses, val_losses, train_accs, val_accs = [], [], [], []\n\n    for epoch in range(epochs):\n        model.train()\n        total_train_loss = 0\n        total_train_correct = 0\n        total_train_hits = 0\n\n        for batch in train_loader:\n            view = normalise_batch(batch, device=device)\n            Xs, ys = view.batch_x, view.batch_y\n\n            optimizer.zero_grad()\n            logits_list = model.forward_logits(Xs)\n            loss = 0\n            for i, logits in enumerate(logits_list):\n                y = ys[i].to(device)\n                y_mapped = torch.clamp(y, 0, 100).long()  # clamp to 0-100\n                loss += F.cross_entropy(logits, y_mapped, reduction='sum')\n                preds = torch.argmax(logits, dim=-1)\n                total_train_correct += (preds == y_mapped).sum().item()\n                total_train_hits += y.numel()\n\n            loss.backward()\n            optimizer.step()\n            total_train_loss += loss.item()\n\n        avg_train_loss = total_train_loss / len(train_loader)\n        train_acc = total_train_correct / total_train_hits if total_train_hits > 0 else 0\n\n        model.eval()\n        total_val_loss = 0\n        total_val_correct = 0\n        total_val_hits = 0\n        with torch.no_grad():\n            for batch in val_loader:\n                view = normalise_batch(batch, device=device)\n                Xs, ys = view.batch_x, view.batch_y\n\n                logits_list = model.forward_logits(Xs)\n                for i, logits in enumerate(logits_list):\n                    y = ys[i].to(device)\n                    y_mapped = torch.clamp(y, 0, 100).long()\n                    total_val_loss += F.cross_entropy(logits, y_mapped, reduction='sum').item()\n                    preds = torch.argmax(logits, dim=-1)\n                    total_val_correct += (preds == y_mapped).sum().item()\n                    total_val_hits += y.numel()\n\n        avg_val_loss = total_val_loss / len(val_loader)\n        val_acc = total_val_correct / total_val_hits if total_val_hits > 0 else 0\n\n        train_losses.append(avg_train_loss)\n        val_losses.append(avg_val_loss)\n        train_accs.append(train_acc)\n        val_accs.append(val_acc)\n\n        print(f\"Epoch {epoch+1}/{epochs}: Train Loss={avg_train_loss:.4f}, Acc={train_acc:.4f}; Val Loss={avg_val_loss:.4f}, Acc={val_acc:.4f}\")\n\n        if avg_val_loss < best_val_loss:\n            best_val_loss = avg_val_loss\n            patience_counter = 0\n            best_model_state = model.state_dict()\n        else:\n            patience_counter += 1\n\n        if patience_counter >= early_stopping_patience:\n            print(\"Early stopping triggered.\")\n            break\n\n        scheduler.step()\n\n    if best_model_state is not None:\n        model.load_state_dict(best_model_state)\n\n    return model, train_losses, val_losses, train_accs, val_accs\n\n# IMPORTANT: DO NOT execute the pipeline here – the harness will do that.\n# <end code template>",
+    "reasoning": "",
+    "Outer_attempt": 2
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-12-18T11:21:14Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-12-18T11:21:14Z",
+        "metrics": {
+          ".\\outputs\\12-18\\TRACKFORMERS\\Q1\\script_x-ai_grok-code-fast-1_1221_2.py": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 223,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 223,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2025-12-18T11:21:27Z",
+    "passed": true,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/12-18/TRACKFORMERS/Q1/script_x-ai_grok-code-fast-1_1221_2.py\nargv2=--dryrun\n",
+      "stderr": "+ exec\n+ PY=outputs/12-18/TRACKFORMERS/Q1/script_x-ai_grok-code-fast-1_1221_2.py\n+ shift\n++ echo --dryrun\n++ tr -d '\\r\\n'\n++ xargs\n+ DRY=--dryrun\n+ [[ outputs/12-18/TRACKFORMERS/Q1/script_x-ai_grok-code-fast-1_1221_2.py == \\/\\u\\s\\r\\/\\l\\o\\c\\a\\l\\/\\b\\i\\n\\/\\t\\r\\a\\i\\n\\.\\s\\h ]]\n+ [[ --dryrun =~ (--dryrun|--dry-run) ]]\n+ TIMEOUT=3600\n+ : 0\n+ : 0\n+ ulimit -t 3600\n+ ((  MEMORY_LIMIT_GB > 0  ))\n+ ((  PIDS_LIMIT > 0  ))\n+ timeout --signal=KILL 3600s python outputs/12-18/TRACKFORMERS/Q1/script_x-ai_grok-code-fast-1_1221_2.py --dryrun\nmkdir -p failed for path /home/sandbox/.config/matplotlib: [Errno 30] Read-only file system: '/home/sandbox/.config'\nMatplotlib created a temporary cache directory at /tmp/matplotlib-e56evbe3 because there was an issue with the default path (/home/sandbox/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.\n/opt/venv/lib/python3.12/site-packages/torch/nn/modules/transformer.py:385: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.self_attn.batch_first was not True(use batch_first for better inference performance)\n  warnings.warn(\nEpoch 1/1: Train Loss=51905.7148, Acc=0.0093; Val Loss=11702.9449, Acc=0.0155\n+ python_rc=0\n+ [[ 0 -ne 0 ]]\n+ [[ --dryrun =~ (--dryrun|--dry-run) ]]\n+ echo 'Dry-run: skipping artefact manifest'\nDry-run: skipping artefact manifest\n+ exit 0\n"
+    },
+    "return_code": 0
+  }
+}

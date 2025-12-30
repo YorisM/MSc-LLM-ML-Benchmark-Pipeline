@@ -1,0 +1,71 @@
+{
+  "LLMGeneration": {
+    "model": "openai/gpt-5.1-codex-max",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 3559,
+    "prompt_chars": 14633,
+    "response_tokens": 4463,
+    "response_chars": 7748,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.04907875,
+    "generation_ms": 95730,
+    "code": "# ---------- IMPORTS ----------\nimport torch\nimport torch.nn.functional as F\nfrom torch import nn, optim\n\n# ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    # Must implement:\n    #   - fit() \n    #   - transform()\n\n    # DATA SPECIFICS\n    # Total flat length per event (X_train & X_val): 92\n    # Index  0 :  missing-ET magnitude  (E_T_miss)\n    # Index  1 :  missing-ET azimuth    (phi_Et_miss)\n    # Indices  2-6  : object 1  ->  obj_1, E_1, p_T1, eta_1, phi_1\n    # Indices  7-11 : object 2  ->  obj_2, E_2 , p_T_2 , eta_2 , phi_2\n    # ...\n    # Indices 87-91 : object 18 ->  obj_18, E_18 , p_T_18 , eta_18 , phi_18\n    # Global features       = 2\n    # Per-object slice size = 5\n    # Max objects encoded   = 18\n\n    def __init__(self):\n        # Store normalization statistics\n        self.mean = None\n        self.std = None\n\n    def make_loader_cfg(self) -> dict:\n        # LoaderSpec-first: evaluator rebuilds loaders from this.\n        return {\n            \"dataset_builder\": \"llm_script:FourTopsDataset\",   # default harness dataset\n            \"dataset_kwargs\": {},\n\n            \"loader_class\": \"torch.utils.data:DataLoader\",     # or torch_geometric.loader:DataLoader\n            \"batch_size\": 512,\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": False,\n\n            # NO custom collate callables allowed. Choose one: \n            \"collate\": None, # (or \"ragged_xy\" or \"identity\" - If loader_class is torch_geometric.loader:DataLoader, set \"collate\": None.)\n\n            \"extra_loader_kwargs\": {},\n\n            # evaluation overrides (optional):\n            \"eval_overrides\": {\"shuffle\": False},\n        }\n\n    def fit(self, X, y=None):\n        # Compute mean and std for standardization\n        Xf = X.float()\n        self.mean = Xf.mean(dim=0)  # (92,)\n        self.std = Xf.std(dim=0) + 1e-6  # avoid div by zero\n        return self\n\n    def transform(self, X):\n        # Standardize using stored mean and std\n        Xf = X.float()\n        return (Xf - self.mean) / self.std  # (N,92)\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# ---------- MODEL DEFINITION ----------\nclass BinaryClassifier(nn.Module):\n    def __init__(self, sample_object):\n        super().__init__()\n        # Object embedding\n        self.obj_mlp = nn.Sequential(\n            nn.Linear(5, 64),\n            nn.GELU(),\n            nn.Linear(64, 64),\n            nn.GELU(),\n        )\n        encoder_layer = nn.TransformerEncoderLayer(\n            d_model=64, nhead=4, dim_feedforward=128, dropout=0.1, batch_first=True\n        )\n        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=2)\n        self.attn = nn.Linear(64, 1)\n        # Global / summary features\n        self.global_mlp = nn.Sequential(\n            nn.Linear(5, 64),\n            nn.GELU(),\n            nn.Linear(64, 64),\n            nn.GELU(),\n        )\n        # Final classifier\n        self.classifier = nn.Sequential(\n            nn.Linear(64 * 3 + 64, 128),\n            nn.GELU(),\n            nn.Dropout(0.2),\n            nn.Linear(128, 64),\n            nn.GELU(),\n            nn.Dropout(0.2),\n            nn.Linear(64, 1),\n        )\n\n    def forward(self, batch_x):\n        # batch_x: (B,92)\n        B = batch_x.shape[0]\n        global_feats = batch_x[:, :2]  # (B,2)\n        obj_feats = batch_x[:, 2:]  # (B,90)\n        obj_feats = obj_feats.view(B, 18, 5)  # (B,18,5)\n        obj_ids = obj_feats[..., 0]  # (B,18)\n        # Mask: padded objects have all zeros; use obj_id==0\n        mask = (obj_ids != 0)  # (B,18) bool\n        mask_float = mask.unsqueeze(-1).float()  # (B,18,1)\n        obj_feats = obj_feats * mask_float  # (B,18,5)\n        # Embed objects\n        obj_emb = self.obj_mlp(obj_feats)  # (B,18,64)\n        # Transformer encoder with padding mask (True for pad)\n        pad_mask = ~mask  # (B,18)\n        obj_enc = self.transformer(obj_emb, src_key_padding_mask=pad_mask)  # (B,18,64)\n        obj_enc = obj_enc * mask_float  # (B,18,64)\n        # Pooling\n        sum_pool = obj_enc.sum(dim=1)  # (B,64)\n        denom = mask_float.sum(dim=1).clamp(min=1e-6)  # (B,1)\n        mean_pool = sum_pool / denom  # (B,64)\n        att_scores = self.attn(obj_enc).squeeze(-1)  # (B,18)\n        att_scores = att_scores.masked_fill(~mask, -1e9)  # mask pads\n        att_weights = torch.softmax(att_scores, dim=1)  # (B,18)\n        att_weights = att_weights.unsqueeze(-1)  # (B,18,1)\n        att_pool = (obj_enc * att_weights).sum(dim=1)  # (B,64)\n        # Additional global summary features\n        pT = obj_feats[:, :, 2]  # (B,18)\n        total_pT = pT.sum(dim=1, keepdim=True)  # (B,1)\n        max_pT, _ = pT.max(dim=1, keepdim=True)  # (B,1)\n        num_obj = mask_float.sum(dim=1)  # (B,1)\n        glob_input = torch.cat([global_feats, total_pT, max_pT, num_obj], dim=1)  # (B,5)\n        glob_emb = self.global_mlp(glob_input)  # (B,64)\n        # Combine\n        combined = torch.cat([sum_pool, mean_pool, att_pool, glob_emb], dim=1)  # (B,256)\n        logits = self.classifier(combined).squeeze(-1)  # (B,)\n        return logits\n\ndef make_model(example_object):\n    return BinaryClassifier(example_object)\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 12\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    optimizer = optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)\n    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=1)\n    criterion = nn.BCEWithLogitsLoss()\n    best_val_loss = float('inf')\n    patience = 3\n    patience_counter = 0\n    train_losses = []\n    val_losses = []\n    train_accs = []\n    val_accs = []\n    for epoch in range(epochs):\n        model.train()\n        total_loss = 0.0\n        correct = 0\n        total = 0\n        for batch in train_loader:\n            bx, by = batch\n            bx = bx.to(device)\n            by = by.float().to(device)\n            optimizer.zero_grad()\n            logits = model(bx)  # (B,)\n            loss = criterion(logits, by)\n            loss.backward()\n            optimizer.step()\n            total_loss += loss.item() * bx.size(0)\n            preds = (torch.sigmoid(logits) > 0.5).long()\n            correct += (preds.cpu() == by.cpu().long()).sum().item()\n            total += bx.size(0)\n        avg_loss = total_loss / total\n        avg_acc = correct / total\n        train_losses.append(avg_loss)\n        train_accs.append(avg_acc)\n        # Validation\n        model.eval()\n        val_total_loss = 0.0\n        val_correct = 0\n        val_total = 0\n        with torch.no_grad():\n            for batch in val_loader:\n                bx, by = batch\n                bx = bx.to(device)\n                by = by.float().to(device)\n                logits = model(bx)\n                loss = criterion(logits, by)\n                val_total_loss += loss.item() * bx.size(0)\n                preds = (torch.sigmoid(logits) > 0.5).long()\n                val_correct += (preds.cpu() == by.cpu().long()).sum().item()\n                val_total += bx.size(0)\n        val_loss = val_total_loss / val_total\n        val_acc = val_correct / val_total\n        val_losses.append(val_loss)\n        val_accs.append(val_acc)\n        scheduler.step(val_loss)\n        # Early stopping\n        if val_loss < best_val_loss - 1e-4:\n            best_val_loss = val_loss\n            best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}\n            patience_counter = 0\n        else:\n            patience_counter += 1\n            if patience_counter >= patience:\n                break\n    # Load best state if saved\n    if 'best_state' in locals():\n        model.load_state_dict(best_state)\n    return model, train_losses, val_losses, train_accs, val_accs",
+    "reasoning": "",
+    "Outer_attempt": 1
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-12-23T13:00:45Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-12-23T13:00:45Z",
+        "metrics": {
+          ".\\outputs\\12-23\\FOURTOPS\\Q2\\script_openai_gpt-5.1-codex-max_1400_1.py": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 242,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 242,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2025-12-23T13:01:14Z",
+    "passed": true,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/12-23/FOURTOPS/Q2/script_openai_gpt-5.1-codex-max_1400_1.py\nargv2=--dryrun\n",
+      "stderr": "+ exec\n+ PY=outputs/12-23/FOURTOPS/Q2/script_openai_gpt-5.1-codex-max_1400_1.py\n+ shift\n++ echo --dryrun\n++ tr -d '\\r\\n'\n++ xargs\n+ DRY=--dryrun\n+ [[ outputs/12-23/FOURTOPS/Q2/script_openai_gpt-5.1-codex-max_1400_1.py == \\/\\u\\s\\r\\/\\l\\o\\c\\a\\l\\/\\b\\i\\n\\/\\t\\r\\a\\i\\n\\.\\s\\h ]]\n+ [[ --dryrun =~ (--dryrun|--dry-run) ]]\n+ TIMEOUT=3600\n+ : 0\n+ : 0\n+ ulimit -t 3600\n+ ((  MEMORY_LIMIT_GB > 0  ))\n+ ((  PIDS_LIMIT > 0  ))\n+ timeout --signal=KILL 3600s python outputs/12-23/FOURTOPS/Q2/script_openai_gpt-5.1-codex-max_1400_1.py --dryrun\nmkdir -p failed for path /home/sandbox/.config/matplotlib: [Errno 30] Read-only file system: '/home/sandbox/.config'\nMatplotlib created a temporary cache directory at /tmp/matplotlib-g9zg8n3o because there was an issue with the default path (/home/sandbox/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.\n/opt/venv/lib/python3.12/site-packages/torch/nn/modules/transformer.py:508: UserWarning: The PyTorch API of nested tensors is in prototype stage and will change in the near future. We recommend specifying layout=torch.jagged when constructing a nested tensor, as this layout receives active development, has better operator coverage, and works with torch.compile. (Triggered internally at /pytorch/aten/src/ATen/NestedTensorImpl.cpp:178.)\n  output = torch._nested_tensor_from_mask(\n+ python_rc=0\n+ [[ 0 -ne 0 ]]\n+ [[ --dryrun =~ (--dryrun|--dry-run) ]]\n+ echo 'Dry-run: skipping artefact manifest'\nDry-run: skipping artefact manifest\n+ exit 0\n"
+    },
+    "return_code": 0
+  }
+}

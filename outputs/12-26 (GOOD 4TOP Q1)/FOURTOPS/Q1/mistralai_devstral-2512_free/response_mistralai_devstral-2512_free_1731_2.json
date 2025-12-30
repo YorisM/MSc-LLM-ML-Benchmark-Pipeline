@@ -1,0 +1,71 @@
+{
+  "LLMGeneration": {
+    "model": "mistralai/devstral-2512:free",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 4015,
+    "prompt_chars": 15289,
+    "response_tokens": 1880,
+    "response_chars": 7297,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0,
+    "generation_ms": 27678,
+    "code": "# ---------- IMPORTS ----------\nfrom torch.nn import functional as F\nfrom torch.optim import Adam\nfrom torch.optim.lr_scheduler import ReduceLROnPlateau\nfrom sklearn.preprocessing import StandardScaler\nimport numpy as np\n\n# ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.scaler = StandardScaler()\n        self.mask_value = -999.0  # Special value to mark padding\n\n    def make_loader_cfg(self) -> dict:\n        return {\n            \"dataset_builder\": \"llm_script:FourTopsDataset\",\n            \"dataset_kwargs\": {},\n            \"loader_class\": \"torch.utils.data:DataLoader\",\n            \"batch_size\": 1024,\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": True,\n            \"collate\": None,\n            \"extra_loader_kwargs\": {},\n            \"eval_overrides\": {\"shuffle\": False, \"batch_size\": 2048},\n        }\n\n    def fit(self, X, y=None):\n        # Replace padding zeros with mask_value for scaling\n        X_masked = X.clone()\n        X_masked[X_masked == 0] = self.mask_value\n\n        # Scale all features except object identifiers (which are at positions 2,7,12,...)\n        # We'll scale everything and then restore the object identifiers\n        obj_mask = torch.zeros_like(X_masked, dtype=torch.bool)\n        for i in range(18):\n            obj_mask[:, 2 + i*5] = True\n\n        # Save object identifiers\n        obj_ids = X_masked[obj_mask].reshape(-1, 18)\n\n        # Scale all other features\n        non_obj_features = X_masked[~obj_mask].reshape(X.shape[0], -1)\n        self.scaler.fit(non_obj_features.numpy())\n\n        return self\n\n    def transform(self, X):\n        X_masked = X.clone()\n        X_masked[X_masked == 0] = self.mask_value\n\n        # Create mask for object identifiers\n        obj_mask = torch.zeros_like(X_masked, dtype=torch.bool)\n        for i in range(18):\n            obj_mask[:, 2 + i*5] = True\n\n        # Save and restore object identifiers\n        obj_ids = X_masked[obj_mask].reshape(-1, 18)\n\n        # Scale non-object features\n        non_obj_features = X_masked[~obj_mask].reshape(X.shape[0], -1)\n        scaled_features = torch.from_numpy(self.scaler.transform(non_obj_features.numpy())).float()\n\n        # Reconstruct the tensor\n        X_scaled = torch.full_like(X_masked, self.mask_value)\n        X_scaled[~obj_mask] = scaled_features.flatten()\n        X_scaled[obj_mask] = obj_ids.flatten()\n\n        # Convert mask_value back to 0 for padding\n        X_scaled[X_scaled == self.mask_value] = 0\n\n        return X_scaled\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# ---------- MODEL DEFINITION ----------\nclass BinaryClassifier(nn.Module):\n    def __init__(self, sample_object):\n        super().__init__()\n\n        # Determine input dimensions from sample\n        if isinstance(sample_object, torch.Tensor):\n            input_dim = sample_object.shape[-1]\n        else:\n            input_dim = 92  # Fallback\n\n        # Feature extraction layers\n        self.feature_extractor = nn.Sequential(\n            nn.Linear(input_dim, 512),\n            nn.BatchNorm1d(512),\n            nn.ReLU(),\n            nn.Dropout(0.3),\n            nn.Linear(512, 256),\n            nn.BatchNorm1d(256),\n            nn.ReLU(),\n            nn.Dropout(0.3),\n            nn.Linear(256, 128),\n            nn.BatchNorm1d(128),\n            nn.ReLU()\n        )\n\n        # Attention mechanism for object features\n        self.attention = nn.Sequential(\n            nn.Linear(128, 64),\n            nn.Tanh(),\n            nn.Linear(64, 1),\n            nn.Softmax(dim=1)\n        )\n\n        # Classifier head\n        self.classifier = nn.Sequential(\n            nn.Linear(128, 64),\n            nn.BatchNorm1d(64),\n            nn.ReLU(),\n            nn.Dropout(0.2),\n            nn.Linear(64, 1)\n        )\n\n    def forward(self, batch_x):\n        # batch_x shape: [batch_size, 92]\n        x = self.feature_extractor(batch_x)  # [batch_size, 128]\n\n        # Apply attention to get weighted features\n        attention_weights = self.attention(x)  # [batch_size, 1]\n        x = x * attention_weights  # [batch_size, 128]\n\n        # Final classification\n        logits = self.classifier(x).squeeze(-1)  # [batch_size]\n        return logits\n\ndef make_model(example_object):\n    return BinaryClassifier(example_object)\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 50\n\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    optimizer = Adam(model.parameters(), lr=0.001, weight_decay=1e-5)\n    scheduler = ReduceLROnPlateau(optimizer, 'max', patience=5, factor=0.5, verbose=True)\n    criterion = nn.BCEWithLogitsLoss()\n\n    best_val_auc = 0\n    best_model = None\n\n    train_losses = []\n    val_losses = []\n    train_accs = []\n    val_accs = []\n\n    for epoch in range(epochs):\n        model.train()\n        epoch_train_loss = 0\n        correct_train = 0\n        total_train = 0\n\n        for batch in train_loader:\n            view = normalise_batch(batch, device=device)\n            xb, yb = view.batch_x, view.batch_y\n\n            optimizer.zero_grad()\n            logits = model(xb)\n            loss = criterion(logits, yb.float())\n\n            loss.backward()\n            optimizer.step()\n\n            epoch_train_loss += loss.item() * xb.size(0)\n            preds = (logits > 0).float()\n            correct_train += (preds == yb).sum().item()\n            total_train += yb.size(0)\n\n        # Validation\n        model.eval()\n        epoch_val_loss = 0\n        correct_val = 0\n        total_val = 0\n        all_val_preds = []\n        all_val_labels = []\n\n        with torch.no_grad():\n            for batch in val_loader:\n                view = normalise_batch(batch, device=device)\n                xb, yb = view.batch_x, view.batch_y\n\n                logits = model(xb)\n                loss = criterion(logits, yb.float())\n\n                epoch_val_loss += loss.item() * xb.size(0)\n                preds = (logits > 0).float()\n                correct_val += (preds == yb).sum().item()\n                total_val += yb.size(0)\n\n                all_val_preds.extend(logits.cpu().numpy())\n                all_val_labels.extend(yb.cpu().numpy())\n\n        # Calculate metrics\n        train_loss = epoch_train_loss / total_train\n        val_loss = epoch_val_loss / total_val\n        train_acc = correct_train / total_train\n        val_acc = correct_val / total_val\n\n        # Calculate AUC\n        from sklearn.metrics import roc_auc_score\n        val_auc = roc_auc_score(all_val_labels, all_val_preds)\n\n        train_losses.append(train_loss)\n        val_losses.append(val_loss)\n        train_accs.append(train_acc)\n        val_accs.append(val_acc)\n\n        # Early stopping and model saving\n        if val_auc > best_val_auc:\n            best_val_auc = val_auc\n            best_model = model.state_dict()\n            torch.save(best_model, 'best_model.pth')\n\n        scheduler.step(val_auc)\n\n        print(f\"Epoch {epoch+1}/{epochs} - Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}, \"\n              f\"Train Acc: {train_acc:.4f}, Val Acc: {val_acc:.4f}, Val AUC: {val_auc:.4f}\")\n\n    # Load best model\n    if best_model is not None:\n        model.load_state_dict(best_model)\n\n    return model, train_losses, val_losses, train_accs, val_accs",
+    "reasoning": "",
+    "Outer_attempt": 2
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-12-26T16:31:48Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-12-26T16:31:47Z",
+        "metrics": {
+          ".\\outputs\\12-26\\FOURTOPS\\Q1\\script_mistralai_devstral-2512_free_1731_2.py": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 241,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 241,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2025-12-26T16:32:22Z",
+    "passed": true,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/12-26/FOURTOPS/Q1/script_mistralai_devstral-2512_free_1731_2.py\nargv2=--dryrun\nEpoch 1/1 - Train Loss: 0.7275, Val Loss: 0.6788, Train Acc: 0.4925, Val Acc: 0.5500, Val AUC: 0.6465\nDry-run: skipping artefact manifest\n",
+      "stderr": "mkdir -p failed for path /home/sandbox/.config/matplotlib: [Errno 30] Read-only file system: '/home/sandbox/.config'\nMatplotlib created a temporary cache directory at /tmp/matplotlib-fphlu8bw because there was an issue with the default path (/home/sandbox/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.\n/opt/venv/lib/python3.12/site-packages/torch/optim/lr_scheduler.py:62: UserWarning: The verbose parameter is deprecated. Please use get_last_lr() to access the learning rate.\n  warnings.warn(\n"
+    },
+    "return_code": 0
+  }
+}

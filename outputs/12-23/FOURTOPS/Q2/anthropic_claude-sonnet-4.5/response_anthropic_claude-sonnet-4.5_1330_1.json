@@ -1,0 +1,71 @@
+{
+  "LLMGeneration": {
+    "model": "anthropic/claude-sonnet-4.5",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 4331,
+    "prompt_chars": 14633,
+    "response_tokens": 14774,
+    "response_chars": 7588,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.234603,
+    "generation_ms": 153742,
+    "code": "# ---------- IMPORTS ----------\nfrom torch.optim import AdamW\nfrom torch.optim.lr_scheduler import CosineAnnealingWarmRestarts\nfrom sklearn.metrics import roc_auc_score\nimport copy\n\n# ----------- PREPROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.global_mean = None\n        self.global_std = None\n        self.obj_mean = None\n        self.obj_std = None\n\n    def make_loader_cfg(self) -> dict:\n        return {\n            \"dataset_builder\": \"llm_script:FourTopsDataset\",\n            \"dataset_kwargs\": {},\n            \"loader_class\": \"torch.utils.data:DataLoader\",\n            \"batch_size\": 256,\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": True,\n            \"collate\": None,\n            \"extra_loader_kwargs\": {},\n            \"eval_overrides\": {\"shuffle\": False},\n        }\n\n    def fit(self, X, y=None):\n        global_features = X[:, :2]\n        self.global_mean = global_features.mean(dim=0)\n        self.global_std = global_features.std(dim=0) + 1e-8\n\n        obj_features = X[:, 2:].reshape(-1, 18, 5)\n        mask = obj_features[:, :, 0] != 0\n\n        valid_objs = obj_features[mask]\n        if len(valid_objs) > 0:\n            self.obj_mean = valid_objs.mean(dim=0)\n            self.obj_std = valid_objs.std(dim=0) + 1e-8\n        else:\n            self.obj_mean = torch.zeros(5)\n            self.obj_std = torch.ones(5)\n\n        return self\n\n    def transform(self, X):\n        N = X.shape[0]\n\n        global_norm = (X[:, :2] - self.global_mean) / self.global_std\n\n        obj_features = X[:, 2:].reshape(N, 18, 5)\n        mask = obj_features[:, :, 0] != 0\n\n        obj_norm = (obj_features - self.obj_mean) / self.obj_std\n        obj_norm[~mask] = 0\n\n        result = torch.cat([global_norm, obj_norm.reshape(N, -1)], dim=1)\n        return result\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# ---------- MODEL DEFINITION ----------\nclass BinaryClassifier(nn.Module):\n    def __init__(self, sample_object):\n        super().__init__()\n\n        self.obj_embedding = nn.Sequential(\n            nn.Linear(5, 128),\n            nn.LayerNorm(128),\n            nn.ReLU(),\n            nn.Dropout(0.1)\n        )\n\n        self.global_embedding = nn.Sequential(\n            nn.Linear(2, 128),\n            nn.LayerNorm(128),\n            nn.ReLU()\n        )\n\n        encoder_layer = nn.TransformerEncoderLayer(\n            d_model=128,\n            nhead=8,\n            dim_feedforward=512,\n            dropout=0.1,\n            batch_first=True\n        )\n        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=6)\n\n        self.classifier = nn.Sequential(\n            nn.Linear(384, 256),\n            nn.LayerNorm(256),\n            nn.ReLU(),\n            nn.Dropout(0.4),\n            nn.Linear(256, 128),\n            nn.LayerNorm(128),\n            nn.ReLU(),\n            nn.Dropout(0.4),\n            nn.Linear(128, 1)\n        )\n\n    def forward(self, batch_x):\n        B = batch_x.shape[0]\n\n        global_features = batch_x[:, :2]\n        obj_features = batch_x[:, 2:].reshape(B, 18, 5)\n\n        mask = obj_features[:, :, 0] == 0\n\n        obj_emb = self.obj_embedding(obj_features)\n        global_emb = self.global_embedding(global_features)\n\n        obj_transformed = self.transformer(obj_emb, src_key_padding_mask=mask)\n\n        mask_expanded = (~mask).unsqueeze(-1).float()\n        mean_pool = (obj_transformed * mask_expanded).sum(dim=1) / (mask_expanded.sum(dim=1) + 1e-8)\n\n        max_pool = obj_transformed.masked_fill(mask.unsqueeze(-1), float('-inf')).max(dim=1)[0]\n        max_pool = torch.where(torch.isinf(max_pool), torch.zeros_like(max_pool), max_pool)\n\n        combined = torch.cat([global_emb, mean_pool, max_pool], dim=1)\n        output = self.classifier(combined)\n\n        return output\n\ndef make_model(example_object):\n    return BinaryClassifier(example_object)\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 50\n\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    device = torch.device(\"cuda\" if torch.cuda.is_available() else \"cpu\")\n    model = model.to(device)\n\n    optimizer = AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)\n    scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=10, T_mult=2, eta_min=1e-6)\n    criterion = nn.BCEWithLogitsLoss()\n\n    train_loss_history = []\n    val_loss_history = []\n    train_acc_history = []\n    val_acc_history = []\n\n    best_val_auc = 0.0\n    best_model = None\n    patience = 15\n    no_improve = 0\n\n    for epoch in range(epochs):\n        model.train()\n        train_loss = 0.0\n        train_correct = 0\n        train_total = 0\n\n        for batch_x, batch_y in train_loader:\n            batch_x = batch_x.to(device)\n            batch_y = batch_y.to(device).float()\n\n            optimizer.zero_grad()\n            outputs = model(batch_x).squeeze(-1)\n            loss = criterion(outputs, batch_y)\n            loss.backward()\n            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)\n            optimizer.step()\n\n            train_loss += loss.item() * batch_x.size(0)\n            preds = (torch.sigmoid(outputs) > 0.5).long()\n            train_correct += (preds == batch_y.long()).sum().item()\n            train_total += batch_x.size(0)\n\n        train_loss /= train_total\n        train_acc = train_correct / train_total\n\n        model.eval()\n        val_loss = 0.0\n        val_correct = 0\n        val_total = 0\n        all_probs = []\n        all_labels = []\n\n        with torch.no_grad():\n            for batch_x, batch_y in val_loader:\n                batch_x = batch_x.to(device)\n                batch_y = batch_y.to(device).float()\n\n                outputs = model(batch_x).squeeze(-1)\n                loss = criterion(outputs, batch_y)\n\n                val_loss += loss.item() * batch_x.size(0)\n                probs = torch.sigmoid(outputs)\n                preds = (probs > 0.5).long()\n                val_correct += (preds == batch_y.long()).sum().item()\n                val_total += batch_x.size(0)\n\n                all_probs.append(probs.cpu())\n                all_labels.append(batch_y.cpu())\n\n        val_loss /= val_total\n        val_acc = val_correct / val_total\n\n        all_probs = torch.cat(all_probs).numpy()\n        all_labels = torch.cat(all_labels).numpy()\n        val_auc = roc_auc_score(all_labels, all_probs)\n\n        train_loss_history.append(train_loss)\n        val_loss_history.append(val_loss)\n        train_acc_history.append(train_acc)\n        val_acc_history.append(val_acc)\n\n        scheduler.step()\n\n        print(f\"Epoch {epoch+1}/{epochs}: TrLoss={train_loss:.4f}, TrAcc={train_acc:.4f}, \"\n              f\"ValLoss={val_loss:.4f}, ValAcc={val_acc:.4f}, ValAUC={val_auc:.4f}\")\n\n        if val_auc > best_val_auc:\n            best_val_auc = val_auc\n            best_model = copy.deepcopy(model.state_dict())\n            no_improve = 0\n        else:\n            no_improve += 1\n            if no_improve >= patience:\n                print(f\"Early stop at epoch {epoch+1}, best AUC={best_val_auc:.4f}\")\n                break\n\n    if best_model is not None:\n        model.load_state_dict(best_model)\n\n    return model, train_loss_history, val_loss_history, train_acc_history, val_acc_history",
+    "reasoning": "",
+    "Outer_attempt": 1
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-12-23T12:30:43Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-12-23T12:30:43Z",
+        "metrics": {
+          ".\\outputs\\12-23\\FOURTOPS\\Q2\\script_anthropic_claude-sonnet-4.5_1330_1.py": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 262,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 262,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2025-12-23T12:31:14Z",
+    "passed": true,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/12-23/FOURTOPS/Q2/script_anthropic_claude-sonnet-4.5_1330_1.py\nargv2=--dryrun\n",
+      "stderr": "+ exec\n+ PY=outputs/12-23/FOURTOPS/Q2/script_anthropic_claude-sonnet-4.5_1330_1.py\n+ shift\n++ echo --dryrun\n++ tr -d '\\r\\n'\n++ xargs\n+ DRY=--dryrun\n+ [[ outputs/12-23/FOURTOPS/Q2/script_anthropic_claude-sonnet-4.5_1330_1.py == \\/\\u\\s\\r\\/\\l\\o\\c\\a\\l\\/\\b\\i\\n\\/\\t\\r\\a\\i\\n\\.\\s\\h ]]\n+ [[ --dryrun =~ (--dryrun|--dry-run) ]]\n+ TIMEOUT=3600\n+ : 0\n+ : 0\n+ ulimit -t 3600\n+ ((  MEMORY_LIMIT_GB > 0  ))\n+ ((  PIDS_LIMIT > 0  ))\n+ timeout --signal=KILL 3600s python outputs/12-23/FOURTOPS/Q2/script_anthropic_claude-sonnet-4.5_1330_1.py --dryrun\nmkdir -p failed for path /home/sandbox/.config/matplotlib: [Errno 30] Read-only file system: '/home/sandbox/.config'\nMatplotlib created a temporary cache directory at /tmp/matplotlib-ut5e7enz because there was an issue with the default path (/home/sandbox/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.\n/opt/venv/lib/python3.12/site-packages/torch/nn/modules/transformer.py:508: UserWarning: The PyTorch API of nested tensors is in prototype stage and will change in the near future. We recommend specifying layout=torch.jagged when constructing a nested tensor, as this layout receives active development, has better operator coverage, and works with torch.compile. (Triggered internally at /pytorch/aten/src/ATen/NestedTensorImpl.cpp:178.)\n  output = torch._nested_tensor_from_mask(\nEpoch 1/1: TrLoss=0.7188, TrAcc=0.4825, ValLoss=0.7464, ValAcc=0.4500, ValAUC=0.5657\n+ python_rc=0\n+ [[ 0 -ne 0 ]]\n+ [[ --dryrun =~ (--dryrun|--dry-run) ]]\n+ echo 'Dry-run: skipping artefact manifest'\nDry-run: skipping artefact manifest\n+ exit 0\n"
+    },
+    "return_code": 0
+  }
+}

@@ -1,0 +1,89 @@
+{
+  "LLMGeneration": {
+    "model": "x-ai/grok-code-fast-1",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 4037,
+    "prompt_chars": 15845,
+    "response_tokens": 5369,
+    "response_chars": 7736,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.00813514,
+    "generation_ms": 42830,
+    "code": "# ---------- IMPORTS ----------\nimport torch\nimport torch.nn as nn\nimport torch.nn.functional as F\nfrom torch_geometric.nn import GIN, global_mean_pool\nfrom torch_geometric.data import Data\nfrom torch.utils.data import Dataset as TorchDataset\nfrom sklearn.preprocessing import StandardScaler\n\n#  -------- CUSTOM DATASET  --------\nclass CustomDataset(TorchDataset):\n    def __init__(self, events, pre, train: bool = True, **kwargs):\n        X, y = events\n        self.X = pre.transform(X)  # list of Data\n        self.y = y\n\n    def __len__(self):\n        return len(self.X)\n\n    def __getitem__(self, idx):\n        data = self.X[idx]\n        data.y = self.y[idx]  # set label in Data\n        return data\n\n# ----------- PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.scaler = StandardScaler()\n\n    def fit(self, X, y=None):\n        # Fit scaler on flattened features, but for now, skip global scaling\n        valid_nodes = []\n        for row in X:\n            for i in range(18):\n                start = 2 + i * 5\n                obj_id = row[start].item()\n                if obj_id != 0:\n                    E, pT, eta, phi = row[start+1:start+5].tolist()\n                    valid_nodes.append([E, pT, eta, phi])\n        if valid_nodes:\n            self.scaler.fit(valid_nodes)\n        return self\n\n    def make_loader_cfg(self) -> dict:\n        return {\n            \"dataset_builder\": \"llm_script:CustomDataset\",\n            \"dataset_kwargs\": {},\n            \"loader_class\": \"torch_geometric.loader:DataLoader\",\n            \"batch_size\": 512,\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": False,\n            \"collate\": None,\n            \"extra_loader_kwargs\": {},\n            \"eval_overrides\": {\"shuffle\": False},\n        }\n\n    def transform(self, X):\n        data_list = []\n        for row in X:\n            global_et_miss = row[0].item()\n            global_phi_miss = row[1].item()\n            nodes = []\n            for i in range(18):\n                start = 2 + i * 5\n                obj_id = row[start].item()\n                if obj_id != 0:\n                    E, pT, eta, phi = row[start+1:start+5].tolist()\n                    nodes.append([E, pT, eta, phi])\n            if not nodes:\n                # Empty graph, skip or handle\n                continue\n            node_features = torch.tensor(nodes, dtype=torch.float32)\n            node_features = torch.tensor(self.scaler.transform(node_features.numpy()), dtype=torch.float32)\n            num_nodes = node_features.shape[0]\n            edge_list = []\n            edge_attr = []\n            pi = 3.1415926535\n            for i in range(num_nodes):\n                for j in range(i+1, num_nodes):\n                    # Compute px, py, pz\n                    pxi, pyi, pzi = pT * torch.cos(phi), pT * torch.sin(phi), pT * torch.sinh(eta)\n                    pxi, pyi, pzi = node_features[i,1]*torch.cos(node_features[i,3]), node_features[i,1]*torch.sin(node_features[i,3]), node_features[i,1]*torch.sinh(node_features[i,2])\n                    pxj, pyj, pzj = node_features[j,1]*torch.cos(node_features[j,3]), node_features[j,1]*torch.sin(node_features[j,3]), node_features[j,1]*torch.sinh(node_features[j,2])\n                    Ei, Ej = node_features[i,0], node_features[j,0]\n                    m_ij_sq = (Ei + Ej)**2 - (pxi + pxj)**2 - (pyi + pyj)**2 - (pzi + pzj)**2\n                    m_ij = torch.sqrt(torch.clamp(m_ij_sq, min=0))\n                    dphi = torch.atan2(torch.sin(node_features[i,3] - node_features[j,3]), torch.cos(node_features[i,3] - node_features[j,3]))\n                    dR = torch.sqrt((node_features[i,2] - node_features[j,2]) ** 2 + dphi ** 2)\n                    edge_list.append([i, j])\n                    edge_list.append([j, i])\n                    edge_attr.append([dR, m_ij])\n                    edge_attr.append([dR, m_ij])\n            edge_index = torch.tensor(edge_list, dtype=torch.long).t() if edge_list else torch.empty(2,0, dtype=torch.long)\n            edge_attr = torch.tensor(edge_attr, dtype=torch.float32) if edge_attr else torch.empty(0,2, dtype=torch.float32)\n            data_list.append(Data(\n                x=node_features,  # [num_nodes, 4]\n                edge_index=edge_index,  # [2, num_edges]\n                edge_attr=edge_attr,  # [num_edges, 2]\n                global_feat=torch.tensor([global_et_miss, global_phi_miss], dtype=torch.float32)  # [2]\n            ))\n        return data_list\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# ---------- MODEL DEFINITION ----------\nclass BinaryClassifier(nn.Module):\n    def __init__(self, sample_object):\n        super().__init__()\n        self.conv1 = GIN(4, 64, eps=0.0)\n        self.conv2 = GIN(64, 128, eps=0.0)\n        self.pool = global_mean_pool\n        self.linear = nn.Linear(128 + 2, 1)  # 128 from graph emb, 2 from global\n\n    def forward(self, batch_x):\n        # batch_x is Batch\n        x = F.relu(self.conv1(batch_x.x, batch_x.edge_index, batch_x.edge_attr))  # [num_nodes, 64]\n        x = F.relu(self.conv2(x, batch_x.edge_index, batch_x.edge_attr))  # [num_nodes, 128]\n        graph_emb = self.pool(x, batch_x.batch)  # [batch, 128]\n\n        # Global feat: batch.global_feat is concatenated [batch*2]\n        global_emb = []\n        for i in range(batch_x.num_graphs):\n            start = i * 2\n            global_emb.append(batch_x.global_feat[start:start+2])\n        global_emb = torch.stack(global_emb)  # [batch, 2]\n\n        combined = torch.cat([graph_emb, global_emb], dim=1)  # [batch, 128+2]\n        out = self.linear(combined)  # [batch, 1]\n        return out.squeeze(-1)  # [batch]\n\ndef make_model(example_object):\n    return BinaryClassifier(example_object)\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 10\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)\n    criterion = nn.BCEWithLogitsLoss()\n    train_loss, val_loss, train_acc, val_acc = [], [], [], []\n\n    for epoch in range(epochs):\n        model.train()\n        epoch_train_loss, correct_train, total_train = 0, 0, 0\n        for batch in train_loader:\n            view = normalise_batch(batch, device=device)\n            batch_x = view.batch_x\n            out = model(batch_x)\n            loss = criterion(out, view.batch_y.float())\n            optimizer.zero_grad()\n            loss.backward()\n            optimizer.step()\n            epoch_train_loss += loss.item()\n            preds = (torch.sigmoid(out) > 0.5).float()\n            correct_train += (preds == view.batch_y).sum().item()\n            total_train += view.batch_y.size(0)\n        train_loss.append(epoch_train_loss / len(train_loader))\n        train_acc.append(correct_train / total_train)\n\n        model.eval()\n        epoch_val_loss, correct_val, total_val = 0, 0, 0\n        with torch.no_grad():\n            for batch in val_loader:\n                view = normalise_batch(batch, device=device)\n                batch_x = view.batch_x\n                out = model(batch_x)\n                loss = criterion(out, view.batch_y.float())\n                epoch_val_loss += loss.item()\n                preds = (torch.sigmoid(out) > 0.5).float()\n                correct_val += (preds == view.batch_y).sum().item()\n                total_val += view.batch_y.size(0)\n        val_loss.append(epoch_val_loss / len(val_loader))\n        val_acc.append(correct_val / total_val)\n        print(f\"Epoch {epoch+1}: Train Loss {train_loss[-1]:.4f}, Val Loss {val_loss[-1]:.4f}, Train Acc {train_acc[-1]:.4f}, Val Acc {val_acc[-1]:.4f}\")\n\n    return model, train_loss, val_loss, train_acc, val_acc",
+    "reasoning": "",
+    "Outer_attempt": 4
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-12-29T10:44:14Z",
+    "PyLint": {
+      "passed": false,
+      "messages": [
+        {
+          "type": "error",
+          "module": "script_x-ai_grok-code-fast-1_1144_4",
+          "obj": "BinaryClassifier.__init__",
+          "line": 161,
+          "column": 21,
+          "endLine": 161,
+          "endColumn": 40,
+          "path": "outputs\\12-29\\FOURTOPS\\Q2\\script_x-ai_grok-code-fast-1_1144_4.py",
+          "symbol": "no-value-for-parameter",
+          "message": "No value for argument 'num_layers' in constructor call",
+          "message-id": "E1120"
+        },
+        {
+          "type": "error",
+          "module": "script_x-ai_grok-code-fast-1_1144_4",
+          "obj": "BinaryClassifier.__init__",
+          "line": 162,
+          "column": 21,
+          "endLine": 162,
+          "endColumn": 42,
+          "path": "outputs\\12-29\\FOURTOPS\\Q2\\script_x-ai_grok-code-fast-1_1144_4.py",
+          "symbol": "no-value-for-parameter",
+          "message": "No value for argument 'num_layers' in constructor call",
+          "message-id": "E1120"
+        }
+      ]
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-12-29T10:44:14Z",
+        "metrics": {
+          ".\\outputs\\12-29\\FOURTOPS\\Q2\\script_x-ai_grok-code-fast-1_1144_4.py": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 236,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 236,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  }
+}

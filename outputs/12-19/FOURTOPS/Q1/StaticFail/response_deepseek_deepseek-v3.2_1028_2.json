@@ -1,0 +1,76 @@
+{
+  "LLMGeneration": {
+    "model": "deepseek/deepseek-v3.2",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 3568,
+    "prompt_chars": 13777,
+    "response_tokens": 5092,
+    "response_chars": 12090,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.00329044,
+    "generation_ms": 284700,
+    "code": "import torch.nn.functional as F\nfrom torch import optim\nfrom sklearn.metrics import roc_auc_score, accuracy_score\nimport warnings\nwarnings.filterwarnings('ignore')\n\nclass MyPreprocessor:\n    def __init__(self):\n        self.global_mean = None\n        self.global_std = None\n        self.obj_mean = None\n        self.obj_std = None\n        self.obj_id_stats = None\n\n    def make_loader_cfg(self):\n        return {\n            \"dataset_builder\": \"llm_script:FourTopsDataset\",\n            \"dataset_kwargs\": {},\n            \"loader_class\": \"torch.utils.data:DataLoader\",\n            \"batch_size\": 512,\n            \"shuffle\": True,\n            \"num_workers\": 2,\n            \"pin_memory\": True,\n            \"collate\": None,\n            \"extra_loader_kwargs\": {},\n            \"eval_overrides\": {\"shuffle\": False},\n        }\n\n    def fit(self, X, y=None):\n        X_np = X.numpy() if isinstance(X, torch.Tensor) else X\n\n        # Global features: ETmiss and phi_ETmiss\n        global_feats = X_np[:, :2]\n        self.global_mean = global_feats.mean(axis=0, keepdims=True)\n        self.global_std = global_feats.std(axis=0, keepdims=True) + 1e-8\n\n        # Object features: reshape to (n_events, max_objects=18, 5)\n        obj_feats = X_np[:, 2:].reshape(-1, 18, 5)  # [n_events, 18, 5]\n\n        # For object kinematics (E, pT, eta, phi) - columns 1-4 of each object\n        obj_kinematics = obj_feats[:, :, 1:]  # [n_events, 18, 4]\n\n        # Compute statistics only from non-zero objects (object_id != 0)\n        mask = obj_feats[:, :, 0] != 0  # [n_events, 18]\n        masked_kinematics = obj_kinematics[mask]\n\n        self.obj_mean = masked_kinematics.mean(axis=0, keepdims=True)  # [1, 4]\n        self.obj_std = masked_kinematics.std(axis=0, keepdims=True) + 1e-8  # [1, 4]\n\n        # Object ID statistics for normalization\n        obj_ids = obj_feats[:, :, 0][mask]\n        self.obj_id_stats = {\n            'min': obj_ids.min(),\n            'max': obj_ids.max(),\n            'mean': obj_ids.mean(),\n            'std': obj_ids.std() + 1e-8\n        }\n\n        return self\n\n    def transform(self, X):\n        if isinstance(X, torch.Tensor):\n            X_np = X.numpy()\n            return_tensor = True\n        else:\n            X_np = X\n            return_tensor = False\n\n        # Normalize global features\n        global_feats = X_np[:, :2]  # [n_events, 2]\n        global_norm = (global_feats - self.global_mean) / self.global_std\n\n        # Process object features\n        obj_feats = X_np[:, 2:].reshape(-1, 18, 5)  # [n_events, 18, 5]\n\n        # Normalize object kinematics\n        obj_kinematics = obj_feats[:, :, 1:]  # [n_events, 18, 4]\n        obj_kinematics_norm = (obj_kinematics - self.obj_mean) / self.obj_std\n\n        # Normalize object IDs (robust scaling)\n        obj_ids = obj_feats[:, :, 0]  # [n_events, 18]\n        obj_ids_norm = (obj_ids - self.obj_id_stats['mean']) / self.obj_id_stats['std']\n\n        # Replace padding zeros with -1 (special value)\n        obj_ids_norm[obj_ids == 0] = -1.0\n\n        # Combine normalized features\n        obj_feats_norm = np.concatenate([\n            obj_ids_norm[:, :, None],  # [n_events, 18, 1]\n            obj_kinematics_norm        # [n_events, 18, 4]\n        ], axis=-1)  # [n_events, 18, 5]\n\n        # Flatten back\n        obj_feats_flat = obj_feats_norm.reshape(-1, 90)  # [n_events, 90]\n\n        # Combine with global features\n        transformed = np.concatenate([global_norm, obj_feats_flat], axis=1)  # [n_events, 92]\n\n        # Feature engineering: add derived features\n        n_events = transformed.shape[0]\n\n        # Count non-zero objects per event\n        n_objects = (obj_ids != 0).sum(axis=1, keepdims=True)  # [n_events, 1]\n        n_objects_norm = (n_objects - n_objects.mean()) / (n_objects.std() + 1e-8)\n\n        # Sum of pT for all objects\n        pT_sum = obj_kinematics[:, :, 1].sum(axis=1, keepdims=True)  # pT is at index 1\n        pT_sum_norm = (pT_sum - pT_sum.mean()) / (pT_sum.std() + 1e-8)\n\n        # Combined features\n        transformed = np.concatenate([\n            transformed,  # [n_events, 92]\n            n_objects_norm,  # [n_events, 1]\n            pT_sum_norm  # [n_events, 1]\n        ], axis=1)  # [n_events, 94]\n\n        if return_tensor:\n            return torch.from_numpy(transformed).float()\n        return transformed\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\nclass BinaryClassifier(nn.Module):\n    def __init__(self, sample_object):\n        super().__init__()\n\n        input_dim = sample_object.shape[-1]  # Should be 94 after preprocessing\n\n        # Enhanced architecture with residual connections and batch norms\n        self.bn_input = nn.BatchNorm1d(input_dim)\n\n        # Main processing blocks\n        self.block1 = nn.Sequential(\n            nn.Linear(input_dim, 512),\n            nn.BatchNorm1d(512),\n            nn.LeakyReLU(0.1),\n            nn.Dropout(0.3)\n        )\n\n        self.block2 = nn.Sequential(\n            nn.Linear(512, 256),\n            nn.BatchNorm1d(256),\n            nn.LeakyReLU(0.1),\n            nn.Dropout(0.25)\n        )\n\n        self.residual1 = nn.Linear(input_dim, 256)\n\n        self.block3 = nn.Sequential(\n            nn.Linear(256, 128),\n            nn.BatchNorm1d(128),\n            nn.LeakyReLU(0.1),\n            nn.Dropout(0.2)\n        )\n\n        self.block4 = nn.Sequential(\n            nn.Linear(128, 64),\n            nn.BatchNorm1d(64),\n            nn.LeakyReLU(0.1),\n            nn.Dropout(0.15)\n        )\n\n        self.residual2 = nn.Linear(256, 64)\n\n        # Attention mechanism for feature importance\n        self.attention = nn.Sequential(\n            nn.Linear(64, 32),\n            nn.Tanh(),\n            nn.Linear(32, 1),\n            nn.Sigmoid()\n        )\n\n        # Final classifier\n        self.classifier = nn.Sequential(\n            nn.Linear(64, 32),\n            nn.LeakyReLU(0.1),\n            nn.Linear(32, 1)\n        )\n\n        # Initialize weights\n        self._init_weights()\n\n    def _init_weights(self):\n        for m in self.modules():\n            if isinstance(m, nn.Linear):\n                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='leaky_relu')\n                if m.bias is not None:\n                    nn.init.constant_(m.bias, 0)\n            elif isinstance(m, nn.BatchNorm1d):\n                nn.init.constant_(m.weight, 1)\n                nn.init.constant_(m.bias, 0)\n\n    def forward(self, x):\n        # x shape: [batch_size, 94]\n\n        x_norm = self.bn_input(x)  # [batch_size, 94]\n\n        # First block\n        x1 = self.block1(x_norm)  # [batch_size, 512]\n        x2 = self.block2(x1)  # [batch_size, 256]\n\n        # First residual connection\n        res1 = self.residual1(x_norm)  # [batch_size, 256]\n        x2 = x2 + res1  # [batch_size, 256]\n\n        # Second block\n        x3 = self.block3(x2)  # [batch_size, 128]\n        x4 = self.block4(x3)  # [batch_size, 64]\n\n        # Second residual connection\n        res2 = self.residual2(x2)  # [batch_size, 64]\n        x4 = x4 + res2  # [batch_size, 64]\n\n        # Apply attention\n        att_weights = self.attention(x4)  # [batch_size, 1]\n        x_att = x4 * att_weights  # [batch_size, 64]\n\n        # Final classification\n        out = self.classifier(x_att)  # [batch_size, 1]\n\n        return out.squeeze(-1)  # [batch_size]\n\ndef make_model(example_object):\n    return BinaryClassifier(example_object)\n\nEPOCHS = 150\n\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    device = torch.device(\"cuda\" if torch.cuda.is_available() else \"cpu\")\n    model.to(device)\n\n    # Optimizer with weight decay\n    optimizer = optim.AdamW(model.parameters(), lr=0.001, weight_decay=1e-4)\n\n    # Learning rate scheduler with warmup\n    warmup_epochs = 5\n    def lr_lambda(epoch):\n        if epoch < warmup_epochs:\n            return (epoch + 1) / warmup_epochs\n        else:\n            return 0.95 ** (epoch - warmup_epochs)\n\n    scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)\n\n    # Loss function with label smoothing\n    criterion = nn.BCEWithLogitsLoss()\n\n    # Early stopping\n    best_val_auc = 0.0\n    patience = 20\n    patience_counter = 0\n\n    train_losses = []\n    val_losses = []\n    train_accs = []\n    val_accs = []\n\n    for epoch in range(epochs):\n        # Training phase\n        model.train()\n        train_loss = 0.0\n        train_preds = []\n        train_targets = []\n\n        for batch_x, batch_y in train_loader:\n            batch_x = batch_x.to(device).float()\n            batch_y = batch_y.to(device).float()\n\n            optimizer.zero_grad()\n\n            # Forward pass\n            outputs = model(batch_x)\n            loss = criterion(outputs, batch_y)\n\n            # Backward pass with gradient clipping\n            loss.backward()\n            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)\n            optimizer.step()\n\n            train_loss += loss.item()\n\n            # Store predictions for metrics\n            preds = torch.sigmoid(outputs)\n            train_preds.extend(preds.cpu().detach().numpy())\n            train_targets.extend(batch_y.cpu().detach().numpy())\n\n        # Validation phase\n        model.eval()\n        val_loss = 0.0\n        val_preds = []\n        val_targets = []\n\n        with torch.no_grad():\n            for batch_x, batch_y in val_loader:\n                batch_x = batch_x.to(device).float()\n                batch_y = batch_y.to(device).float()\n\n                outputs = model(batch_x)\n                loss = criterion(outputs, batch_y)\n\n                val_loss += loss.item()\n\n                preds = torch.sigmoid(outputs)\n                val_preds.extend(preds.cpu().detach().numpy())\n                val_targets.extend(batch_y.cpu().detach().numpy())\n\n        # Calculate metrics\n        train_loss /= len(train_loader)\n        val_loss /= len(val_loader)\n\n        train_preds = np.array(train_preds)\n        train_targets = np.array(train_targets)\n        val_preds = np.array(val_preds)\n        val_targets = np.array(val_targets)\n\n        # Calculate accuracy (threshold at 0.5)\n        train_acc = accuracy_score(train_targets > 0.5, train_preds > 0.5)\n        val_acc = accuracy_score(val_targets > 0.5, val_preds > 0.5)\n\n        # Calculate AUC\n        try:\n            train_auc = roc_auc_score(train_targets, train_preds)\n            val_auc = roc_auc_score(val_targets, val_preds)\n        except:\n            train_auc = 0.5\n            val_auc = 0.5\n\n        # Store metrics\n        train_losses.append(train_loss)\n        val_losses.append(val_loss)\n        train_accs.append(train_acc)\n        val_accs.append(val_acc)\n\n        # Update learning rate\n        scheduler.step()\n\n        # Early stopping based on validation AUC\n        if val_auc > best_val_auc:\n            best_val_auc = val_auc\n            patience_counter = 0\n            # Save best model state\n            best_model_state = model.state_dict().copy()\n        else:\n            patience_counter += 1\n\n        if epoch % 10 == 0:\n            print(f'Epoch {epoch:3d}: Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}, '\n                  f'Train Acc: {train_acc:.4f}, Val Acc: {val_acc:.4f}, '\n                  f'Train AUC: {train_auc:.4f}, Val AUC: {val_auc:.4f}')\n\n        if patience_counter >= patience:\n            print(f'Early stopping at epoch {epoch}')\n            # Load best model\n            model.load_state_dict(best_model_state)\n            break\n\n    # Return best model\n    return model, train_losses, val_losses, train_accs, val_accs",
+    "reasoning": "",
+    "Outer_attempt": 2
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-12-19T09:29:09Z",
+    "PyLint": {
+      "passed": false,
+      "messages": [
+        {
+          "type": "error",
+          "module": "script_deepseek_deepseek-v3.2_1028_2",
+          "obj": "train_model",
+          "line": 407,
+          "column": 34,
+          "endLine": 407,
+          "endColumn": 50,
+          "path": "outputs\\12-19\\FOURTOPS\\Q1\\script_deepseek_deepseek-v3.2_1028_2.py",
+          "symbol": "possibly-used-before-assignment",
+          "message": "Possibly using variable 'best_model_state' before assignment",
+          "message-id": "E0606"
+        }
+      ]
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-12-19T09:29:09Z",
+        "metrics": {
+          ".\\outputs\\12-19\\FOURTOPS\\Q1\\script_deepseek_deepseek-v3.2_1028_2.py": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 320,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 320,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  }
+}

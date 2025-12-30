@@ -1,0 +1,71 @@
+{
+  "LLMGeneration": {
+    "model": "x-ai/grok-code-fast-1",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 4090,
+    "prompt_chars": 16762,
+    "response_tokens": 8306,
+    "response_chars": 18616,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.01255124,
+    "generation_ms": 64937,
+    "code": "# ---------- IMPORTS ----------\nimport torch\nimport torch.nn as nn\nimport torch.nn.functional as F\nfrom torch.utils.data import DataLoader\nfrom sklearn.model_selection import train_test_split\nimport numpy as np\nfrom torch.nn.utils.rnn import pad_sequence\n\n# ----------- PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.max_N = None\n        self.max_num_tracks = None\n        self.num_classes = None  # max_num_tracks + 1 (for noise)\n        self.padder_value = 0.0  # for features\n        self.mask_value = -1  # for labels\n\n    def fit(self, Xs):\n        # Xs: list of per-event X, each [N_hits_i, 4]\n        self.max_N = max(len(X) for X in Xs)\n        # Assume ys are not needed for fit, but compute from globals if possible\n        # In this setup, ys are not passed, so assume max_num_tracks = 50 (from problem: 10-50)\n        self.max_num_tracks = 50  # conservative max\n        self.num_classes = self.max_num_tracks + 1  # +1 for noise\n        return self\n\n    def transform(self, X):\n        # X: one event array/tensor [N_hits, 4], y not here\n        # To sort by theta for position info\n        # Assume X is numpy or tensor\n        if isinstance(X, torch.Tensor):\n            X = X.numpy()\n        sorted_indices = np.argsort(X[:, 1])  # sort by theta\n        X_sorted = X[sorted_indices]\n        X_padded = np.pad(X_sorted, ((0, self.max_N - len(X_sorted)), (0, 0)), mode='constant', constant_values=self.padder_value)\n        return torch.tensor(X_padded, dtype=torch.float32)\n\n    def process_y_for_loader(self, y):\n        # y: tensor [N]\n        if y is None:\n            return None\n        unique_tracks = torch.unique(y[y > 0])\n        label_map = {int(old.item()): int(new) + 1 for new, old in enumerate(unique_tracks)}\n        encoded = torch.zeros_like(y, dtype=torch.long)\n        for old, new in label_map.items():\n            encoded[y == old] = new\n        # noise is 0\n        encoded_padded = torch.full((self.max_N,), self.mask_value, dtype=torch.long)\n        encoded_padded[:len(encoded)] = encoded\n        return encoded_padded\n\n    def make_loader_cfg(self) -> dict:\n        return {\n            \"dataset_builder\": \"utils.llm_io:EventDataset\",\n            \"dataset_kwargs\": {},\n            \"loader_class\": \"torch.utils.data:DataLoader\",\n            \"batch_size\": 32,  # smaller for variable length\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": False,\n            \"collate\": None,  # custom collate\n        }\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# ---------- MODEL ARCHITECTURE ----------\nclass PositionalEncoding(nn.Module):\n    def __init__(self, d_model, max_len=1000):\n        super().__init__()\n        pe = torch.zeros(max_len, d_model)\n        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)\n        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-torch.log(torch.tensor(10000.0)) / d_model))\n        pe[:, 0::2] = torch.sin(position * div_term)\n        pe[:, 1::2] = torch.cos(position * div_term)\n        self.pe = pe.unsqueeze(0)\n\n    def forward(self, x):\n        return x + self.pe[:, :x.size(1), :]\n\nclass HitClassifier(nn.Module):\n    def __init__(self, example_batch_x, max_N=500, num_classes=51, d_model=16, nhead=4, num_layers=4):\n        super().__init__()\n        self.max_N = max_N\n        self.num_classes = num_classes\n        num_layer_ids = 10  # assume\n        self.layer_emb = nn.Embedding(num_layer_ids, 4)\n        self.cont_emb = nn.Linear(3, 12)  # r, theta, z -> 12\n        self.pos_enc = PositionalEncoding(d_model=16)\n        self.encoder = nn.TransformerEncoder(\n            nn.TransformerEncoderLayer(d_model=16, nhead=4, dim_feedforward=64, dropout=0.1),\n            num_layers=4\n        )\n        self.clf = nn.Linear(16, num_classes)\n\n    def forward(self, batch_x):\n        # batch_x: list of tensors [N_i, 4]\n        lengths = [len(x) for x in batch_x]\n        padded_x = pad_sequence(batch_x, batch_first=True, padding_value=0)  # [batch, max_N, 4]\n        batch_size, seq_len, _ = padded_x.shape\n        # embed\n        cont = padded_x[:, :, :3]  # [batch, seq, 3]\n        layer = padded_x[:, :, 3].long()  # assume layer_id is int-like\n        # clamp to num_layer_ids\n        layer = torch.clamp(layer, 0, 9)\n        layer_emb = self.layer_emb(layer)  # [batch, seq, 4]\n        cont_emb = self.cont_emb(cont)  # [batch, seq, 12]\n        emb = torch.cat([cont_emb, layer_emb], dim=-1)  # [batch, 16]\n        emb = emb + self.pos_enc(emb)  # pos\n        src_key_padding_mask = torch.zeros(batch_size, seq_len, dtype=torch.bool, device=emb.device)\n        for i, l in enumerate(lengths):\n            src_key_padding_mask[i, l:] = True\n        # transformer\n        out = self.encoder(emb.permute(1, 0, 2), src_key_padding_mask=src_key_padding_mask)  # [seq, batch, 16]\n        out = out.permute(1, 0, 2)  # [batch, seq, 16]\n        logits = self.clf(out)  # [batch, seq, num_classes]\n        # for inference, get pred labels\n        preds = []\n        for i in range(batch_size):\n            valid_logits = logits[i, :lengths[i]]  # [l_i, num_classes]\n            pred_cls = torch.argmax(valid_logits, dim=1)  # [l_i]\n            # map: noise (0) -> -1, tracks (1..) -> 1..\n            pred_label = torch.where(pred_cls == 0, torch.tensor(-1).to(pred_cls.device), pred_cls)\n            preds.append(pred_label.to(torch.int64))\n        return preds  # list of [N_i] int64\n\ndef make_model(example_batch_x):\n    # example_batch_x is list of tensors\n    lengths = [len(x) for x in example_batch_x]\n    max_N = max(lengths) if lengths else 512  # default\n    return HitClassifier(example_batch_x, max_N=max_N, num_classes=51)\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 20\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)\n    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.5)\n    loss_fn = nn.CrossEntropyLoss(ignore_index=-1)\n    train_loss, val_loss, train_acc, val_acc = [], [], [], []\n    model.train()\n    for epoch in range(epochs):\n        total_loss = 0.0\n        total_acc = 0.0\n        total_samples = 0\n        for batch in train_loader:\n            view = normalise_batch(batch, device=device)\n            xb, encoded_yb = view.batch_x, view.batch_y  # assume encoded_yb is padded\n            optimizer.zero_grad()\n            lengths = [len(x) for x in xb]\n            padded_x = pad_sequence(xb, batch_first=True, padding_value=0)  # [batch, max_N, 4]\n            logits = model.forward_padded(padded_x, lengths)  # need to modify model to have forward_padded\n            loss = loss_fn(logits.view(-1, model.num_classes), encoded_yb.view(-1))\n            loss.backward()\n            optimizer.step()\n            total_loss += loss.item()\n            pred_cls = torch.argmax(logits, dim=-1)\n            correct = ((pred_cls == encoded_yb) & (encoded_yb >= 0)).sum().item()\n            total_acc += correct\n            total_samples += (encoded_yb >= 0).sum().item()\n        scheduler.step()\n        tr_l = total_loss / len(train_loader)\n        tr_a = total_acc / total_samples\n        train_loss.append(tr_l)\n        train_acc.append(tr_a)\n        # val\n        model.eval()\n        with torch.no_grad():\n            va_l, va_a = 0.0, 0.0\n            va_samples = 0\n            for batch in val_loader:\n                view = normalise_batch(batch, device=device)\n                xb, encoded_yb = view.batch_x, view.batch_y\n                lengths = [len(x) for x in xb]\n                padded_x = pad_sequence(xb, batch_first=True, padding_value=0)\n                logits = model.forward_padded(padded_x, lengths)\n                loss = loss_fn(logits.view(-1, model.num_classes), encoded_yb.view(-1))\n                va_l += loss.item()\n                pred_cls = torch.argmax(logits, dim=-1)\n                correct = ((pred_cls == encoded_yb) & (encoded_yb >= 0)).sum().item()\n                va_a += correct\n                va_samples += (encoded_yb >= 0).sum().item()\n            va_l /= len(val_loader)\n            va_a /= va_samples\n        val_loss.append(va_l)\n        val_acc.append(va_a)\n        model.train()\n    return model, train_loss, val_loss, train_acc, val_acc",
+    "reasoning": "",
+    "Outer_attempt": 2
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-12-29T13:56:57Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-12-29T13:56:57Z",
+        "metrics": {
+          ".\\outputs\\12-29\\TRACKFORMERS\\Q1\\script_x-ai_grok-code-fast-1_1456_2.py": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 245,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 245,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2025-12-29T13:57:14Z",
+    "passed": false,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/12-29/TRACKFORMERS/Q1/script_x-ai_grok-code-fast-1_1456_2.py\nargv2=--dryrun\n",
+      "stderr": "mkdir -p failed for path /home/sandbox/.config/matplotlib: [Errno 30] Read-only file system: '/home/sandbox/.config'\nMatplotlib created a temporary cache directory at /tmp/matplotlib-mv8jacif because there was an issue with the default path (/home/sandbox/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.\nTraceback (most recent call last):\n  File \"/workspace/outputs/12-29/TRACKFORMERS/Q1/script_x-ai_grok-code-fast-1_1456_2.py\", line 314, in <module>\n    _run(dryrun=\"--dryrun\" in sys.argv)\n  File \"/workspace/outputs/12-29/TRACKFORMERS/Q1/script_x-ai_grok-code-fast-1_1456_2.py\", line 255, in _run\n    spec = enforce_pyg_policy(spec)\n           ^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/utils/loaderspec.py\", line 302, in enforce_pyg_policy\n    raise ValueError(\"torch DataLoader requires collate to be 'ragged_xy' or 'identity' for ragged events.\")\nValueError: torch DataLoader requires collate to be 'ragged_xy' or 'identity' for ragged events.\n"
+    },
+    "return_code": 1
+  }
+}

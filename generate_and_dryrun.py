@@ -9,6 +9,7 @@ from tqdm import tqdm
 from static_checks import run_pylint, run_bandit
 from run_scripts import run_single_script
 from utils.utils import append_to_response_json
+from utils.run_id import get_or_create_run_id
 
 from urllib3.util import Retry
 from requests.adapters import HTTPAdapter
@@ -30,111 +31,213 @@ _retry = Retry(
 
 _session.mount("https://", HTTPAdapter(max_retries=_retry))
 
+
+def _safe_model_id(model: str) -> str:
+    # Replace anything that can break Windows paths
+    s = model.replace("/", "_").replace(":", "_")
+    s = re.sub(r"[^A-Za-z0-9._-]+", "_", s)  # conservative
+    return s
+
 def query_openrouter(model: str, prompt: str, *, max_retries = 3):
     """
     Portal to OpenRouter API.
 
     RETURNS
-    The parsed LLM response or raises on final failure.
+    A dict with LLM metadata + extracted code, or None on final failure.
     """
-
-    if model.startswith("openai/o3"):                     # chat-only models
-        endpoint = config.OPENROUTER_API_CHAT
-        payload = {
-            "model": model,
-            "messages": [{"role": "user", "content": prompt}],
-            "usage": {"include": True},
-            "max_tokens": config.MAX_TOKENS,
-            "reasoning": {"exclude": False, "effort": "high"},
-        }    
     
-    else: 
-        endpoint = config.OPENROUTER_API_COMPLETIONS
-        payload = {
-                "model": model,
-                "prompt": prompt,
-                "usage": {"include": True},
-                "max_tokens": (config.MAX_TOKENS),
-                "reasoning": {"exclude": False, "effort": "high"},
-        }
-
     headers = {
-    "Authorization": f"Bearer {config.OPENROUTER_API_KEY}",
-    "Content-Type": "application/json",        
+        "Authorization": f"Bearer {config.OPENROUTER_API_KEY}",
+        "Content-Type": "application/json",        
     }
 
-    # Request Timer (since Gemini is slow... and other connectivity issues wwere risen)
-    for inner_attempt in range(max_retries):
-        timeout = min(60 * 2**inner_attempt, 240)             # 60 -> 120 -> 240 (s)
-        t0 = time.perf_counter()                          # start latency timer
+    def _do_request(endpoint: str, payload: dict, mode: str) -> dict | None:
+        """
+        Internal helper to query a single endpoint (chat or completions)
+        with retries and robust response parsing.
 
-        try:
-            r = _session.post(
+        RETURNS
+        llm_block dict on success, or None if no usable code after retries.
+        """
+
+        for inner_attempt in range(max_retries):
+            timeout = min(60 * 2**inner_attempt, 240)  # 60 -> 120 -> 240 (s)
+            t0 = time.perf_counter()
+
+            try:
+                r = _session.post(
                     endpoint,
-                    headers = headers, 
-                    json    = payload,
-                    timeout = timeout,
+                    headers=headers,
+                    json=payload,
+                    timeout=timeout,
                 )
 
-            # Cloudflare idle timeout
-            if r.status_code == 524:
-                raise requests.Timeout("524 edge timeout")
+                # Cloudflare idle timeout
+                if r.status_code == 524:
+                    raise requests.Timeout("524 edge timeout")
 
-            r.raise_for_status()                        # HTTP 4xx/5xx → error
-            result = r.json()
-            duration_ms = round(1000 * (time.perf_counter() - t0)) # end latency timer
+                r.raise_for_status()
+                result = r.json()
+                duration_ms = round(1000 * (time.perf_counter() - t0))
 
-            # Provider-side error block
-            if "error" in result:
-                raise requests.Timeout(
-                    f"LLM error {result['error'].get('code')}"
+                # Provider-side error
+                if "error" in result:
+                    raise requests.Timeout(
+                        f"LLM error {result['error'].get('code')}"
+                    )
+
+                # Must have at least one choice
+                if "choices" not in result or not result["choices"]:
+                    logging.error(
+                        "[%s] No 'choices' field in JSON on inner_attempt %d, retrying...",
+                        mode, inner_attempt + 1
+                    )
+                    raise requests.Timeout("No 'choices' field in JSON")
+
+            except (RequestException, ValueError) as e:
+                logging.warning(
+                    "LLM query inner_attempt %d/%d for %s via %s failed: %s",
+                    inner_attempt + 1, max_retries, model, mode, e
                 )
+                if isinstance(e, requests.HTTPError) and e.response is not None:
+                    logging.error("HTTP %s body: %s", e.response.status_code, e.response.text)
+                if inner_attempt == max_retries - 1:
+                    return None
+                time.sleep(BACKOFF[min(inner_attempt, len(BACKOFF) - 1)])
+                continue
 
-            # Missing Choices also treated as retryable
-            if "choices" not in result or not result["choices"]:
-                logging.error(f"No 'choices' field in JSON on inner_attempt {inner_attempt+1}, retrying...")
-                raise requests.Timeout("No 'choices' field in JSON")
-            
-        except (RequestException, ValueError) as e:
-            logging.warning(f"LLM query inner_attempt {inner_attempt + 1}/{max_retries} for {model} failed: {e}")
-            if isinstance(e, requests.HTTPError) and e.response is not None:
-                logging.error("HTTP %s body: %s", e.response.status_code, e.response.text)
-            if inner_attempt == max_retries - 1: return None
-            time.sleep(BACKOFF[min(inner_attempt, len(BACKOFF)-1)])
-            continue
+            # ---- SUCCESSFUL HTTP + JSON; now parse ----
+            choice = result["choices"][0]
+            usage  = result.get("usage", {})
 
-        # SUCCESSFUL RESPONSE - Still need to parse
-        choice    = result["choices"][0]
-        content = (choice.get("text") or choice.get("message", {}).get("content", ""))
-        reasoning = (choice.get("reasoning") or "") 
-        usage     = result.get("usage", {})
+            # 1) Start from any explicit 'reasoning' field on the choice (if present).
+            reasoning = ""
+            choice_reasoning = choice.get("reasoning")
+            if isinstance(choice_reasoning, str):
+                reasoning = choice_reasoning
 
-        code = extract_code(content)
+            # 2) Extract assistant content (chat-style or completion-style).
+            content = ""
 
-        if not code:
-            logging.warning("No code found in LLM response")
-            logging.info("LLM response: %s", content)
-            if inner_attempt == max_retries - 1:
-                return None
-            continue
+            # Prefer chat-style 'message'
+            raw_message = choice.get("message")
+            if isinstance(raw_message, dict) and "content" in raw_message:
+                raw_content = raw_message["content"]
 
-        llm_block = {
-            "model": model,
-            "endpoint": endpoint,
-            "prompt_tokens": usage.get("prompt_tokens"),
-            "prompt_chars": len(prompt),
-            "response_tokens": usage.get("completion_tokens"),
-            "response_chars": len(content),
-            "reasoning_tokens": usage.get("reasoning_tokens"),
-            "reasoning_chars": len(reasoning),
-            "Inner attempt": inner_attempt + 1,
-            "cost_usd": usage.get("cost"),
-            "generation_ms": duration_ms,
-            "code":  code,
-            "reasoning": reasoning,
-        }
+                if isinstance(raw_content, str):
+                    # Simple case: single string
+                    content = raw_content
 
-        return llm_block
+                elif isinstance(raw_content, list):
+                    # Newer format: list of blocks, e.g. [{"type": "reasoning", "text": ...}, ...]
+                    text_chunks = []
+                    reasoning_chunks = []
+
+                    for part in raw_content:
+                        if not isinstance(part, dict):
+                            continue
+                        part_type = part.get("type")
+                        text = part.get("text", "")
+
+                        # Heuristic: reasoning vs final answer
+                        if part_type in ("reasoning", "chain_of_thought"):
+                            reasoning_chunks.append(text)
+                        else:  # "output_text", "text", None, etc.
+                            text_chunks.append(text)
+
+                    content = "\n".join(ch for ch in text_chunks if ch).strip()
+
+                    if not reasoning and reasoning_chunks:
+                        reasoning = "\n\n".join(ch for ch in reasoning_chunks if ch).strip()
+
+            # Fallback: completion-style 'text'
+            if not content:
+                raw_text = choice.get("text")
+                if isinstance(raw_text, str):
+                    content = raw_text
+
+            # Last resort: if still empty, just string-ify whatever we got
+            if not content:
+                content = str(choice)
+
+            # ---- Extract code from content ----
+            code = extract_code(content)
+
+            if not code:
+                logging.warning("[%s] No code found in LLM response", mode)
+                logging.info("LLM raw content: %s", content)
+                if inner_attempt == max_retries - 1:
+                    return None
+                # Treat "no code" as retry-able within the same endpoint
+                time.sleep(BACKOFF[min(inner_attempt, len(BACKOFF) - 1)])
+                continue
+
+            # ---- Build final response blob ----
+            llm_block = {
+                "model": model,
+                "endpoint": endpoint,
+                "mode": mode,  # "chat" or "completions"
+                "prompt_tokens": usage.get("prompt_tokens"),
+                "prompt_chars": len(prompt),
+                "response_tokens": usage.get("completion_tokens"),
+                "response_chars": len(content),
+                "reasoning_tokens": usage.get("reasoning_tokens"),
+                "reasoning_chars": len(reasoning),
+                "Inner attempt": inner_attempt + 1,
+                "cost_usd": usage.get("cost"),
+                "generation_ms": duration_ms,
+                "code": code,
+                "reasoning": reasoning,
+            }
+
+            return llm_block  # success
+        return None  # defensive, should not get here
+
+        # --------------------
+    # 1) Try CHAT endpoint
+    # --------------------
+    chat_payload = {
+        "model": model,
+        "messages": [
+            {"role": "user", "content": prompt}
+        ],
+        "usage": {"include": True},
+        "max_tokens": config.MAX_TOKENS,
+        # Many models ignore this; reasoning models honour it.
+        "reasoning": {"exclude": False, "effort": "high"},
+    }
+
+    chat_block = _do_request(
+        endpoint=config.OPENROUTER_API_CHAT,
+        payload=chat_payload,
+        mode="chat",
+    )
+    if chat_block is not None:
+        return chat_block
+
+    logging.warning(
+        "Chat endpoint failed to produce usable code for %s; falling back to completions.",
+        model,
+    )
+
+    # ---------------------------
+    # 2) Fallback: COMPLETIONS
+    # ---------------------------
+    completions_payload = {
+        "model": model,
+        "prompt": prompt,
+        "usage": {"include": True},
+        "max_tokens": config.MAX_TOKENS,
+        # Some providers may ignore this / error; OpenRouter usually just ignores.
+        "reasoning": {"exclude": False, "effort": "high"},
+    }
+
+    completion_block = _do_request(
+        endpoint=config.OPENROUTER_API_COMPLETIONS,
+        payload=completions_payload,
+        mode="completions",
+    )
+    return completion_block
 
 def robust_parse_JSON(raw: str) -> dict:
     """
@@ -166,6 +269,7 @@ def robust_parse_JSON(raw: str) -> dict:
         
     logging.info("Successfully parsed raw response as JSON.")
     return parsed
+
 def parse_response_JSON(raw: str) -> str:
     """
     Extracts a JSON-like block from the raw LLM output (i.e. deletes everything before
@@ -211,11 +315,7 @@ def parse_response_JSON(raw: str) -> str:
 
     return json_block
 
-def save_response(output_dir: str,
-                  model: str,
-                  attempt: int,
-                  script_text: str,
-                  response_blob: dict):
+def save_response(output_dir: str, model: str, attempt: int, script_text: str, response_blob: dict):
     """
     Writes two files:
       - script_...py        : runnable script
@@ -269,35 +369,33 @@ def move_file(file_path, destination_dir):
 
 def script_dryrun(script_path):
     """dry-run a script *inside Docker* and return (success, stdout, stderr)"""
-    _, success, _, stdout, stderr, _, _ = run_single_script(
-        script_path,
-        dryrun=True,
-        use_docker=True
-    )
+    _, success, _, stdout, stderr, _, _ = run_single_script(script_path, dryrun=True, use_docker=True)
     return success, stdout, stderr
     
 def generate_and_dryrun():
+    # Compute run ID
+    run_id = get_or_create_run_id()
+    output_root = Path("outputs") / run_id
+
     for challenge in config.challenges:
-        logging.info(f"Executing challenge: {challenge.name}")
+        logging.info(f"--------------------------------------------------------------------------------------------------------\n------------------------------------ Executing challenge: {challenge.name} ---------------------------------\n--------------------------------------------------------------------------------------------------------")
 
         for question in tqdm(challenge.questions, desc=f"{challenge.name} questions", leave=False):
-            day_month = time.strftime("%d-%m")
-            output_dir = f"./outputs/{day_month}/{challenge.name}/{question.question_id}/"
-            os.makedirs(output_dir, exist_ok=True)
+            # Set output dir
+            output_dir = output_root / challenge.name / question.question_id
+            output_dir.mkdir(parents=True, exist_ok=True)
             logging.info("Set-Up Output Directory: %s", output_dir)
 
+            # Build the prompt
             prompt = challenge.build_prompt(question)
-            prompt = f"{prompt}"
 
-            # Save prompt
-            prompt_path = os.path.join(output_dir, f"{question.question_id}_prompt.txt")
-            with open(prompt_path, "w", encoding="utf-8") as f:
-                f.write(prompt)
-
+            # Save the prompt
+            prompt_path = output_dir / f"{question.question_id}_prompt.txt"
+            prompt_path.write_text(prompt, encoding="utf-8")
             logging.info("Prompt: %s", prompt)
 
             for model in tqdm(config.models, desc="Models", leave=False):
-                safe_model = model.replace("/", "_")
+                safe_model = _safe_model_id(model)
                 
                 run_success = False
                 for attempt in tqdm(range(1, config.num_attempts + 1), desc=f"{model} Attempt", 

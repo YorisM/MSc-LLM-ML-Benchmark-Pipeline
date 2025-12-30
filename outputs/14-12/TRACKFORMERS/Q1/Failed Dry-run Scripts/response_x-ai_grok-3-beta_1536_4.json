@@ -1,0 +1,71 @@
+{
+  "LLMGeneration": {
+    "model": "x-ai/grok-3-beta",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 3731,
+    "prompt_chars": 16011,
+    "response_tokens": 1566,
+    "response_chars": 6842,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.0346785,
+    "generation_ms": 27877,
+    "code": "# 0. ---------- IMPORTS ----------\nimport torch\nimport torch.nn as nn\nimport torch.optim as optim\nfrom sklearn.preprocessing import StandardScaler\nimport numpy as np\nfrom torch_geometric.nn import GCNConv, global_mean_pool\nfrom torch_geometric.data import Data, Batch\n\n# 1.1 -------- OPTIONAL: CUSTOM DATASET / DATA-CLASS --------\ndef make_dataset(events, pre, train: bool):\n    return None  # Use default EventDataset\n\n# 1.2 ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.scaler = StandardScaler()\n\n    def _raw_reshape(self, data):\n        return data  # Returns identity by default\n\n    def make_loader_cfg(self):\n        return {\n            \"loader_class\": \"torch.utils.data.DataLoader\",\n            \"batch_size\": 128,\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": True\n        }\n\n    def fit(self, data):\n        # Concatenate all events' data for fitting the scaler\n        all_hits = []\n        for evt in data:\n            hits = np.column_stack((evt[\"hit_r\"].astype(np.float32),\n                                    evt[\"hit_theta\"].astype(np.float32),\n                                    evt[\"hit_z\"].astype(np.float32),\n                                    evt[\"layer_id\"].astype(np.float32)))\n            all_hits.append(hits)\n        all_hits = np.vstack(all_hits)\n        self.scaler.fit(all_hits)\n        return self\n\n    def transform(self, data):\n        # Apply scaling to the input data\n        data_np = data.numpy()  # Shape: [N_hits, 4]\n        data_scaled = self.scaler.transform(data_np)  # Shape: [N_hits, 4]\n        return torch.from_numpy(data_scaled).float()  # Return as torch tensor\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# 2. ---------- MODEL ARCHITECTURE ----------\nclass HitClassifier(nn.Module):\n    def __init__(self, example_batch_x):\n        super().__init__()\n        # Infer input features from example_batch_x\n        in_features = example_batch_x[0].shape[-1]  # Should be 4 (r, theta, z, layer_id)\n\n        # Graph Convolutional Layers for learning spatial relationships\n        self.conv1 = GCNConv(in_features, 64)\n        self.conv2 = GCNConv(64, 128)\n        self.conv3 = GCNConv(128, 64)\n\n        # MLP for final track classification\n        self.mlp = nn.Sequential(\n            nn.Linear(64, 128),\n            nn.ReLU(),\n            nn.Dropout(0.3),\n            nn.Linear(128, 50)  # Output dimension set to maximum expected tracks per event\n        )\n\n    def forward(self, batch_x):\n        # Handle ragged list of tensors (one per event)\n        if isinstance(batch_x, list):\n            batch_data = []\n            for x in batch_x:\n                # Build a simple fully connected graph for each event (or use proper geometry if available)\n                num_hits = x.shape[0]\n                edge_index = torch.combinations(torch.arange(num_hits), r=2).T.to(x.device)\n                data = Data(x=x, edge_index=edge_index)\n                batch_data.append(data)\n            batch = Batch.from_data_list(batch_data).to(x.device)\n        else:\n            batch = batch_x  # Already in PyG Batch format\n\n        # Graph Convolution passes\n        x = batch.x\n        edge_index = batch.edge_index\n\n        x = self.conv1(x, edge_index)  # Shape: [N_hits_total, 64]\n        x = torch.relu(x)\n        x = self.conv2(x, edge_index)  # Shape: [N_hits_total, 128]\n        x = torch.relu(x)\n        x = self.conv3(x, edge_index)  # Shape: [N_hits_total, 64]\n        x = torch.relu(x)\n\n        # Global pooling per graph (event)\n        x_pool = global_mean_pool(x, batch.batch)  # Shape: [N_events, 64]\n\n        # Repeat pooled features for each hit in the batch to match dimensions\n        x_expanded = x_pool[batch.batch]  # Shape: [N_hits_total, 64]\n\n        # Final classification per hit\n        logits = self.mlp(x_expanded)  # Shape: [N_hits_total, 50]\n        preds = torch.argmax(logits, dim=-1)  # Shape: [N_hits_total,]\n        return preds.long()  # Return integer labels for each hit\n\ndef make_model(example_batch_x):\n    return HitClassifier(example_batch_x)\n\n# 3. ---------- MODEL TRAINING ----------\nEPOCHS = 20  # Adjusted for sufficient training iterations\ndef train_model(model, train_loader, val_loader, epochs):\n    optimizer = optim.Adam(model.parameters(), lr=0.001)\n    criterion = nn.CrossEntropyLoss(ignore_index=-1)  # Ignore noise labels if any\n\n    train_loss, val_loss = [], []\n    train_acc, val_acc = [], []\n\n    best_val_loss = float('inf')\n    patience = 5\n    no_improve = 0\n\n    for epoch in range(epochs):\n        # Training phase\n        model.train()\n        epoch_train_loss = 0.0\n        correct_train = 0\n        total_train = 0\n\n        for batch_x, batch_y in train_loader:\n            optimizer.zero_grad()\n            view = normalise_batch((batch_x, batch_y), device=device)\n            outputs = model(view.batch_x)  # Shape: [N_hits_total,]\n            loss = criterion(outputs, view.batch_y.long())\n            loss.backward()\n            optimizer.step()\n\n            epoch_train_loss += loss.item()\n            pred = outputs\n            correct_train += (pred == view.batch_y).sum().item()\n            total_train += view.batch_y.size(0)\n\n        avg_train_loss = epoch_train_loss / len(train_loader)\n        avg_train_acc = correct_train / total_train if total_train > 0 else 0\n\n        # Validation phase\n        model.eval()\n        epoch_val_loss = 0.0\n        correct_val = 0\n        total_val = 0\n\n        with torch.no_grad():\n            for batch_x, batch_y in val_loader:\n                view = normalise_batch((batch_x, batch_y), device=device)\n                outputs = model(view.batch_x)\n                loss = criterion(outputs, view.batch_y.long())\n\n                epoch_val_loss += loss.item()\n                pred = outputs\n                correct_val += (pred == view.batch_y).sum().item()\n                total_val += view.batch_y.size(0)\n\n        avg_val_loss = epoch_val_loss / len(val_loader)\n        avg_val_acc = correct_val / total_val if total_val > 0 else 0\n\n        # Log metrics\n        train_loss.append(avg_train_loss)\n        val_loss.append(avg_val_loss)\n        train_acc.append(avg_train_acc)\n        val_acc.append(avg_val_acc)\n\n        # Early stopping check\n        if avg_val_loss < best_val_loss:\n            best_val_loss = avg_val_loss\n            no_improve = 0\n        else:\n            no_improve += 1\n            if no_improve >= patience:\n                print(f\"Early stopping triggered after epoch {epoch+1}\")\n                break\n\n    return model, train_loss, val_loss, train_acc, val_acc",
+    "reasoning": "",
+    "Outer_attempt": 4
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-12-14T14:36:46Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-12-14T14:36:46Z",
+        "metrics": {
+          ".\\./outputs/14-12/TRACKFORMERS/Q1/script_x-ai_grok-3-beta_1536_4.py": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 254,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 254,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2025-12-14T14:36:59Z",
+    "passed": false,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/14-12/TRACKFORMERS/Q1/script_x-ai_grok-3-beta_1536_4.py\nargv2=--dryrun\n",
+      "stderr": "+ exec\n+ PY=outputs/14-12/TRACKFORMERS/Q1/script_x-ai_grok-3-beta_1536_4.py\n+ shift\n++ echo --dryrun\n++ tr -d '\\r\\n'\n++ xargs\n+ DRY=--dryrun\n+ [[ outputs/14-12/TRACKFORMERS/Q1/script_x-ai_grok-3-beta_1536_4.py == \\/\\u\\s\\r\\/\\l\\o\\c\\a\\l\\/\\b\\i\\n\\/\\t\\r\\a\\i\\n\\.\\s\\h ]]\n+ [[ --dryrun =~ (--dryrun|--dry-run) ]]\n+ TIMEOUT=3600\n+ : 0\n+ : 0\n+ ulimit -t 3600\n+ ((  MEMORY_LIMIT_GB > 0  ))\n+ ((  PIDS_LIMIT > 0  ))\n+ timeout --signal=KILL 3600s python outputs/14-12/TRACKFORMERS/Q1/script_x-ai_grok-3-beta_1536_4.py --dryrun\nmkdir -p failed for path /home/sandbox/.config/matplotlib: [Errno 30] Read-only file system: '/home/sandbox/.config'\nMatplotlib created a temporary cache directory at /tmp/matplotlib-uzsezojb because there was an issue with the default path (/home/sandbox/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.\nERROR during training: too many values to unpack (expected 2)\nTraceback (most recent call last):\n  File \"/workspace/outputs/14-12/TRACKFORMERS/Q1/script_x-ai_grok-3-beta_1536_4.py\", line 350, in <module>\n    _run(dryrun=\"--dryrun\" in sys.argv)\n  File \"/workspace/outputs/14-12/TRACKFORMERS/Q1/script_x-ai_grok-3-beta_1536_4.py\", line 301, in _run\n    trained_model, tr_loss, va_loss, tr_acc, va_acc = train_model(\n                                                      ^^^^^^^^^^^^\n  File \"/workspace/outputs/14-12/TRACKFORMERS/Q1/script_x-ai_grok-3-beta_1536_4.py\", line 208, in train_model\n    for batch_x, batch_y in train_loader:\n        ^^^^^^^^^^^^^^^^\nValueError: too many values to unpack (expected 2)\n"
+    },
+    "return_code": 1
+  }
+}

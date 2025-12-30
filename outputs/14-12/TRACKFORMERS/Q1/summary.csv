@@ -1,0 +1,71 @@
+script,success,return_code,stdout,stderr,duration_s,max_rss_kb
+C:\Users\yoris\projects\Benchmark\outputs\14-12\TRACKFORMERS\Q1\anthropic_claude-4-sonnet-20250522\script_anthropic_claude-4-sonnet-20250522_1529_1.py,True,0,"argv0=/usr/local/bin/train.sh
+argv1=outputs/14-12/TRACKFORMERS/Q1/anthropic_claude-4-sonnet-20250522/script_anthropic_claude-4-sonnet-20250522_1529_1.py
+argv2=
+","+ exec
++ PY=outputs/14-12/TRACKFORMERS/Q1/anthropic_claude-4-sonnet-20250522/script_anthropic_claude-4-sonnet-20250522_1529_1.py
++ shift
+++ tr -d '\r\n'
+++ echo ''
+++ xargs
++ DRY=
++ [[ outputs/14-12/TRACKFORMERS/Q1/anthropic_claude-4-sonnet-20250522/script_anthropic_claude-4-sonnet-20250522_1529_1.py == \/\u\s\r\/\l\o\c\a\l\/\b\i\n\/\t\r\a\i\n\.\s\h ]]
++ [[ '' =~ (--dryrun|--dry-run) ]]
++ TIMEOUT=99999
++ : 0
++ : 0
++ ulimit -t 99999
++ ((  MEMORY_LIMIT_GB > 0  ))
++ ((  PIDS_LIMIT > 0  ))
++ timeout --signal=KILL 99999s python outputs/14-12/TRACKFORMERS/Q1/anthropic_claude-4-sonnet-20250522/script_anthropic_claude-4-sonnet-20250522_1529_1.py
+mkdir -p failed for path /home/sandbox/.config/matplotlib: [Errno 30] Read-only file system: '/home/sandbox/.config'
+Matplotlib created a temporary cache directory at /tmp/matplotlib-fz1jp_eb because there was an issue with the default path (/home/sandbox/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.
+Epoch 1/25: Train Loss=16114.969, Val Loss=1937.633
+  Train Acc=0.022, Val Acc=0.023
+Epoch 4/25: Train Loss=15503.196, Val Loss=1932.305
+  Train Acc=0.023, Val Acc=0.022
+Epoch 7/25: Train Loss=15478.807, Val Loss=1931.770
+  Train Acc=0.024, Val Acc=0.024
+Epoch 10/25: Train Loss=15468.106, Val Loss=1931.362
+  Train Acc=0.024, Val Acc=0.023
+Epoch 13/25: Train Loss=15460.547, Val Loss=1931.697
+  Train Acc=0.024, Val Acc=0.022
+Epoch 16/25: Train Loss=15453.671, Val Loss=1931.569
+  Train Acc=0.025, Val Acc=0.023
+Early stopping at epoch 17
+#TRAIN_METRICS#{""epochs"": 25, ""train_loss"": [16114.968505859375, 15554.655952453613, 15517.868545532227, 15503.196128845215, 15491.748023986816, 15483.886413574219, 15478.806983947754, 15473.132514953613, 15470.952545166016, 15468.106094360352, 15464.879234313965, 15462.764823913574, 15460.547164916992, 15459.052032470703, 15455.66870880127, 15453.670722961426, 15451.953018188477], ""val_loss"": [1937.6334838867188, 1933.8049011230469, 1933.2377319335938, 1932.3052062988281, 1931.9872741699219, 1931.7725524902344, 1931.7698364257812, 1931.8973388671875, 1931.8682556152344, 1931.3620910644531, 1931.9554138183594, 1931.77734375, 1931.6966857910156, 1931.8386535644531, 1931.5581665039062, 1931.5693054199219, 1931.5101318359375], ""train_acc"": [0.022062734687988354, 0.022896143992454092, 0.023153847644739364, 0.023041864999178076, 0.023460364245089814, 0.023468260457276825, 0.023612545789057717, 0.0237690343578549, 0.02379272299441594, 0.023895373752847122, 0.02416456280467714, 0.024670638222117576, 0.024394988633043638, 0.024911113775085727, 0.02494126294889069, 0.02527362169821682, 0.025444467016444938], ""val_acc"": [0.023182139633294428, 0.023015403013908135, 0.023297130405284975, 0.022078228222185168, 0.023941078728432045, 0.02229671068896721, 0.023716846723050477, 0.021917241141398404, 0.023268382712287337, 0.023320128559683087, 0.02355011010366418, 0.023647852259856147, 0.02217022083977761, 0.02372834580024953, 0.022906161780517114, 0.023164891017495845, 0.023343126714081196]}
++ python_rc=0
++ [[ 0 -ne 0 ]]
++ [[ '' =~ (--dryrun|--dry-run) ]]
+++ dirname outputs/14-12/TRACKFORMERS/Q1/anthropic_claude-4-sonnet-20250522/script_anthropic_claude-4-sonnet-20250522_1529_1.py
++ MODEL_DIR=outputs/14-12/TRACKFORMERS/Q1/anthropic_claude-4-sonnet-20250522
++ pushd outputs/14-12/TRACKFORMERS/Q1/anthropic_claude-4-sonnet-20250522
++ shopt -s nullglob
++ ref=
++ for cand in *_model.pkl *_state.pt *_preproc.pkl
++ [[ -e anthropic_claude-4-sonnet-20250522_1529_1_model.pkl ]]
++ ref=anthropic_claude-4-sonnet-20250522_1529_1_model.pkl
++ break
++ [[ -z anthropic_claude-4-sonnet-20250522_1529_1_model.pkl ]]
++ stem=anthropic_claude-4-sonnet-20250522_1529_1_model.pkl
++ case ""$ref"" in
++ stem=anthropic_claude-4-sonnet-20250522_1529_1
++ MANIFEST=anthropic_claude-4-sonnet-20250522_1529_1_manifest.sha256
++ files=(""${stem}_state.pt"" ""${stem}_model.pkl"" ""${stem}_preproc.pkl"")
++ have=()
++ for f in ""${files[@]}""
++ [[ -e anthropic_claude-4-sonnet-20250522_1529_1_state.pt ]]
++ have+=(""$f"")
++ for f in ""${files[@]}""
++ [[ -e anthropic_claude-4-sonnet-20250522_1529_1_model.pkl ]]
++ have+=(""$f"")
++ for f in ""${files[@]}""
++ [[ -e anthropic_claude-4-sonnet-20250522_1529_1_preproc.pkl ]]
++ have+=(""$f"")
++ (( 3==0 ))
++ sha256sum anthropic_claude-4-sonnet-20250522_1529_1_state.pt anthropic_claude-4-sonnet-20250522_1529_1_model.pkl anthropic_claude-4-sonnet-20250522_1529_1_preproc.pkl
++ shopt -u nullglob
++ echo 'Hash manifest written â†’ anthropic_claude-4-sonnet-20250522_1529_1_manifest.sha256'
+Hash manifest written â†’ anthropic_claude-4-sonnet-20250522_1529_1_manifest.sha256
++ popd
+",840.7755570000008,-24

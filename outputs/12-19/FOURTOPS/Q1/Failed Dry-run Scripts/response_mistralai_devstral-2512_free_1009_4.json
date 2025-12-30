@@ -1,0 +1,92 @@
+{
+  "LLMGeneration": {
+    "model": "mistralai/devstral-2512:free",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 3584,
+    "prompt_chars": 13777,
+    "response_tokens": 1823,
+    "response_chars": 7166,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0,
+    "generation_ms": 26619,
+    "code": "# ---------- IMPORTS ----------\nfrom sklearn.preprocessing import StandardScaler\nfrom torch.nn import Linear, ReLU, BatchNorm1d, Dropout, Sequential, Sigmoid\nfrom torch.optim import Adam\nfrom torch.optim.lr_scheduler import ReduceLROnPlateau\nimport torch.nn.functional as F\n\n# ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.scaler = StandardScaler()\n        self.global_scaler = StandardScaler()\n        self.obj_scaler = StandardScaler()\n\n    def make_loader_cfg(self):\n        return {\n            \"dataset_builder\": \"llm_script:FourTopsDataset\",\n            \"dataset_kwargs\": {},\n            \"loader_class\": \"torch.utils.data:DataLoader\",\n            \"batch_size\": 1024,\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": True,\n            \"collate\": None,\n            \"extra_loader_kwargs\": {},\n            \"eval_overrides\": {\"shuffle\": False},\n        }\n\n    def fit(self, X, y=None):\n        # Separate global and object features\n        global_features = X[:, :2]  # [n_events, 2]\n        obj_features = X[:, 2:].reshape(-1, 18*5)  # [n_events, 90] -> [n_events*18, 5]\n\n        # Fit scalers\n        self.global_scaler.fit(global_features)\n        self.obj_scaler.fit(obj_features)\n        return self\n\n    def transform(self, X):\n        # Apply scaling\n        global_features = self.global_scaler.transform(X[:, :2])  # [n_events, 2]\n        obj_features = X[:, 2:].reshape(-1, 18*5)  # [n_events, 90] -> [n_events*18, 5]\n        obj_features = self.obj_scaler.transform(obj_features)\n        obj_features = obj_features.reshape(X.shape[0], -1)  # [n_events*18, 5] -> [n_events, 90]\n\n        # Combine features\n        X_transformed = torch.cat([torch.from_numpy(global_features).float(),\n                                  torch.from_numpy(obj_features).float()], dim=1)\n        return X_transformed\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# ---------- MODEL DEFINITION ----------\nclass BinaryClassifier(nn.Module):\n    def __init__(self, sample_object):\n        super().__init__()\n        input_dim = sample_object.shape[1]\n\n        # Feature extraction layers\n        self.feature_extractor = Sequential(\n            Linear(input_dim, 512),\n            BatchNorm1d(512),\n            ReLU(),\n            Dropout(0.3),\n            Linear(512, 256),\n            BatchNorm1d(256),\n            ReLU(),\n            Dropout(0.3),\n            Linear(256, 128),\n            BatchNorm1d(128),\n            ReLU()\n        )\n\n        # Attention mechanism for object features\n        self.attention = Sequential(\n            Linear(128, 64),\n            ReLU(),\n            Linear(64, 1),\n            ReLU()\n        )\n\n        # Classification head\n        self.classifier = Sequential(\n            Linear(128, 64),\n            BatchNorm1d(64),\n            ReLU(),\n            Dropout(0.2),\n            Linear(64, 32),\n            BatchNorm1d(32),\n            ReLU(),\n            Linear(32, 1),\n            Sigmoid()\n        )\n\n    def forward(self, batch_x):\n        # Extract features\n        features = self.feature_extractor(batch_x)  # [batch_size, 128]\n\n        # Apply attention to object features (assuming last 90 features are objects)\n        if batch_x.shape[1] > 2:\n            obj_features = features[:, 2:]  # [batch_size, 126] (if 90 object features)\n            attention_weights = self.attention(obj_features)  # [batch_size, 126, 1]\n            attention_weights = F.softmax(attention_weights, dim=1)\n            attended_features = torch.sum(attention_weights * obj_features, dim=1)  # [batch_size, 128]\n        else:\n            attended_features = features\n\n        # Classify\n        output = self.classifier(attended_features)\n        return output.squeeze(-1)\n\ndef make_model(example_object):\n    return BinaryClassifier(example_object)\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 50\n\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    device = torch.device(\"cuda\" if torch.cuda.is_available() else \"cpu\")\n    model = model.to(device)\n\n    criterion = nn.BCELoss()\n    optimizer = Adam(model.parameters(), lr=0.001, weight_decay=1e-5)\n    scheduler = ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=5, verbose=False)\n\n    best_val_auc = 0.0\n    patience = 10\n    patience_counter = 0\n\n    train_losses = []\n    val_losses = []\n    train_accs = []\n    val_accs = []\n\n    for epoch in range(epochs):\n        # Training phase\n        model.train()\n        train_loss = 0.0\n        correct_train = 0\n        total_train = 0\n\n        for batch_x, batch_y in train_loader:\n            batch_x, batch_y = batch_x.to(device), batch_y.to(device).float()\n\n            optimizer.zero_grad()\n            outputs = model(batch_x)\n            loss = criterion(outputs, batch_y)\n            loss.backward()\n            optimizer.step()\n\n            train_loss += loss.item() * batch_x.size(0)\n            predicted = (outputs > 0.5).float()\n            correct_train += (predicted == batch_y).sum().item()\n            total_train += batch_y.size(0)\n\n        train_loss /= len(train_loader.dataset)\n        train_acc = correct_train / total_train\n        train_losses.append(train_loss)\n        train_accs.append(train_acc)\n\n        # Validation phase\n        model.eval()\n        val_loss = 0.0\n        correct_val = 0\n        total_val = 0\n        all_preds = []\n        all_labels = []\n\n        with torch.no_grad():\n            for batch_x, batch_y in val_loader:\n                batch_x, batch_y = batch_x.to(device), batch_y.to(device).float()\n\n                outputs = model(batch_x)\n                loss = criterion(outputs, batch_y)\n\n                val_loss += loss.item() * batch_x.size(0)\n                predicted = (outputs > 0.5).float()\n                correct_val += (predicted == batch_y).sum().item()\n                total_val += batch_y.size(0)\n\n                all_preds.extend(outputs.cpu().numpy())\n                all_labels.extend(batch_y.cpu().numpy())\n\n        val_loss /= len(val_loader.dataset)\n        val_acc = correct_val / total_val\n        val_losses.append(val_loss)\n        val_accs.append(val_acc)\n\n        # Calculate AUC\n        from sklearn.metrics import roc_auc_score\n        try:\n            val_auc = roc_auc_score(all_labels, all_preds)\n        except:\n            val_auc = 0.0\n\n        # Early stopping and learning rate scheduling\n        if val_auc > best_val_auc:\n            best_val_auc = val_auc\n            patience_counter = 0\n            torch.save(model.state_dict(), 'best_model.pth')\n        else:\n            patience_counter += 1\n            if patience_counter >= patience:\n                print(f\"Early stopping at epoch {epoch}\")\n                break\n\n        scheduler.step(val_auc)\n\n        print(f\"Epoch {epoch+1}/{epochs} - Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}, \"\n              f\"Train Acc: {train_acc:.4f}, Val Acc: {val_acc:.4f}, Val AUC: {val_auc:.4f}\")\n\n    # Load best model\n    model.load_state_dict(torch.load('best_model.pth'))\n\n    return model, train_losses, val_losses, train_accs, val_accs",
+    "reasoning": "",
+    "Outer_attempt": 4
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-12-19T09:09:35Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-12-19T09:09:35Z",
+        "metrics": {
+          ".\\outputs\\12-19\\FOURTOPS\\Q1\\script_mistralai_devstral-2512_free_1009_4.py": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 246,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 246,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "Training": {
+    "__timestamp": "2025-12-19T09:09:57.686774+00:00",
+    "passed": false,
+    "resources": {
+      "cpu_seconds_user": 0.58,
+      "cpu_seconds_sys": 0.55,
+      "disk_read_mb": 46.6,
+      "disk_write_mb": 0.3,
+      "max_rss_kb": 40,
+      "training_time_s": 21.84,
+      "gpu_name": null,
+      "gpu_total_mb": null,
+      "gpu_peak_alloc_mb": null,
+      "cuda_available": null
+    },
+    "metrics": null,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/12-19/FOURTOPS/Q1/script_mistralai_devstral-2512_free_1009_4.py\nargv2=--dryrun\n",
+      "stderr": "+ exec\n+ PY=outputs/12-19/FOURTOPS/Q1/script_mistralai_devstral-2512_free_1009_4.py\n+ shift\n++ echo --dryrun\n++ tr -d '\\r\\n'\n++ xargs\n+ DRY=--dryrun\n+ [[ outputs/12-19/FOURTOPS/Q1/script_mistralai_devstral-2512_free_1009_4.py == \\/\\u\\s\\r\\/\\l\\o\\c\\a\\l\\/\\b\\i\\n\\/\\t\\r\\a\\i\\n\\.\\s\\h ]]\n+ [[ --dryrun =~ (--dryrun|--dry-run) ]]\n+ TIMEOUT=3600\n+ : 0\n+ : 0\n+ ulimit -t 3600\n+ ((  MEMORY_LIMIT_GB > 0  ))\n+ ((  PIDS_LIMIT > 0  ))\n+ timeout --signal=KILL 3600s python outputs/12-19/FOURTOPS/Q1/script_mistralai_devstral-2512_free_1009_4.py --dryrun\nmkdir -p failed for path /home/sandbox/.config/matplotlib: [Errno 30] Read-only file system: '/home/sandbox/.config'\nMatplotlib created a temporary cache directory at /tmp/matplotlib-pbn024ru because there was an issue with the default path (/home/sandbox/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.\nTraceback (most recent call last):\n  File \"/workspace/outputs/12-19/FOURTOPS/Q1/script_mistralai_devstral-2512_free_1009_4.py\", line 342, in <module>\n    _run(dryrun=\"--dryrun\" in sys.argv)\n  File \"/workspace/outputs/12-19/FOURTOPS/Q1/script_mistralai_devstral-2512_free_1009_4.py\", line 298, in _run\n    model       = make_model(view.batch_x).to(device)\n                  ^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/outputs/12-19/FOURTOPS/Q1/script_mistralai_devstral-2512_free_1009_4.py\", line 166, in make_model\n    return BinaryClassifier(example_object)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/outputs/12-19/FOURTOPS/Q1/script_mistralai_devstral-2512_free_1009_4.py\", line 110, in __init__\n    input_dim = sample_object.shape[1]\n                ^^^^^^^^^^^^^^^^^^^\nAttributeError: 'list' object has no attribute 'shape'\n"
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2025-12-19T09:09:57Z",
+    "passed": false,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/12-19/FOURTOPS/Q1/script_mistralai_devstral-2512_free_1009_4.py\nargv2=--dryrun\n",
+      "stderr": "+ exec\n+ PY=outputs/12-19/FOURTOPS/Q1/script_mistralai_devstral-2512_free_1009_4.py\n+ shift\n++ echo --dryrun\n++ tr -d '\\r\\n'\n++ xargs\n+ DRY=--dryrun\n+ [[ outputs/12-19/FOURTOPS/Q1/script_mistralai_devstral-2512_free_1009_4.py == \\/\\u\\s\\r\\/\\l\\o\\c\\a\\l\\/\\b\\i\\n\\/\\t\\r\\a\\i\\n\\.\\s\\h ]]\n+ [[ --dryrun =~ (--dryrun|--dry-run) ]]\n+ TIMEOUT=3600\n+ : 0\n+ : 0\n+ ulimit -t 3600\n+ ((  MEMORY_LIMIT_GB > 0  ))\n+ ((  PIDS_LIMIT > 0  ))\n+ timeout --signal=KILL 3600s python outputs/12-19/FOURTOPS/Q1/script_mistralai_devstral-2512_free_1009_4.py --dryrun\nmkdir -p failed for path /home/sandbox/.config/matplotlib: [Errno 30] Read-only file system: '/home/sandbox/.config'\nMatplotlib created a temporary cache directory at /tmp/matplotlib-pbn024ru because there was an issue with the default path (/home/sandbox/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.\nTraceback (most recent call last):\n  File \"/workspace/outputs/12-19/FOURTOPS/Q1/script_mistralai_devstral-2512_free_1009_4.py\", line 342, in <module>\n    _run(dryrun=\"--dryrun\" in sys.argv)\n  File \"/workspace/outputs/12-19/FOURTOPS/Q1/script_mistralai_devstral-2512_free_1009_4.py\", line 298, in _run\n    model       = make_model(view.batch_x).to(device)\n                  ^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/outputs/12-19/FOURTOPS/Q1/script_mistralai_devstral-2512_free_1009_4.py\", line 166, in make_model\n    return BinaryClassifier(example_object)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/outputs/12-19/FOURTOPS/Q1/script_mistralai_devstral-2512_free_1009_4.py\", line 110, in __init__\n    input_dim = sample_object.shape[1]\n                ^^^^^^^^^^^^^^^^^^^\nAttributeError: 'list' object has no attribute 'shape'\n"
+    },
+    "return_code": 1
+  }
+}

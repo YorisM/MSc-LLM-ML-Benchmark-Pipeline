@@ -1,0 +1,71 @@
+{
+  "LLMGeneration": {
+    "model": "x-ai/grok-code-fast-1",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 3699,
+    "prompt_chars": 14633,
+    "response_tokens": 3794,
+    "response_chars": 8908,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.00577416,
+    "generation_ms": 24661,
+    "code": "# ---------- IMPORTS ----------\nimport torch\nimport torch.nn as nn\nimport torch.nn.functional as F\nfrom torch_geometric.data import Data\nfrom torch_geometric.loader import DataLoader\nfrom torch_geometric.nn import GINConv, global_mean_pool\nfrom torch.optim import Adam\nfrom torch.optim.lr_scheduler import ReduceLROnPlateau\nfrom sklearn.metrics import roc_auc_score\nimport numpy as np\n\n\n# -------- CUSTOM DATASET --------\nclass CustomDataset(Dataset):\n    def __init__(self, events, pre, train: bool = True, **kwargs):\n        X, y = events\n        self.data_list = pre.transform(X, y)\n\n    def __len__(self):\n        return len(self.data_list)\n\n    def __getitem__(self, idx):\n        return self.data_list[idx], self.data_list[idx].y\n\n\n# ----------- PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.obj_slice = 5  # obj_id, E, pT, eta, phi\n        self.global_features = 2  # E_T_miss, phi_E_T_miss\n        self.max_objects = 18\n\n    def make_loader_cfg(self) -> dict:\n        return {\n            \"dataset_builder\": \"llm_script:CustomDataset\",\n            \"dataset_kwargs\": {},\n\n            \"loader_class\": \"torch_geometric.loader:DataLoader\",\n            \"batch_size\": 512,\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": False,\n\n            \"collate\": None,\n\n            \"extra_loader_kwargs\": {},\n\n            \"eval_overrides\": {\"shuffle\": False},\n        }\n\n    def fit(self, X, y=None):\n        return self\n\n    def transform(self, X, y=None):\n        data_list = []\n        for i in range(X.shape[0]):\n            event_x = X[i]  # shape [92]\n            event_y = y[i] if y is not None else 0\n            global_feat = event_x[:self.global_features]  # [2]\n\n            nodes = []\n            for j in range(self.max_objects):\n                start = self.global_features + j * self.obj_slice\n                obj_feat = event_x[start:start + self.obj_slice]  # [5]: obj_id, E, pT, eta, phi\n                # Check if valid object: obj_id > 0 and energy > 0\n                if obj_feat[0] > 0 and obj_feat[1] > 0:\n                    p_x = obj_feat[2] * torch.cos(obj_feat[4])\n                    p_y = obj_feat[2] * torch.sin(obj_feat[4])\n                    p_z = obj_feat[2] * torch.sinh(obj_feat[3])\n                    # Node features: obj_id, E, pT, eta, phi, p_x, p_y, p_z  (8 dims)\n                    nodes.append(torch.cat([obj_feat, torch.tensor([p_x, p_y, p_z])]))\n            nodes = torch.stack(nodes) if nodes else torch.empty(0, 8)  # shape [num_nodes, 8]\n\n            # Create fully connected edges if nodes exist\n            if len(nodes) > 0:\n                num_nodes = len(nodes)\n                edge_index = []\n                edge_attr = []\n                for u in range(num_nodes):\n                    for v in range(u + 1, num_nodes):\n                        # Compute delta R\n                        eta_u, phi_u = nodes[u, 3], nodes[u, 4]\n                        eta_v, phi_v = nodes[v, 3], nodes[v, 4]\n                        delta_phi = phi_u - phi_v\n                        delta_phi = torch.remainder(delta_phi + torch.pi, 2 * torch.pi) - torch.pi  # handle wrap\n                        delta_r = torch.sqrt((eta_u - eta_v)**2 + delta_phi**2)\n                        # Compute m_ij\n                        e_u, px_u, py_u, pz_u = nodes[u, 1], nodes[u, 5], nodes[u, 6], nodes[u, 7]\n                        e_v, px_v, py_v, pz_v = nodes[v, 1], nodes[v, 5], nodes[v, 6], nodes[v, 7]\n                        m_ij = torch.sqrt((e_u + e_v)**2 - (px_u + px_v)**2 - (py_u + py_v)**2 - (pz_u + pz_v)**2)\n                        m_ij = torch.clamp(m_ij, 0, float('inf'))  # ensure non-negative\n                        edge_attr.append([m_ij, delta_r])\n                        edge_index.append([u, v])\n                        edge_index.append([v, u])  # undirected\n\n                if edge_index:\n                    edge_index = torch.tensor(edge_index, dtype=torch.long).t()\n                    edge_attr = torch.tensor(edge_attr, dtype=torch.float)\n                else:\n                    edge_index = torch.empty(2, 0, dtype=torch.long)\n                    edge_attr = torch.empty(0, 2, dtype=torch.float)\n            else:\n                edge_index = torch.empty(2, 0, dtype=torch.long)\n                edge_attr = torch.empty(0, 2, dtype=torch.float)\n\n            data = Data(\n                x=nodes,\n                edge_index=edge_index,\n                edge_attr=edge_attr,\n                global_feat=global_feat,\n                y=event_y\n            )\n            data_list.append(data)\n        return data_list\n\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n\n# ---------- MODEL DEFINITION ----------\nclass BinaryClassifier(nn.Module):\n    def __init__(self, example_object):\n        super().__init__()\n        self.in_dim = 8  # node features\n        self.edge_dim = 2  # edge features\n        self.global_dim = 2  # global features\n        self.hidden_dim = 64\n\n        self.conv1 = GINConv(nn.Linear(self.in_dim, self.hidden_dim), edge_dim=self.edge_dim)\n        self.conv2 = GINConv(nn.Linear(self.hidden_dim, self.hidden_dim), edge_dim=self.edge_dim)\n        self.global_pool = global_mean_pool\n        self.mlp = nn.Sequential(\n            nn.Linear(self.hidden_dim + self.global_dim, 128),\n            nn.ReLU(),\n            nn.Linear(128, 64),\n            nn.ReLU(),\n            nn.Linear(64, 1)\n        )\n\n    def forward(self, batch_x):\n        x, edge_index, edge_attr, global_feat, batch = batch_x.x, batch_x.edge_index, batch_x.edge_attr, batch_x.global_feat, batch_x.batch\n        x = self.conv1(x, edge_index, edge_attr)\n        x = F.relu(x)\n        x = self.conv2(x, edge_index, edge_attr)\n        x = self.global_pool(x, batch)  # shape [batch_size, hidden_dim]\n        x = torch.cat([x, global_feat], dim=1)  # concat global\n        return self.mlp(x).squeeze()\n\n\ndef make_model(example_object):\n    return BinaryClassifier(example_object)\n\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 10\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    model.to(device)\n    optimizer = Adam(model.parameters(), lr=1e-3)\n    scheduler = ReduceLROnPlateau(optimizer, mode='max', patience=3, factor=0.5, verbose=False)\n    criterion = nn.BCEWithLogitsLoss()\n\n    best_auc = 0.0\n    best_model_state = None\n    patience = 5\n    counter = 0\n\n    train_losses, val_losses, train_accs, val_accs = [], [], [], []\n\n    for epoch in range(epochs):\n        model.train()\n        train_loss = 0\n        train_correct = 0\n        for batch_x, batch_y in train_loader:\n            batch_x = batch_x.to(device)\n            batch_y = batch_y.to(device)\n            optimizer.zero_grad()\n            outputs = model(batch_x)\n            loss = criterion(outputs, batch_y.to(torch.float))\n            loss.backward()\n            optimizer.step()\n            train_loss += loss.item() * batch_y.size(0)\n            preds = (torch.sigmoid(outputs) > 0.5).long()\n            train_correct += (preds == batch_y).sum().item()\n\n        train_loss /= len(train_loader.dataset)\n        train_acc = train_correct / len(train_loader.dataset)\n\n        model.eval()\n        val_loss = 0\n        val_correct = 0\n        val_preds = []\n        val_targets = []\n        with torch.no_grad():\n            for batch_x, batch_y in val_loader:\n                batch_x = batch_x.to(device)\n                batch_y = batch_y.to(device)\n                outputs = model(batch_x)\n                loss = criterion(outputs, batch_y.to(torch.float))\n                val_loss += loss.item() * batch_y.size(0)\n                preds = torch.sigmoid(outputs)\n                preds_binary = (preds > 0.5).long()\n                val_correct += (preds_binary == batch_y).sum().item()\n                val_preds.extend(preds.cpu().numpy())\n                val_targets.extend(batch_y.cpu().numpy())\n\n        val_loss /= len(val_loader.dataset)\n        val_acc = val_correct / len(val_loader.dataset)\n        val_auc = roc_auc_score(val_targets, val_preds) if len(np.unique(val_targets)) > 1 else 0.5\n\n        train_losses.append(train_loss)\n        val_losses.append(val_loss)\n        train_accs.append(train_acc)\n        val_accs.append(val_acc)\n\n        scheduler.step(val_auc)\n\n        if val_auc > best_auc:\n            best_auc = val_auc\n            best_model_state = model.state_dict()\n            counter = 0\n        else:\n            counter += 1\n            if counter >= patience:\n                break  # early stop\n\n    # Load best model\n    model.load_state_dict(best_model_state)\n    trained_model = model\n\n    return trained_model, train_losses[-1], val_losses[-1], train_accs[-1], val_accs[-1]",
+    "reasoning": "",
+    "Outer_attempt": 4
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-12-23T16:34:55Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-12-23T16:34:55Z",
+        "metrics": {
+          ".\\outputs\\12-23\\FOURTOPS\\Q2\\script_x-ai_grok-code-fast-1_1734_4.py": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 269,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 269,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2025-12-23T16:35:23Z",
+    "passed": false,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/12-23/FOURTOPS/Q2/script_x-ai_grok-code-fast-1_1734_4.py\nargv2=--dryrun\n",
+      "stderr": "+ exec\n+ PY=outputs/12-23/FOURTOPS/Q2/script_x-ai_grok-code-fast-1_1734_4.py\n+ shift\n++ echo --dryrun\n++ tr -d '\\r\\n'\n++ xargs\n+ DRY=--dryrun\n+ [[ outputs/12-23/FOURTOPS/Q2/script_x-ai_grok-code-fast-1_1734_4.py == \\/\\u\\s\\r\\/\\l\\o\\c\\a\\l\\/\\b\\i\\n\\/\\t\\r\\a\\i\\n\\.\\s\\h ]]\n+ [[ --dryrun =~ (--dryrun|--dry-run) ]]\n+ TIMEOUT=3600\n+ : 0\n+ : 0\n+ ulimit -t 3600\n+ ((  MEMORY_LIMIT_GB > 0  ))\n+ ((  PIDS_LIMIT > 0  ))\n+ timeout --signal=KILL 3600s python outputs/12-23/FOURTOPS/Q2/script_x-ai_grok-code-fast-1_1734_4.py --dryrun\nmkdir -p failed for path /home/sandbox/.config/matplotlib: [Errno 30] Read-only file system: '/home/sandbox/.config'\nMatplotlib created a temporary cache directory at /tmp/matplotlib-u_g7qhpg because there was an issue with the default path (/home/sandbox/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.\nTraceback (most recent call last):\n  File \"/workspace/outputs/12-23/FOURTOPS/Q2/script_x-ai_grok-code-fast-1_1734_4.py\", line 357, in <module>\n    _run(dryrun=\"--dryrun\" in sys.argv)\n  File \"/workspace/outputs/12-23/FOURTOPS/Q2/script_x-ai_grok-code-fast-1_1734_4.py\", line 313, in _run\n    model       = make_model(view.batch_x).to(device)\n                  ^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/outputs/12-23/FOURTOPS/Q2/script_x-ai_grok-code-fast-1_1734_4.py\", line 204, in make_model\n    return BinaryClassifier(example_object)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/outputs/12-23/FOURTOPS/Q2/script_x-ai_grok-code-fast-1_1734_4.py\", line 182, in __init__\n    self.conv1 = GINConv(nn.Linear(self.in_dim, self.hidden_dim), edge_dim=self.edge_dim)\n                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/torch_geometric/nn/conv/gin_conv.py\", line 59, in __init__\n    super().__init__(**kwargs)\nTypeError: MessagePassing.__init__() got an unexpected keyword argument 'edge_dim'\n"
+    },
+    "return_code": 1
+  }
+}

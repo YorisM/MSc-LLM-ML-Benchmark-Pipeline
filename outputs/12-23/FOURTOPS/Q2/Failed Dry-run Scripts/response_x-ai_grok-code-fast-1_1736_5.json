@@ -1,0 +1,71 @@
+{
+  "LLMGeneration": {
+    "model": "x-ai/grok-code-fast-1",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 3699,
+    "prompt_chars": 14633,
+    "response_tokens": 6644,
+    "response_chars": 8924,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.01004916,
+    "generation_ms": 44225,
+    "code": "# ---------- IMPORTS ----------\nimport torch\nimport torch.nn as nn\nimport torch.nn.functional as F\nimport torch.optim as optim\nfrom torch_geometric.data import Data, Batch\nfrom torch_geometric.loader import DataLoader as pyg_DataLoader\nfrom torch.utils.data import DataLoader\nfrom sklearn.metrics import roc_auc_score\nimport math\n\n# ----------- (OPTIONAL) CUSTOM DATASET  --------\nclass CustomDataset(FourTopsDataset):\n    def __init__(self, events, pre, train: bool = True, **kwargs):\n        super().__init__(events, pre, train, **kwargs)\n\n# ---------- PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.global_mean = None\n        self.global_std = None\n        self.particle_mean = None\n        self.particle_std = None\n        self.max_obj_id = None\n\n    def make_loader_cfg(self) -> dict:\n        return {\n            \"dataset_builder\": \"llm_script:CustomDataset\",\n            \"dataset_kwargs\": {},\n            \"loader_class\": \"torch_geometric.loader:DataLoader\",\n            \"batch_size\": 512,\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": False,\n            \"collate\": None,\n            \"extra_loader_kwargs\": {},\n            \"eval_overrides\": {\"shuffle\": False},\n        }\n\n    def fit(self, X, y=None):\n        # Compute means and stds for normalization\n        # Globals: E_T_miss, phi_Et_miss\n        self.global_mean = X[:, :2].mean(dim=0)\n        self.global_std = X[:, :2].std(dim=0)\n        # Particles: for each obj, E, pt, eta, phi\n        particle_features = []\n        obj_ids = []\n        for j in range(18):\n            start = 2 + j * 5\n            particle_features.append(X[:, start + 1:start + 5])  # E, pt, eta, phi\n            obj_ids.append(X[:, start])  # obj_id\n        particle_features = torch.cat(particle_features, dim=0)  # [18*N, 4]\n        obj_ids = torch.cat(obj_ids, dim=0)\n        # Mask zeros (padded, assume E=0 means padded)\n        mask = particle_features[:, 0] != 0  # E != 0\n        particle_features_masked = particle_features[mask]\n        self.particle_mean = particle_features_masked.mean(dim=0)\n        self.particle_std = particle_features_masked.std(dim=0)\n        masked_obj_ids = obj_ids[mask]\n        self.max_obj_id = masked_obj_ids.max() + 1  # for embedding\n        return self\n\n    def transform(self, X):\n        datas = []\n        for i in range(X.shape[0]):\n            event = X[i]\n            # Extract globals\n            globals = (event[:2] - self.global_mean) / self.global_std\n            # Extract particles (up to 18, skip if E==0 or pt<=0)\n            particles = []\n            for j in range(18):\n                start = 2 + j * 5\n                obj_id = event[start].int()\n                features = event[start + 1:start + 5]  # E, pt, eta, phi\n                if features[0] == 0 or features[1] <= 0:\n                    continue\n                particles.append((obj_id, features[0], features[1], features[2], features[3]))\n            if len(particles) < 2:\n                # If less than 2 particles, add a dummy or handle as single node, but skip for now\n                continue\n            num_particles = len(particles)\n            # Normalize particle features\n            node_features = []\n            for p in particles:\n                obj_id, E, pt, eta, phi = p\n                norm_features = torch.tensor([obj_id.float() / self.max_obj_id, (E - self.particle_mean[0]) / self.particle_std[0],\n                                             (pt - self.particle_mean[1]) / self.particle_std[1],\n                                             (eta - self.particle_mean[2]) / self.particle_std[2],\n                                             (phi - self.particle_mean[3]) / self.particle_std[3],\n                                             globals[0], globals[1]], dtype=torch.float32)\n                node_features.append(norm_features)  # [8]\n            node_features = torch.stack(node_features)  # [num_particles, 8]\n            # Build edges (fully connected)\n            edge_index = []\n            edge_attr = []\n            for k in range(num_particles):\n                for l in range(k + 1, num_particles):\n                    pt1, eta1, phi1 = particles[k][1], particles[k][3], particles[k][4]  # pt, eta, phi\n                    pt2, eta2, phi2 = particles[l][1], particles[l][3], particles[l][4]\n                    delta_eta = eta1 - eta2\n                    delta_phi = torch.remainder(phi1 - phi2 + math.pi, 2 * math.pi) - math.pi\n                    delta_R = torch.sqrt(delta_eta ** 2 + delta_phi ** 2)\n                    cosh_delta_eta = torch.cosh(delta_eta)\n                    cos_delta_phi = torch.cos(delta_phi)\n                    m_ij_sq = 2 * pt1 * pt2 * (cosh_delta_eta - cos_delta_phi)\n                    m_ij = torch.sqrt(torch.clamp(m_ij_sq, min=0))  # [1]\n                    edge_index.append([k, l])\n                    edge_index.append([l, k])\n                    edge_attr.append([delta_R, m_ij])\n                    edge_attr.append([delta_R, m_ij])\n            edge_index = torch.tensor(edge_index).t()  # [2, num_edges]\n            edge_attr = torch.stack(edge_attr)  # [num_edges, 2]\n            datas.append(Data(x=node_features, edge_index=edge_index, edge_attr=edge_attr))\n        return datas  # list of Data\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# ---------- MODEL DEFINITION ----------\nclass BinaryClassifier(nn.Module):\n    def __init__(self, sample_object):\n        super().__init__()\n        from torch_geometric.nn import GATConv, global_mean_pool\n        hidden_dim = 64\n        num_heads = 8\n        self.conv1 = GATConv(sample_object.x.size(1), hidden_dim, heads=num_heads, edge_dim=2)\n        self.conv2 = GATConv(hidden_dim * num_heads, hidden_dim, heads=num_heads, edge_dim=2)\n        self.pool = global_mean_pool\n        self.fc1 = nn.Linear(hidden_dim * num_heads, 128)\n        self.fc2 = nn.Linear(128, 1)\n        self.dropout = nn.Dropout(0.5)\n\n    def forward(self, batch_x):\n        x, edge_index, edge_attr, batch = batch_x.x, batch_x.edge_index, batch_x.edge_attr, batch_x.batch\n        x = F.relu(self.conv1(x, edge_index, edge_attr))\n        x = self.dropout(x)\n        x = F.relu(self.conv2(x, edge_index, edge_attr))\n        x = self.dropout(x)\n        x = self.pool(x, batch)\n        x = F.relu(self.fc1(x))\n        x = self.dropout(x)\n        x = self.fc2(x)\n        return x.squeeze()\n\ndef make_model(example_object):\n    return BinaryClassifier(example_object)\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 20\ndef train_model(model, train_loader, val_loader, epochs):\n    model.to(device)\n    criterion = nn.BCEWithLogitsLoss()\n    optimizer = optim.Adam(model.parameters(), lr=0.001)\n    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.5)\n    best_auc = 0.0\n    patience = 5\n    counter = 0\n    train_loss_list, val_loss_list, train_acc_list, val_acc_list = [], [], [], []\n    for epoch in range(epochs):\n        model.train()\n        total_loss = 0\n        correct = 0\n        total = 0\n        for batch in train_loader:\n            batch_x, batch_y = batch.batch_x.to(device), batch.batch_y.to(device)\n            optimizer.zero_grad()\n            outputs = model(batch_x)\n            loss = criterion(outputs, batch_y.float())\n            loss.backward()\n            optimizer.step()\n            total_loss += loss.item()\n            preds = (torch.sigmoid(outputs) > 0.5).long()\n            correct += (preds == batch_y).sum().item()\n            total += batch_y.size(0)\n        train_loss = total_loss / len(train_loader)\n        train_acc = correct / total\n        scheduler.step()\n        model.eval()\n        val_loss = 0\n        val_preds = []\n        val_labels = []\n        with torch.no_grad():\n            for batch in val_loader:\n                batch_x, batch_y = batch.batch_x.to(device), batch.batch_y.to(device)\n                outputs = model(batch_x)\n                loss = criterion(outputs, batch_y.float())\n                val_loss += loss.item()\n                val_preds.extend(torch.sigmoid(outputs).cpu().numpy())\n                val_labels.extend(batch_y.cpu().numpy())\n        val_loss /= len(val_loader)\n        val_acc = ((torch.tensor(val_preds) > 0.5).long() == torch.tensor(val_labels)).float().mean().item()\n        val_auc = roc_auc_score(val_labels, val_preds)\n        if val_auc > best_auc:\n            best_auc = val_auc\n            counter = 0\n            torch.save(model.state_dict(), 'best_model.pth')\n        else:\n            counter += 1\n        if counter >= patience:\n            break\n        train_loss_list.append(train_loss)\n        val_loss_list.append(val_loss)\n        train_acc_list.append(train_acc)\n        val_acc_list.append(val_acc)\n    model.load_state_dict(torch.load('best_model.pth'))\n    return model, train_loss_list, val_loss_list, train_acc_list, val_acc_list",
+    "reasoning": "",
+    "Outer_attempt": 5
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-12-23T16:36:21Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-12-23T16:36:21Z",
+        "metrics": {
+          ".\\outputs\\12-23\\FOURTOPS\\Q2\\script_x-ai_grok-code-fast-1_1736_5.py": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 268,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 268,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2025-12-23T16:36:46Z",
+    "passed": false,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/12-23/FOURTOPS/Q2/script_x-ai_grok-code-fast-1_1736_5.py\nargv2=--dryrun\n",
+      "stderr": "+ exec\n+ PY=outputs/12-23/FOURTOPS/Q2/script_x-ai_grok-code-fast-1_1736_5.py\n+ shift\n++ echo --dryrun\n++ tr -d '\\r\\n'\n++ xargs\n+ DRY=--dryrun\n+ [[ outputs/12-23/FOURTOPS/Q2/script_x-ai_grok-code-fast-1_1736_5.py == \\/\\u\\s\\r\\/\\l\\o\\c\\a\\l\\/\\b\\i\\n\\/\\t\\r\\a\\i\\n\\.\\s\\h ]]\n+ [[ --dryrun =~ (--dryrun|--dry-run) ]]\n+ TIMEOUT=3600\n+ : 0\n+ : 0\n+ ulimit -t 3600\n+ ((  MEMORY_LIMIT_GB > 0  ))\n+ ((  PIDS_LIMIT > 0  ))\n+ timeout --signal=KILL 3600s python outputs/12-23/FOURTOPS/Q2/script_x-ai_grok-code-fast-1_1736_5.py --dryrun\nmkdir -p failed for path /home/sandbox/.config/matplotlib: [Errno 30] Read-only file system: '/home/sandbox/.config'\nMatplotlib created a temporary cache directory at /tmp/matplotlib-6g4rhnv7 because there was an issue with the default path (/home/sandbox/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.\nTraceback (most recent call last):\n  File \"/workspace/outputs/12-23/FOURTOPS/Q2/script_x-ai_grok-code-fast-1_1736_5.py\", line 331, in <module>\n    _run(dryrun=\"--dryrun\" in sys.argv)\n  File \"/workspace/outputs/12-23/FOURTOPS/Q2/script_x-ai_grok-code-fast-1_1736_5.py\", line 279, in _run\n    train_ds     = build_dataset(spec, (X_train, Y_train), pre, train=True)\n                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/utils/llm_io.py\", line 632, in build_dataset\n    return builder(events, preproc, train=train, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/outputs/12-23/FOURTOPS/Q2/script_x-ai_grok-code-fast-1_1736_5.py\", line 66, in __init__\n    super().__init__(events, pre, train, **kwargs)\n  File \"/workspace/outputs/12-23/FOURTOPS/Q2/script_x-ai_grok-code-fast-1_1736_5.py\", line 42, in __init__\n    self.X = pre.transform(X) if pre is not None else X\n             ^^^^^^^^^^^^^^^^\n  File \"/workspace/outputs/12-23/FOURTOPS/Q2/script_x-ai_grok-code-fast-1_1736_5.py\", line 163, in transform\n    edge_attr = torch.stack(edge_attr)  # [num_edges, 2]\n                ^^^^^^^^^^^^^^^^^^^^^^\nTypeError: expected Tensor as element 0 in argument 0, but got list\n"
+    },
+    "return_code": 1
+  }
+}

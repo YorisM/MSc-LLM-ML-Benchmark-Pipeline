@@ -1,0 +1,71 @@
+{
+  "LLMGeneration": {
+    "model": "mistralai/devstral-2512:free",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 3782,
+    "prompt_chars": 14633,
+    "response_tokens": 2218,
+    "response_chars": 8592,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0,
+    "generation_ms": 148905,
+    "code": "# ---------- IMPORTS ----------\nimport torch.nn.functional as F\nfrom sklearn.preprocessing import StandardScaler\nfrom torch_geometric.data import Data\nfrom torch_geometric.nn import TransformerConv, global_mean_pool\nfrom torch_geometric.loader import DataLoader\n\n# ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.scaler = StandardScaler()\n        self.global_scaler = StandardScaler()\n        self.obj_scaler = StandardScaler()\n        self.max_objects = 18\n        self.global_features = 2\n        self.obj_features = 5\n\n    def make_loader_cfg(self) -> dict:\n        return {\n            \"dataset_builder\": \"llm_script:FourTopsDataset\",\n            \"dataset_kwargs\": {},\n            \"loader_class\": \"torch_geometric.loader:DataLoader\",\n            \"batch_size\": 256,\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": False,\n            \"collate\": None,\n            \"extra_loader_kwargs\": {},\n            \"eval_overrides\": {\"shuffle\": False},\n        }\n\n    def fit(self, X, y=None):\n        # Separate global and object features\n        global_feats = X[:, :2]  # [n_events, 2]\n        obj_feats = X[:, 2:].reshape(-1, self.max_objects * self.obj_features)  # [n_events, 90]\n\n        # Fit scalers\n        self.global_scaler.fit(global_feats)\n        self.obj_scaler.fit(obj_feats)\n        return self\n\n    def transform(self, X):\n        # Apply scaling\n        global_feats = self.global_scaler.transform(X[:, :2])  # [n_events, 2]\n        obj_feats = self.obj_scaler.transform(X[:, 2:].reshape(-1, self.max_objects * self.obj_features))  # [n_events, 90]\n\n        # Reshape back\n        X_scaled = torch.cat([\n            torch.from_numpy(global_feats).float(),\n            torch.from_numpy(obj_feats).float().reshape(-1, self.max_objects * self.obj_features)\n        ], dim=1)\n\n        return X_scaled\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# ---------- MODEL DEFINITION ----------\nclass BinaryClassifier(nn.Module):\n    def __init__(self, sample_object):\n        super().__init__()\n        # Extract dimensions from sample\n        batch_size = sample_object.shape[0]\n        total_features = sample_object.shape[1]\n\n        # Global features (first 2) and object features (remaining)\n        self.global_features = 2\n        self.max_objects = 18\n        self.obj_features = 5\n\n        # Process global features\n        self.global_mlp = nn.Sequential(\n            nn.Linear(self.global_features, 32),\n            nn.ReLU(),\n            nn.Linear(32, 16)\n        )\n\n        # Process object features with GNN\n        self.obj_embed = nn.Linear(self.obj_features, 32)\n        self.conv1 = TransformerConv(32, 64, heads=4)\n        self.conv2 = TransformerConv(64 * 4, 64, heads=4)\n        self.conv3 = TransformerConv(64 * 4, 32, heads=4)\n\n        # Combine features\n        self.combined_mlp = nn.Sequential(\n            nn.Linear(16 + 32, 64),\n            nn.ReLU(),\n            nn.Dropout(0.3),\n            nn.Linear(64, 32),\n            nn.ReLU(),\n            nn.Linear(32, 1)\n        )\n\n    def forward(self, batch_x):\n        # Separate global and object features\n        global_feats = batch_x[:, :2]  # [batch_size, 2]\n        obj_feats = batch_x[:, 2:].reshape(-1, self.max_objects, self.obj_features)  # [batch_size, 18, 5]\n\n        # Process global features\n        global_out = self.global_mlp(global_feats)  # [batch_size, 16]\n\n        # Create graph data\n        batch_list = []\n        for i in range(obj_feats.shape[0]):\n            # Get non-zero objects (mask)\n            obj_mask = (obj_feats[i, :, 0] != 0).float()  # [18]\n            valid_indices = torch.where(obj_mask == 1)[0]\n\n            if len(valid_indices) == 0:\n                # If no objects, use zero features\n                x = torch.zeros(1, self.obj_features, device=obj_feats.device)\n                edge_index = torch.tensor([[0], [0]], device=obj_feats.device)\n            else:\n                x = obj_feats[i, valid_indices, 1:]  # [n_objects, 4] (skip obj_id)\n                # Create complete graph\n                n_nodes = x.shape[0]\n                edge_index = torch.combinations(torch.arange(n_nodes, device=obj_feats.device), r=2).t()\n                edge_index = torch.cat([edge_index, edge_index.flip(0)], dim=1)\n\n            # Add to batch\n            batch_list.append(Data(x=x, edge_index=edge_index))\n\n        # Process batch with GNN\n        if len(batch_list) == 0:\n            obj_out = torch.zeros(batch_x.shape[0], 32, device=batch_x.device)\n        else:\n            batch = DataLoader(batch_list, batch_size=len(batch_list)).__iter__().next().to(batch_x.device)\n            x = self.obj_embed(batch.x)\n\n            x = F.relu(self.conv1(x, batch.edge_index))\n            x = F.relu(self.conv2(x, batch.edge_index))\n            x = F.relu(self.conv3(x, batch.edge_index))\n\n            obj_out = global_mean_pool(x, batch.batch)  # [batch_size, 32]\n\n        # Combine features\n        combined = torch.cat([global_out, obj_out], dim=1)\n        out = self.combined_mlp(combined)  # [batch_size, 1]\n\n        return torch.sigmoid(out)\n\ndef make_model(example_object):\n    return BinaryClassifier(example_object)\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 50\n\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    criterion = nn.BCELoss()\n    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)\n    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=5, verbose=False)\n\n    best_val_auc = 0\n    patience = 10\n    patience_counter = 0\n\n    train_losses = []\n    val_losses = []\n    train_accs = []\n    val_accs = []\n\n    for epoch in range(epochs):\n        # Training\n        model.train()\n        total_loss = 0\n        correct = 0\n        total = 0\n\n        for batch in train_loader:\n            batch = batch.to(device)\n            optimizer.zero_grad()\n\n            # For standard DataLoader\n            if isinstance(batch, torch.Tensor):\n                x, y = batch[:, :-1], batch[:, -1]\n            else:\n                x, y = batch.x, batch.y\n\n            y = y.float().unsqueeze(1)\n            outputs = model(x)\n            loss = criterion(outputs, y)\n\n            loss.backward()\n            optimizer.step()\n\n            total_loss += loss.item() * y.size(0)\n            pred = (outputs > 0.5).float()\n            correct += (pred == y).sum().item()\n            total += y.size(0)\n\n        train_loss = total_loss / total\n        train_acc = correct / total\n        train_losses.append(train_loss)\n        train_accs.append(train_acc)\n\n        # Validation\n        model.eval()\n        total_loss = 0\n        correct = 0\n        total = 0\n        all_preds = []\n        all_labels = []\n\n        with torch.no_grad():\n            for batch in val_loader:\n                batch = batch.to(device)\n\n                if isinstance(batch, torch.Tensor):\n                    x, y = batch[:, :-1], batch[:, -1]\n                else:\n                    x, y = batch.x, batch.y\n\n                y = y.float().unsqueeze(1)\n                outputs = model(x)\n                loss = criterion(outputs, y)\n\n                total_loss += loss.item() * y.size(0)\n                pred = (outputs > 0.5).float()\n                correct += (pred == y).sum().item()\n                total += y.size(0)\n\n                all_preds.extend(outputs.cpu().numpy())\n                all_labels.extend(y.cpu().numpy())\n\n        val_loss = total_loss / total\n        val_acc = correct / total\n        val_losses.append(val_loss)\n        val_accs.append(val_acc)\n\n        # Calculate AUC\n        from sklearn.metrics import roc_auc_score\n        try:\n            val_auc = roc_auc_score(all_labels, all_preds)\n        except:\n            val_auc = 0\n\n        # Early stopping and learning rate scheduling\n        scheduler.step(val_auc)\n\n        if val_auc > best_val_auc:\n            best_val_auc = val_auc\n            patience_counter = 0\n            best_model = model.state_dict()\n        else:\n            patience_counter += 1\n            if patience_counter >= patience:\n                print(f\"Early stopping at epoch {epoch}\")\n                break\n\n        print(f\"Epoch {epoch}: Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}, \"\n              f\"Train Acc: {train_acc:.4f}, Val Acc: {val_acc:.4f}, Val AUC: {val_auc:.4f}\")\n\n    # Load best model\n    model.load_state_dict(best_model)\n\n    return model, train_losses, val_losses, train_accs, val_accs",
+    "reasoning": "",
+    "Outer_attempt": 5
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-12-23T16:58:10Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-12-23T16:58:10Z",
+        "metrics": {
+          ".\\outputs\\12-23\\FOURTOPS\\Q2\\script_mistralai_devstral-2512_free_1757_5.py": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 266,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 266,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2025-12-23T16:58:35Z",
+    "passed": false,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/12-23/FOURTOPS/Q2/script_mistralai_devstral-2512_free_1757_5.py\nargv2=--dryrun\n",
+      "stderr": "+ exec\n+ PY=outputs/12-23/FOURTOPS/Q2/script_mistralai_devstral-2512_free_1757_5.py\n+ shift\n++ echo --dryrun\n++ tr -d '\\r\\n'\n++ xargs\n+ DRY=--dryrun\n+ [[ outputs/12-23/FOURTOPS/Q2/script_mistralai_devstral-2512_free_1757_5.py == \\/\\u\\s\\r\\/\\l\\o\\c\\a\\l\\/\\b\\i\\n\\/\\t\\r\\a\\i\\n\\.\\s\\h ]]\n+ [[ --dryrun =~ (--dryrun|--dry-run) ]]\n+ TIMEOUT=3600\n+ : 0\n+ : 0\n+ ulimit -t 3600\n+ ((  MEMORY_LIMIT_GB > 0  ))\n+ ((  PIDS_LIMIT > 0  ))\n+ timeout --signal=KILL 3600s python outputs/12-23/FOURTOPS/Q2/script_mistralai_devstral-2512_free_1757_5.py --dryrun\nmkdir -p failed for path /home/sandbox/.config/matplotlib: [Errno 30] Read-only file system: '/home/sandbox/.config'\nMatplotlib created a temporary cache directory at /tmp/matplotlib-i0b96qjv because there was an issue with the default path (/home/sandbox/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.\n/opt/venv/lib/python3.12/site-packages/torch/optim/lr_scheduler.py:62: UserWarning: The verbose parameter is deprecated. Please use get_last_lr() to access the learning rate.\n  warnings.warn(\nERROR during training: 'list' object has no attribute 'to'\nTraceback (most recent call last):\n  File \"/workspace/outputs/12-23/FOURTOPS/Q2/script_mistralai_devstral-2512_free_1757_5.py\", line 381, in <module>\n    _run(dryrun=\"--dryrun\" in sys.argv)\n  File \"/workspace/outputs/12-23/FOURTOPS/Q2/script_mistralai_devstral-2512_free_1757_5.py\", line 342, in _run\n    trained_model, tr_loss, va_loss, tr_acc, va_acc = train_model(\n                                                      ^^^^^^^^^^^^\n  File \"/workspace/outputs/12-23/FOURTOPS/Q2/script_mistralai_devstral-2512_free_1757_5.py\", line 221, in train_model\n    batch = batch.to(device)\n            ^^^^^^^^\nAttributeError: 'list' object has no attribute 'to'\n"
+    },
+    "return_code": 1
+  }
+}

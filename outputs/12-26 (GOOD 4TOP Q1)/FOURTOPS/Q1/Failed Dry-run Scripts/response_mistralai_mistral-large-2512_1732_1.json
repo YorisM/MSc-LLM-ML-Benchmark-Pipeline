@@ -1,0 +1,71 @@
+{
+  "LLMGeneration": {
+    "model": "mistralai/mistral-large-2512",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 4015,
+    "prompt_chars": 15289,
+    "response_tokens": 1999,
+    "response_chars": 8089,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.005006,
+    "generation_ms": 30259,
+    "code": "# ---------- IMPORTS ----------\nfrom sklearn.preprocessing import RobustScaler\nfrom sklearn.metrics import roc_auc_score\nimport torch.nn.functional as F\nfrom torch.optim import AdamW\nfrom torch.optim.lr_scheduler import ReduceLROnPlateau\nfrom torch.utils.data import DataLoader\nimport numpy as np\n\n# ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.scaler = RobustScaler()\n        self.obj_ids = [0, 1, 2, 3, 4, 5, 6, 21, 22]  # Common object IDs in particle physics\n        self.n_objects = 18\n        self.obj_feature_size = 5\n        self.global_features = 2\n\n    def make_loader_cfg(self) -> dict:\n        return {\n            \"dataset_builder\": \"llm_script:FourTopsDataset\",\n            \"dataset_kwargs\": {},\n\n            \"loader_class\": \"torch.utils.data:DataLoader\",\n            \"batch_size\": 512,\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": True if device.type == \"cuda\" else False,\n\n            \"collate\": None,\n\n            \"extra_loader_kwargs\": {},\n\n            \"eval_overrides\": {\"shuffle\": False},\n        }\n\n    def fit(self, X, y=None):\n        # Extract global features (E_T_miss, phi_Et_miss)\n        global_features = X[:, :2].numpy()\n        self.scaler.fit(global_features)\n        return self\n\n    def transform(self, X):\n        # Convert to numpy for sklearn\n        X_np = X.numpy()\n\n        # Scale global features\n        global_features = X_np[:, :2]\n        global_features_scaled = self.scaler.transform(global_features)\n\n        # Process object features\n        obj_features = []\n        for i in range(self.n_objects):\n            start_idx = self.global_features + i * self.obj_feature_size\n            end_idx = start_idx + self.obj_feature_size\n            obj_slice = X_np[:, start_idx:end_idx]\n\n            # One-hot encode object ID (first feature in each object)\n            obj_id = obj_slice[:, 0].astype(int)\n            obj_id_onehot = np.zeros((obj_id.shape[0], len(self.obj_ids)))\n            for j, id_val in enumerate(self.obj_ids):\n                obj_id_onehot[:, j] = (obj_id == id_val).astype(float)\n\n            # Scale kinematic features (E, p_T, eta, phi)\n            kinematic_features = obj_slice[:, 1:]\n            kinematic_scaled = self.scaler.fit_transform(kinematic_features) if i == 0 else self.scaler.transform(kinematic_features)\n\n            # Combine one-hot encoded ID with scaled kinematic features\n            obj_processed = np.hstack([obj_id_onehot, kinematic_scaled])\n            obj_features.append(obj_processed)\n\n        # Stack all processed objects\n        obj_features_stacked = np.stack(obj_features, axis=1)  # [n_events, n_objects, n_features_per_obj]\n\n        # Combine global features with object features\n        global_features_scaled_expanded = np.expand_dims(global_features_scaled, axis=1)\n        global_features_repeated = np.repeat(global_features_scaled_expanded, self.n_objects, axis=1)\n\n        # Final feature array: [n_events, n_objects, n_features_per_obj + global_features]\n        processed_features = np.concatenate([obj_features_stacked, global_features_repeated], axis=2)\n\n        # Convert back to torch tensor\n        return torch.from_numpy(processed_features).float()\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# ---------- MODEL DEFINITION ----------\nclass BinaryClassifier(nn.Module):\n    def __init__(self, sample_object):\n        super().__init__()\n\n        # Determine input feature size from sample\n        self.n_objects = sample_object.shape[1]\n        self.input_size = sample_object.shape[2]\n\n        # Object-level processing\n        self.obj_encoder = nn.Sequential(\n            nn.Linear(self.input_size, 64),\n            nn.BatchNorm1d(self.n_objects),\n            nn.ReLU(),\n            nn.Dropout(0.2)\n        )\n\n        # Attention mechanism\n        self.attention = nn.Sequential(\n            nn.Linear(64, 32),\n            nn.Tanh(),\n            nn.Linear(32, 1),\n            nn.Softmax(dim=1)\n        )\n\n        # Global processing\n        self.global_processor = nn.Sequential(\n            nn.Linear(64, 64),\n            nn.BatchNorm1d(64),\n            nn.ReLU(),\n            nn.Dropout(0.3),\n            nn.Linear(64, 32),\n            nn.BatchNorm1d(32),\n            nn.ReLU(),\n            nn.Dropout(0.2)\n        )\n\n        # Classifier\n        self.classifier = nn.Sequential(\n            nn.Linear(32, 16),\n            nn.ReLU(),\n            nn.Dropout(0.1),\n            nn.Linear(16, 1)\n        )\n\n    def forward(self, batch_x):\n        # batch_x shape: [batch_size, n_objects, n_features] (92 features processed to 13 per object)\n\n        # Process each object independently\n        obj_features = self.obj_encoder(batch_x)  # [batch_size, n_objects, 64]\n\n        # Attention mechanism\n        attention_weights = self.attention(obj_features)  # [batch_size, n_objects, 1]\n        attended_features = torch.sum(attention_weights * obj_features, dim=1)  # [batch_size, 64]\n\n        # Global processing\n        global_features = self.global_processor(attended_features)  # [batch_size, 32]\n\n        # Classification\n        logits = self.classifier(global_features)  # [batch_size, 1]\n\n        return logits.squeeze(-1)\n\ndef make_model(example_object):\n    return BinaryClassifier(example_object)\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 30\n\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    optimizer = AdamW(model.parameters(), lr=0.001, weight_decay=1e-4)\n    scheduler = ReduceLROnPlateau(optimizer, 'max', patience=3, factor=0.5, verbose=True)\n    criterion = nn.BCEWithLogitsLoss()\n\n    best_auc = 0.0\n    best_model = None\n    train_losses = []\n    val_losses = []\n    train_aucs = []\n    val_aucs = []\n\n    for epoch in range(epochs):\n        model.train()\n        train_loss = 0.0\n        train_preds = []\n        train_targets = []\n\n        for batch in train_loader:\n            view = normalise_batch(batch, device=device)\n            xb, yb = view.batch_x, view.batch_y\n\n            optimizer.zero_grad()\n            outputs = model(xb)\n            loss = criterion(outputs, yb.float())\n            loss.backward()\n            optimizer.step()\n\n            train_loss += loss.item()\n            train_preds.extend(torch.sigmoid(outputs).detach().cpu().numpy())\n            train_targets.extend(yb.cpu().numpy())\n\n        train_loss /= len(train_loader)\n        train_auc = roc_auc_score(train_targets, train_preds)\n        train_losses.append(train_loss)\n        train_aucs.append(train_auc)\n\n        # Validation\n        model.eval()\n        val_loss = 0.0\n        val_preds = []\n        val_targets = []\n\n        with torch.no_grad():\n            for batch in val_loader:\n                view = normalise_batch(batch, device=device)\n                xb, yb = view.batch_x, view.batch_y\n\n                outputs = model(xb)\n                loss = criterion(outputs, yb.float())\n\n                val_loss += loss.item()\n                val_preds.extend(torch.sigmoid(outputs).detach().cpu().numpy())\n                val_targets.extend(yb.cpu().numpy())\n\n        val_loss /= len(val_loader)\n        val_auc = roc_auc_score(val_targets, val_preds)\n        val_losses.append(val_loss)\n        val_aucs.append(val_auc)\n\n        # Update learning rate based on validation AUC\n        scheduler.step(val_auc)\n\n        print(f\"Epoch {epoch+1}/{epochs} - Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}, \"\n              f\"Train AUC: {train_auc:.4f}, Val AUC: {val_auc:.4f}\")\n\n        # Early stopping and model checkpointing\n        if val_auc > best_auc:\n            best_auc = val_auc\n            best_model = model.state_dict()\n            patience_counter = 0\n        else:\n            patience_counter += 1\n            if patience_counter >= 5:\n                print(\"Early stopping triggered\")\n                break\n\n    # Load best model\n    if best_model is not None:\n        model.load_state_dict(best_model)\n\n    return model, train_losses, val_losses, train_aucs, val_aucs",
+    "reasoning": "",
+    "Outer_attempt": 1
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-12-26T16:33:07Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-12-26T16:33:07Z",
+        "metrics": {
+          ".\\outputs\\12-26\\FOURTOPS\\Q1\\script_mistralai_mistral-large-2512_1732_1.py": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 246,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 246,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2025-12-26T16:33:35Z",
+    "passed": false,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/12-26/FOURTOPS/Q1/script_mistralai_mistral-large-2512_1732_1.py\nargv2=--dryrun\n",
+      "stderr": "mkdir -p failed for path /home/sandbox/.config/matplotlib: [Errno 30] Read-only file system: '/home/sandbox/.config'\nMatplotlib created a temporary cache directory at /tmp/matplotlib-fmy32upw because there was an issue with the default path (/home/sandbox/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.\nTraceback (most recent call last):\n  File \"/workspace/outputs/12-26/FOURTOPS/Q1/script_mistralai_mistral-large-2512_1732_1.py\", line 361, in <module>\n    _run(dryrun=\"--dryrun\" in sys.argv)\n  File \"/workspace/outputs/12-26/FOURTOPS/Q1/script_mistralai_mistral-large-2512_1732_1.py\", line 310, in _run\n    val_ds       = build_dataset(spec, (X_val,   Y_val),   pre, train=False)\n                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/utils/llm_io.py\", line 632, in build_dataset\n    return builder(events, preproc, train=train, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/outputs/12-26/FOURTOPS/Q1/script_mistralai_mistral-large-2512_1732_1.py\", line 42, in __init__\n    self.X = pre.transform(X) if pre is not None else X\n             ^^^^^^^^^^^^^^^^\n  File \"/workspace/outputs/12-26/FOURTOPS/Q1/script_mistralai_mistral-large-2512_1732_1.py\", line 99, in transform\n    global_features_scaled = self.scaler.transform(global_features)\n                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/sklearn/utils/_set_output.py\", line 316, in wrapped\n    data_to_wrap = f(self, X, *args, **kwargs)\n                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/sklearn/preprocessing/_data.py\", line 1700, in transform\n    X = validate_data(\n        ^^^^^^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/sklearn/utils/validation.py\", line 2975, in validate_data\n    _check_n_features(_estimator, X, reset=reset)\n  File \"/opt/venv/lib/python3.12/site-packages/sklearn/utils/validation.py\", line 2839, in _check_n_features\n    raise ValueError(\nValueError: X has 2 features, but RobustScaler is expecting 4 features as input.\n"
+    },
+    "return_code": 1
+  }
+}

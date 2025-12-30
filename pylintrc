@@ -64,7 +64,8 @@ ignore-patterns=^\.#
 # manipulated during runtime and thus existing member attributes cannot be
 # deduced by static analysis). It supports qualified module names, as well as
 # Unix pattern matching.
-ignored-modules=
+ignored-modules=torch_cluster,torch_scatter,torch_sparse,torch_spline_conv,pyg_lib
+# these are installed in the Docker container but not the local venv. 
 
 # Python code to execute, usually for sys.path manipulation such as
 # pygtk.require().
@@ -103,10 +104,6 @@ recursive=no
 # directory used to determine a package namespace for modules located under the
 # source root.
 source-roots=
-
-# When enabled, pylint would attempt to guess common misconfiguration and emit
-# user-friendly hints instead of false-positive error messages.
-suggestion-mode=yes
 
 # Allow loading of arbitrary C extensions. Extensions are imported into the
 # active Python interpreter and may run arbitrary code.

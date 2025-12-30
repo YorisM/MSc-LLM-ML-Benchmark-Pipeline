@@ -1,0 +1,71 @@
+{
+  "LLMGeneration": {
+    "model": "deepseek/deepseek-v3.2",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 4149,
+    "prompt_chars": 15933,
+    "response_tokens": 5654,
+    "response_chars": 11050,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.002738656,
+    "generation_ms": 115313,
+    "code": "import torch\nimport torch.nn as nn\nimport torch.nn.functional as F\nfrom torch.utils.data import DataLoader\nimport numpy as np\nfrom sklearn.preprocessing import StandardScaler\nimport math\n\nclass MyPreprocessor:\n    def __init__(self):\n        self.scaler = StandardScaler()\n        self.object_scaler = StandardScaler()\n        self.global_scaler = StandardScaler()\n\n    def make_loader_cfg(self) -> dict:\n        return {\n            \"dataset_builder\": \"llm_script:FourTopsDataset\",\n            \"dataset_kwargs\": {},\n            \"loader_class\": \"torch.utils.data:DataLoader\",\n            \"batch_size\": 256,\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": False,\n            \"collate\": None,\n            \"extra_loader_kwargs\": {},\n            \"eval_overrides\": {\"shuffle\": False},\n        }\n\n    def fit(self, X, y=None):\n        # Reshape to extract object features\n        batch_size = X.shape[0]\n        num_objects = 18\n        object_features = 5\n\n        # Global features\n        global_feats = X[:, :2].numpy()  # (N, 2)\n        self.global_scaler.fit(global_feats)\n\n        # Object features (excluding object ID for scaling)\n        obj_data = X[:, 2:].reshape(batch_size, num_objects, object_features)  # (N, 18, 5)\n        kinematics = obj_data[:, :, 1:].reshape(-1, 4)  # (N*18, 4): E, pT, eta, phi\n        self.object_scaler.fit(kinematics)\n\n        return self\n\n    def transform(self, X):\n        batch_size = X.shape[0]\n        num_objects = 18\n        object_features = 5\n\n        # Split into global and object features\n        global_feats = X[:, :2].numpy()  # (N, 2)\n        obj_data = X[:, 2:].reshape(batch_size, num_objects, object_features)  # (N, 18, 5)\n\n        # Scale global features\n        global_feats_scaled = self.global_scaler.transform(global_feats)  # (N, 2)\n\n        # Scale object kinematics\n        kinematics = obj_data[:, :, 1:].reshape(-1, 4)  # (N*18, 4)\n        kinematics_scaled = self.object_scaler.transform(kinematics)\n        kinematics_scaled = kinematics_scaled.reshape(batch_size, num_objects, 4)  # (N, 18, 4)\n\n        # Combine object ID with scaled kinematics\n        object_ids = obj_data[:, :, 0:1]  # (N, 18, 1)\n        obj_features = np.concatenate([object_ids, kinematics_scaled], axis=2)  # (N, 18, 5)\n\n        # Compute pairwise features: invariant mass and deltaR\n        # We'll compute for all object pairs, resulting in (N, 153, 2) features\n        batch_pairwise_features = []\n\n        for b in range(batch_size):\n            pairwise_features = []\n            for i in range(num_objects):\n                for j in range(i+1, num_objects):\n                    # Get kinematics for objects i and j\n                    E1, pT1, eta1, phi1 = obj_features[b, i, 1:5]\n                    E2, pT2, eta2, phi2 = obj_features[b, j, 1:5]\n\n                    # Skip if both objects are padded (pT=0)\n                    if pT1 == 0 and pT2 == 0:\n                        inv_mass = 0.0\n                        delta_r = 0.0\n                    else:\n                        # Compute invariant mass: m² = (E1+E2)² - (p1+p2)²\n                        # First compute momentum components\n                        px1 = pT1 * np.cos(phi1)\n                        py1 = pT1 * np.sin(phi1)\n                        pz1 = pT1 * np.sinh(eta1)\n\n                        px2 = pT2 * np.cos(phi2)\n                        py2 = pT2 * np.sin(phi2)\n                        pz2 = pT2 * np.sinh(eta2)\n\n                        # Total momentum\n                        px_tot = px1 + px2\n                        py_tot = py1 + py2\n                        pz_tot = pz1 + pz2\n                        E_tot = E1 + E2\n\n                        # Invariant mass\n                        inv_mass_sq = E_tot**2 - (px_tot**2 + py_tot**2 + pz_tot**2)\n                        inv_mass = np.sqrt(max(inv_mass_sq, 0))\n\n                        # Compute deltaR\n                        delta_eta = eta1 - eta2\n                        delta_phi = phi1 - phi2\n                        # Normalize delta_phi to [-pi, pi]\n                        delta_phi = np.mod(delta_phi + np.pi, 2*np.pi) - np.pi\n                        delta_r = np.sqrt(delta_eta**2 + delta_phi**2)\n\n                    pairwise_features.append([inv_mass, delta_r])\n\n            batch_pairwise_features.append(pairwise_features)\n\n        pairwise_features = np.array(batch_pairwise_features)  # (N, 153, 2)\n\n        # Flatten object features\n        obj_features_flat = obj_features.reshape(batch_size, -1)  # (N, 90)\n\n        # Combine all features: global + object + pairwise\n        pairwise_features_flat = pairwise_features.reshape(batch_size, -1)  # (N, 306)\n\n        # Final feature vector: global (2) + object (90) + pairwise (306) = 398\n        combined_features = np.concatenate([\n            global_feats_scaled,\n            obj_features_flat,\n            pairwise_features_flat\n        ], axis=1)  # (N, 398)\n\n        return torch.tensor(combined_features, dtype=torch.float32)\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\nclass BinaryClassifier(nn.Module):\n    def __init__(self, sample_object):\n        super().__init__()\n        input_dim = sample_object.shape[1]\n\n        self.transformer = nn.TransformerEncoder(\n            nn.TransformerEncoderLayer(\n                d_model=256,\n                nhead=8,\n                dim_feedforward=1024,\n                dropout=0.1,\n                batch_first=True\n            ),\n            num_layers=3\n        )\n\n        # Process input to transformer dimension\n        self.input_projection = nn.Sequential(\n            nn.Linear(input_dim, 512),\n            nn.LayerNorm(512),\n            nn.ReLU(),\n            nn.Dropout(0.1),\n            nn.Linear(512, 256),\n            nn.LayerNorm(256),\n            nn.ReLU()\n        )\n\n        # Attention pooling\n        self.attention_pool = nn.Sequential(\n            nn.Linear(256, 128),\n            nn.Tanh(),\n            nn.Linear(128, 1),\n            nn.Softmax(dim=1)\n        )\n\n        # Classifier\n        self.classifier = nn.Sequential(\n            nn.Linear(256, 128),\n            nn.BatchNorm1d(128),\n            nn.ReLU(),\n            nn.Dropout(0.2),\n            nn.Linear(128, 64),\n            nn.BatchNorm1d(64),\n            nn.ReLU(),\n            nn.Dropout(0.1),\n            nn.Linear(64, 1)\n        )\n\n        # Initialize weights\n        self._initialize_weights()\n\n    def _initialize_weights(self):\n        for m in self.modules():\n            if isinstance(m, nn.Linear):\n                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')\n                if m.bias is not None:\n                    nn.init.constant_(m.bias, 0)\n            elif isinstance(m, nn.LayerNorm):\n                nn.init.constant_(m.weight, 1)\n                nn.init.constant_(m.bias, 0)\n\n    def forward(self, batch_x):\n        # batch_x shape: (batch_size, 398)\n\n        # Project to transformer dimension\n        x = self.input_projection(batch_x)  # (batch_size, 256)\n\n        # Add sequence dimension for transformer\n        x = x.unsqueeze(1)  # (batch_size, 1, 256)\n\n        # Apply transformer\n        x = self.transformer(x)  # (batch_size, 1, 256)\n        x = x.squeeze(1)  # (batch_size, 256)\n\n        # Attention pooling (even though we have single token, this adds flexibility)\n        attn_weights = self.attention_pool(x)  # (batch_size, 1)\n        context = x * attn_weights  # (batch_size, 256)\n\n        # Classifier\n        logits = self.classifier(context)  # (batch_size, 1)\n        return logits.squeeze(1)  # (batch_size,)\n\ndef make_model(example_object):\n    return BinaryClassifier(example_object)\n\nEPOCHS = 30\n\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    device = next(model.parameters()).device\n\n    criterion = nn.BCEWithLogitsLoss()\n    optimizer = torch.optim.AdamW(model.parameters(), lr=0.001, weight_decay=0.01)\n    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(\n        optimizer, mode='max', factor=0.5, patience=3, verbose=False\n    )\n\n    train_losses, val_losses = [], []\n    train_accs, val_accs = [], []\n    best_val_acc = 0.0\n    best_model_state = None\n    patience_counter = 0\n    patience = 10\n\n    for epoch in range(epochs):\n        # Training\n        model.train()\n        train_loss = 0.0\n        train_correct = 0\n        train_total = 0\n\n        for batch in train_loader:\n            view = normalise_batch(batch, device=device)\n            xb, yb = view.batch_x, view.batch_y\n\n            optimizer.zero_grad()\n            outputs = model(xb)\n            loss = criterion(outputs, yb.float())\n            loss.backward()\n\n            # Gradient clipping\n            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)\n\n            optimizer.step()\n\n            train_loss += loss.item()\n            predictions = (torch.sigmoid(outputs) > 0.5).float()\n            train_correct += (predictions == yb).sum().item()\n            train_total += yb.size(0)\n\n        train_acc = train_correct / train_total if train_total > 0 else 0.0\n        train_losses.append(train_loss / len(train_loader))\n        train_accs.append(train_acc)\n\n        # Validation\n        model.eval()\n        val_loss = 0.0\n        val_correct = 0\n        val_total = 0\n\n        with torch.no_grad():\n            for batch in val_loader:\n                view = normalise_batch(batch, device=device)\n                xb, yb = view.batch_x, view.batch_y\n\n                outputs = model(xb)\n                loss = criterion(outputs, yb.float())\n\n                val_loss += loss.item()\n                predictions = (torch.sigmoid(outputs) > 0.5).float()\n                val_correct += (predictions == yb).sum().item()\n                val_total += yb.size(0)\n\n        val_acc = val_correct / val_total if val_total > 0 else 0.0\n        val_losses.append(val_loss / len(val_loader))\n        val_accs.append(val_acc)\n\n        # Update scheduler\n        scheduler.step(val_acc)\n\n        # Early stopping\n        if val_acc > best_val_acc:\n            best_val_acc = val_acc\n            best_model_state = model.state_dict().copy()\n            patience_counter = 0\n        else:\n            patience_counter += 1\n\n        if patience_counter >= patience:\n            print(f\"Early stopping at epoch {epoch+1}\")\n            break\n\n    # Load best model\n    if best_model_state is not None:\n        model.load_state_dict(best_model_state)\n\n    return model, train_losses, val_losses, train_accs, val_accs",
+    "reasoning": "",
+    "Outer_attempt": 5
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-12-29T11:51:10Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-12-29T11:51:10Z",
+        "metrics": {
+          ".\\outputs\\12-29\\FOURTOPS\\Q2\\script_deepseek_deepseek-v3.2_1250_5.py": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 302,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 302,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2025-12-29T11:51:32Z",
+    "passed": true,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/12-29/FOURTOPS/Q2/script_deepseek_deepseek-v3.2_1250_5.py\nargv2=--dryrun\nDry-run: skipping artefact manifest\n",
+      "stderr": "mkdir -p failed for path /home/sandbox/.config/matplotlib: [Errno 30] Read-only file system: '/home/sandbox/.config'\nMatplotlib created a temporary cache directory at /tmp/matplotlib-v6_7a_1_ because there was an issue with the default path (/home/sandbox/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.\n/opt/venv/lib/python3.12/site-packages/torch/optim/lr_scheduler.py:62: UserWarning: The verbose parameter is deprecated. Please use get_last_lr() to access the learning rate.\n  warnings.warn(\n"
+    },
+    "return_code": 0
+  }
+}

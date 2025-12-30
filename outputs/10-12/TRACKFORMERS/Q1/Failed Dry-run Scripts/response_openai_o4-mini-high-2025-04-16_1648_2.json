@@ -1,0 +1,71 @@
+{
+  "LLMGeneration": {
+    "model": "openai/o4-mini-high-2025-04-16",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 3596,
+    "prompt_chars": 15081,
+    "response_tokens": 13689,
+    "response_chars": 4455,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.061336,
+    "generation_ms": 156141,
+    "code": "import numpy as np\nimport torch\nimport torch.nn as nn\n\nclass MyPreprocessor:\n    def __init__(self):\n        self.threshold = None\n\n    def make_loader_cfg(self):\n        return None\n\n    def fit(self, data):\n        distances = []\n        for evt in data:\n            hit_r = evt[\"hit_r\"]\n            hit_theta = evt[\"hit_theta\"]\n            hit_z = evt[\"hit_z\"]\n            layer = evt[\"layer_id\"].astype(int)\n            track_id = evt[\"track_id\"].astype(int)\n            x = hit_r * np.cos(hit_theta)\n            y = hit_r * np.sin(hit_theta)\n            for tid in np.unique(track_id):\n                idxs = np.where(track_id == tid)[0]\n                if idxs.size < 2:\n                    continue\n                layers_i = layer[idxs]\n                order = np.argsort(layers_i)\n                sorted_idxs = idxs[order]\n                for j in range(len(sorted_idxs) - 1):\n                    i1 = sorted_idxs[j]\n                    i2 = sorted_idxs[j + 1]\n                    if layer[i2] - layer[i1] == 1:\n                        dx = x[i2] - x[i1]\n                        dy = y[i2] - y[i1]\n                        dz = hit_z[i2] - hit_z[i1]\n                        distances.append(np.sqrt(dx*dx + dy*dy + dz*dz))\n        if len(distances) > 0:\n            thr = float(np.percentile(np.array(distances), 90))\n        else:\n            thr = 0.0\n        self.threshold = thr\n        return self\n\n    def transform(self, data):\n        # data: [N,4] -> output: [N,5] with threshold appended\n        N = data.size(0)\n        thresh_tensor = torch.full((N,1), float(self.threshold), dtype=data.dtype, device=data.device)  # [N,1]\n        return torch.cat([data, thresh_tensor], dim=1)  # [N,5]\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\nclass HitClassifier(nn.Module):\n    def __init__(self, in_features):\n        super().__init__()\n        # dummy parameter to track device\n        self.dummy_param = nn.Parameter(torch.zeros(1), requires_grad=False)\n\n    def forward(self, batch):\n        device = self.dummy_param.device\n        predictions = []\n        for X, _ in batch:\n            X = X.to(device)\n            # X: [Ni,5] columns = r, theta, z, layer_id, threshold\n            N = X.size(0)\n            threshold = X[0,4].item()\n            r = X[:,0]\n            theta = X[:,1]\n            z = X[:,2]\n            layer = X[:,3].long()\n            x = r * torch.cos(theta)\n            y = r * torch.sin(theta)\n            pts = torch.stack((x, y, z), dim=1)  # [Ni,3]\n            unique_layers = torch.unique(layer)\n            unique_layers, _ = torch.sort(unique_layers)\n            assigned = torch.full((N,), -1, dtype=torch.int64, device=device)  # [Ni]\n            track_heads_pts = []  # list of [3] tensors\n            track_heads_ids = []  # list of ints\n            next_id = 0\n            first_layer = unique_layers[0].item()\n            for l in unique_layers.tolist():\n                mask = (layer == l)\n                idxs = mask.nonzero(as_tuple=False).squeeze(1)\n                for idx in idxs.tolist():\n                    pt = pts[idx]\n                    if l == first_layer:\n                        # start new seed\n                        assigned[idx] = next_id\n                        track_heads_pts.append(pt)\n                        track_heads_ids.append(next_id)\n                        next_id += 1\n                    else:\n                        head_stack = torch.stack(track_heads_pts, dim=0)  # [T,3]\n                        dists = torch.norm(head_stack - pt, dim=1)  # [T]\n                        min_dist, min_idx = torch.min(dists, dim=0)\n                        if min_dist.item() <= threshold:\n                            # assign to existing track\n                            tid = track_heads_ids[min_idx]\n                            assigned[idx] = tid\n                            track_heads_pts[min_idx] = pt\n                        else:\n                            # start new track\n                            assigned[idx] = next_id\n                            track_heads_pts.append(pt)\n                            track_heads_ids.append(next_id)\n                            next_id += 1\n            predictions.append(assigned)\n        return predictions\n\ndef make_model(in_features):\n    return HitClassifier(in_features)\n\nEPOCHS = 1\n\ndef train_model(model, train_loader, val_loader, epochs):\n    # Non-parametric model: no training\n    return model, [], [], [], []",
+    "reasoning": "",
+    "Outer_attempt": 2
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-12-10T15:48:46Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-12-10T15:48:46Z",
+        "metrics": {
+          ".\\./outputs/10-12/TRACKFORMERS/Q1/script_openai_o4-mini-high-2025-04-16_1648_2.py": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 218,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 218,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2025-12-10T15:49:03Z",
+    "passed": false,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/10-12/TRACKFORMERS/Q1/script_openai_o4-mini-high-2025-04-16_1648_2.py\nargv2=--dryrun\n",
+      "stderr": "+ exec\n+ PY=outputs/10-12/TRACKFORMERS/Q1/script_openai_o4-mini-high-2025-04-16_1648_2.py\n+ shift\n++ echo --dryrun\n++ tr -d '\\r\\n'\n++ xargs\n+ DRY=--dryrun\n+ [[ outputs/10-12/TRACKFORMERS/Q1/script_openai_o4-mini-high-2025-04-16_1648_2.py == \\/\\u\\s\\r\\/\\l\\o\\c\\a\\l\\/\\b\\i\\n\\/\\t\\r\\a\\i\\n\\.\\s\\h ]]\n+ [[ --dryrun =~ (--dryrun|--dry-run) ]]\n+ TIMEOUT=3600\n+ : 0\n+ : 0\n+ ulimit -t 3600\n+ ((  MEMORY_LIMIT_GB > 0  ))\n+ ((  PIDS_LIMIT > 0  ))\n+ timeout --signal=KILL 3600s python outputs/10-12/TRACKFORMERS/Q1/script_openai_o4-mini-high-2025-04-16_1648_2.py --dryrun\nTraceback (most recent call last):\n  File \"/workspace/outputs/10-12/TRACKFORMERS/Q1/script_openai_o4-mini-high-2025-04-16_1648_2.py\", line 6, in <module>\n    import matplotlib.pyplot as plt\nModuleNotFoundError: No module named 'matplotlib'\n"
+    },
+    "return_code": 1
+  }
+}

@@ -1,0 +1,71 @@
+{
+  "LLMGeneration": {
+    "model": "mistralai/mistral-large-2512",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 3666,
+    "prompt_chars": 14077,
+    "response_tokens": 2436,
+    "response_chars": 9338,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.005487,
+    "generation_ms": 39882,
+    "code": "# ---------- IMPORTS ----------\nfrom sklearn.preprocessing import RobustScaler\nfrom sklearn.metrics import roc_auc_score\nimport torch.nn.functional as F\nfrom torch.optim import AdamW\nfrom torch.optim.lr_scheduler import ReduceLROnPlateau\nimport numpy as np\n\n# ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.scaler = RobustScaler()\n        self.obj_scalers = [RobustScaler() for _ in range(18)]\n        self.global_features = [0, 1]\n        self.per_object_features = list(range(2, 92))\n        self.n_objects = 18\n        self.features_per_object = 5\n\n    def make_loader_cfg(self) -> dict:\n        return {\n            \"dataset_builder\": \"llm_script:FourTopsDataset\",\n            \"dataset_kwargs\": {},\n            \"loader_class\": \"torch.utils.data:DataLoader\",\n            \"batch_size\": 512,\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": True if torch.cuda.is_available() else False,\n            \"collate\": None,\n            \"extra_loader_kwargs\": {},\n            \"eval_overrides\": {\"shuffle\": False},\n        }\n\n    def fit(self, X, y=None):\n        # Fit global features scaler\n        global_data = X[:, self.global_features]\n        self.scaler.fit(global_data)\n\n        # Fit per-object scalers\n        for i in range(self.n_objects):\n            start_idx = 2 + i * self.features_per_object\n            end_idx = start_idx + self.features_per_object\n            obj_data = X[:, start_idx:end_idx]\n            # Only scale kinematic features (skip object ID)\n            self.obj_scalers[i].fit(obj_data[:, 1:])\n        return self\n\n    def transform(self, X):\n        # Transform global features\n        global_data = X[:, self.global_features]\n        global_scaled = self.scaler.transform(global_data)\n        X_transformed = X.clone()\n        X_transformed[:, self.global_features] = torch.tensor(global_scaled, dtype=torch.float32)\n\n        # Transform per-object features\n        for i in range(self.n_objects):\n            start_idx = 2 + i * self.features_per_object\n            end_idx = start_idx + self.features_per_object\n            obj_data = X[:, start_idx:end_idx]\n\n            # Keep object ID as is\n            obj_id = obj_data[:, 0:1]\n            kinematic_data = obj_data[:, 1:]\n\n            # Scale kinematic features\n            kinematic_scaled = self.obj_scalers[i].transform(kinematic_data)\n            kinematic_scaled = torch.tensor(kinematic_scaled, dtype=torch.float32)\n\n            # Recombine\n            obj_transformed = torch.cat([obj_id, kinematic_scaled], dim=1)\n            X_transformed[:, start_idx:end_idx] = obj_transformed\n\n        # Feature engineering: add object count and sum pT\n        obj_ids = X_transformed[:, 2::5]  # Get all object IDs\n        obj_mask = (obj_ids > 0).float()  # Mask for valid objects\n\n        # Count objects per event\n        n_objects = obj_mask.sum(dim=1, keepdim=True)  # [batch_size, 1]\n\n        # Sum pT of all objects\n        pT_all = X_transformed[:, 4::5]  # Get all pT values\n        sum_pT = (pT_all * obj_mask).sum(dim=1, keepdim=True)  # [batch_size, 1]\n\n        # Add engineered features\n        engineered_features = torch.cat([n_objects, sum_pT], dim=1)  # [batch_size, 2]\n        X_transformed = torch.cat([X_transformed, engineered_features], dim=1)  # [batch_size, 94]\n\n        return X_transformed\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# ---------- MODEL DEFINITION ----------\nclass BinaryClassifier(nn.Module):\n    def __init__(self, sample_object):\n        super().__init__()\n        input_size = sample_object.shape[1]  # Should be 94 after preprocessing\n\n        # Object-level processing\n        self.obj_embed = nn.Sequential(\n            nn.Linear(5, 32),  # Each object has 5 features (ID + 4 kinematic)\n            nn.ReLU(),\n            nn.Linear(32, 64),\n            nn.ReLU()\n        )\n\n        # Global processing\n        self.global_mlp = nn.Sequential(\n            nn.Linear(2, 32),  # 2 global features (E_T_miss, phi_Et_miss)\n            nn.ReLU(),\n            nn.Linear(32, 64),\n            nn.ReLU()\n        )\n\n        # Engineered features processing\n        self.engineered_mlp = nn.Sequential(\n            nn.Linear(2, 32),  # 2 engineered features (n_objects, sum_pT)\n            nn.ReLU(),\n            nn.Linear(32, 64),\n            nn.ReLU()\n        )\n\n        # Attention mechanism\n        self.attention = nn.Sequential(\n            nn.Linear(64, 32),\n            nn.Tanh(),\n            nn.Linear(32, 1),\n            nn.Softmax(dim=1)\n        )\n\n        # Final classifier\n        self.classifier = nn.Sequential(\n            nn.Linear(64 + 64 + 64, 256),  # Combined features\n            nn.ReLU(),\n            nn.Dropout(0.3),\n            nn.Linear(256, 128),\n            nn.ReLU(),\n            nn.Dropout(0.3),\n            nn.Linear(128, 64),\n            nn.ReLU(),\n            nn.Linear(64, 1),\n            nn.Sigmoid()\n        )\n\n    def forward(self, batch_x):\n        # batch_x shape: [batch_size, 94]\n\n        # Extract different feature types\n        global_feats = batch_x[:, :2]  # [batch_size, 2]\n        engineered_feats = batch_x[:, -2:]  # [batch_size, 2]\n        obj_feats = batch_x[:, 2:-2]  # [batch_size, 90] (18 objects * 5 features)\n\n        # Process global features\n        global_processed = self.global_mlp(global_feats)  # [batch_size, 64]\n\n        # Process engineered features\n        engineered_processed = self.engineered_mlp(engineered_feats)  # [batch_size, 64]\n\n        # Process object features\n        obj_feats = obj_feats.view(-1, 18, 5)  # [batch_size, 18, 5]\n        obj_processed = self.obj_embed(obj_feats)  # [batch_size, 18, 64]\n\n        # Attention over objects\n        attention_weights = self.attention(obj_processed)  # [batch_size, 18, 1]\n        obj_attended = (obj_processed * attention_weights).sum(dim=1)  # [batch_size, 64]\n\n        # Combine all features\n        combined = torch.cat([global_processed, engineered_processed, obj_attended], dim=1)  # [batch_size, 192]\n\n        # Final classification\n        output = self.classifier(combined)  # [batch_size, 1]\n        return output\n\ndef make_model(example_object):\n    return BinaryClassifier(example_object)\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 30\n\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    device = torch.device(\"cuda\" if torch.cuda.is_available() else \"cpu\")\n    model = model.to(device)\n\n    optimizer = AdamW(model.parameters(), lr=0.001, weight_decay=1e-4)\n    scheduler = ReduceLROnPlateau(optimizer, 'max', patience=3, factor=0.5, verbose=True)\n    criterion = nn.BCELoss()\n\n    best_auc = 0.0\n    best_model = None\n    patience = 5\n    patience_counter = 0\n\n    train_loss = []\n    val_loss = []\n    train_acc = []\n    val_acc = []\n\n    for epoch in range(epochs):\n        model.train()\n        running_loss = 0.0\n        correct = 0\n        total = 0\n\n        # Training loop\n        for batch_x, batch_y in train_loader:\n            batch_x = batch_x.to(device)\n            batch_y = batch_y.float().to(device).unsqueeze(1)\n\n            optimizer.zero_grad()\n            outputs = model(batch_x)\n            loss = criterion(outputs, batch_y)\n            loss.backward()\n            optimizer.step()\n\n            running_loss += loss.item()\n            predicted = (outputs > 0.5).float()\n            correct += (predicted == batch_y).sum().item()\n            total += batch_y.size(0)\n\n        train_loss.append(running_loss / len(train_loader))\n        train_acc.append(correct / total)\n\n        # Validation loop\n        model.eval()\n        val_running_loss = 0.0\n        val_correct = 0\n        val_total = 0\n        all_preds = []\n        all_labels = []\n\n        with torch.no_grad():\n            for batch_x, batch_y in val_loader:\n                batch_x = batch_x.to(device)\n                batch_y = batch_y.float().to(device).unsqueeze(1)\n\n                outputs = model(batch_x)\n                loss = criterion(outputs, batch_y)\n\n                val_running_loss += loss.item()\n                predicted = (outputs > 0.5).float()\n                val_correct += (predicted == batch_y).sum().item()\n                val_total += batch_y.size(0)\n\n                all_preds.extend(outputs.cpu().numpy())\n                all_labels.extend(batch_y.cpu().numpy())\n\n        val_loss.append(val_running_loss / len(val_loader))\n        val_acc.append(val_correct / val_total)\n\n        # Calculate AUC\n        auc_score = roc_auc_score(all_labels, all_preds)\n\n        print(f\"Epoch {epoch+1}/{epochs} - Train Loss: {train_loss[-1]:.4f}, Val Loss: {val_loss[-1]:.4f}, \"\n              f\"Train Acc: {train_acc[-1]:.4f}, Val Acc: {val_acc[-1]:.4f}, AUC: {auc_score:.4f}\")\n\n        # Early stopping based on AUC\n        scheduler.step(auc_score)\n\n        if auc_score > best_auc:\n            best_auc = auc_score\n            best_model = model.state_dict()\n            patience_counter = 0\n        else:\n            patience_counter += 1\n            if patience_counter >= patience:\n                print(f\"Early stopping at epoch {epoch+1}\")\n                break\n\n    # Load best model\n    if best_model is not None:\n        model.load_state_dict(best_model)\n\n    return model, train_loss, val_loss, train_acc, val_acc",
+    "reasoning": "",
+    "Outer_attempt": 2
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-12-23T09:45:36Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-12-23T09:45:36Z",
+        "metrics": {
+          ".\\outputs\\12-23\\FOURTOPS\\Q1\\script_mistralai_mistral-large-2512_1045_2.py": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 272,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 272,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2025-12-23T09:46:00Z",
+    "passed": true,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/12-23/FOURTOPS/Q1/script_mistralai_mistral-large-2512_1045_2.py\nargv2=--dryrun\n",
+      "stderr": "+ exec\n+ PY=outputs/12-23/FOURTOPS/Q1/script_mistralai_mistral-large-2512_1045_2.py\n+ shift\n++ echo --dryrun\n++ tr -d '\\r\\n'\n++ xargs\n+ DRY=--dryrun\n+ [[ outputs/12-23/FOURTOPS/Q1/script_mistralai_mistral-large-2512_1045_2.py == \\/\\u\\s\\r\\/\\l\\o\\c\\a\\l\\/\\b\\i\\n\\/\\t\\r\\a\\i\\n\\.\\s\\h ]]\n+ [[ --dryrun =~ (--dryrun|--dry-run) ]]\n+ TIMEOUT=3600\n+ : 0\n+ : 0\n+ ulimit -t 3600\n+ ((  MEMORY_LIMIT_GB > 0  ))\n+ ((  PIDS_LIMIT > 0  ))\n+ timeout --signal=KILL 3600s python outputs/12-23/FOURTOPS/Q1/script_mistralai_mistral-large-2512_1045_2.py --dryrun\nmkdir -p failed for path /home/sandbox/.config/matplotlib: [Errno 30] Read-only file system: '/home/sandbox/.config'\nMatplotlib created a temporary cache directory at /tmp/matplotlib-egtrqyfj because there was an issue with the default path (/home/sandbox/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.\n/opt/venv/lib/python3.12/site-packages/torch/optim/lr_scheduler.py:62: UserWarning: The verbose parameter is deprecated. Please use get_last_lr() to access the learning rate.\n  warnings.warn(\nEpoch 1/1 - Train Loss: 8.5796, Val Loss: 10.4868, Train Acc: 0.5750, Val Acc: 0.5500, AUC: 0.6061\n+ python_rc=0\n+ [[ 0 -ne 0 ]]\n+ [[ --dryrun =~ (--dryrun|--dry-run) ]]\n+ echo 'Dry-run: skipping artefact manifest'\nDry-run: skipping artefact manifest\n+ exit 0\n"
+    },
+    "return_code": 0
+  }
+}

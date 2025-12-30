@@ -1,0 +1,71 @@
+{
+  "LLMGeneration": {
+    "model": "x-ai/grok-code-fast-1",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 3699,
+    "prompt_chars": 14633,
+    "response_tokens": 6251,
+    "response_chars": 8391,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.00945966,
+    "generation_ms": 42188,
+    "code": "# ---------- IMPORTS ----------\nimport torch\nimport torch.nn as nn\nfrom torch.utils.data import Dataset\nfrom torch_geometric.data import Data\nfrom torch_geometric import nn as gnn\nfrom torch_geometric.loader import DataLoader\nfrom sklearn.metrics import roc_auc_score\nimport torch.nn.functional as F\n\n#  -------- (OPTIONAL) CUSTOM DATASET  --------\nclass CustomDataset(Dataset):\n    # REQUIREMENT: If you want a custom dataset: in make_loader_cfg set dataset_builder to \"llm_script:CustomDataSet\"\n    def __init__(self, events, pre, train: bool = True, **kwargs):\n        X, y = events\n        self.X = pre.transform(X) if pre is not None else X\n        self.y = y\n    def __len__(self):\n        return int(self.y.shape[0])\n    def __getitem__(self, idx):\n        event = self.X[idx]\n        # parse\n        global_feat = event[0:2]  # ET_miss, phi\n        objs = []\n        for i in range(18):\n            start = 2 + i * 5\n            obj_id = event[start].item()\n            if obj_id != 0:\n                e, pt, eta, phi = event[start + 1:start + 5]\n                objs.append((e, pt, eta, phi))\n        n_objs = len(objs)\n        if n_objs == 0:\n            # handle, add dummy\n            e, pt, eta, phi = torch.tensor([0., 0., 0., 0.])\n            objs.append((e, pt, eta, phi))\n            n_objs = 1\n        # nodes\n        node_features = torch.stack(objs)  # (n_objs, 4)\n        # add global to each node\n        global_node = global_feat.repeat(n_objs, 1)  # (n_objs, 2)\n        x = torch.cat([node_features, global_node], dim=-1)  # (n_objs, 6)\n        # edges: all pairs i<j\n        pairs = []\n        pair_attrs = []\n        for i in range(n_objs):\n            for j in range(i + 1, n_objs):\n                ei, pti, etai, phii = objs[i]\n                ej, ptj, etaj, phij = objs[j]\n                # invariant mass (in GeV, approx)\n                pxi = pti * torch.cos(phii)\n                pyi = pti * torch.sin(phii)\n                pzi = pti * torch.sinh(etai)\n                pxj = ptj * torch.cos(phij)\n                pyj = ptj * torch.sin(phij)\n                pzj = ptj * torch.sinh(etaj)\n                e_tot = ei + ej\n                px_tot = pxi + pxj\n                py_tot = pyi + pyj\n                pz_tot = pzi + pzj\n                mass2 = e_tot ** 2 - px_tot ** 2 - py_tot ** 2 - pz_tot ** 2\n                mass = torch.sqrt(torch.maximum(mass2 / 1e6 ** 2, torch.tensor(0.0)))  # MeV to GeV, approx\n                # delta R\n                dr = torch.sqrt((etai - etaj) ** 2 + (phii - phij) ** 2)\n                pair_attrs.append([mass, dr])\n                pairs.append([i, j])\n        if pairs:\n            edge_attr = torch.tensor(pair_attrs)  # (n_pairs, 2)\n            edge_index = torch.tensor(pairs).t().long()  # (2, n_pairs)\n        else:\n            edge_attr = torch.empty(0, 2)\n            edge_index = torch.empty(2, 0).long()\n        # Data object\n        data = Data(x=x.float(), edge_index=edge_index, edge_attr=edge_attr.float(), y=self.y[idx].long())\n        return data\n\n# ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    # Must implement:\n    #   - fit() \n    #   - transform()\n\n    # DATA SPECIFICS\n    # Total flat length per event (X_train & X_val): 92\n    # Index  0 :  missing-ET magnitude  (E_T_miss)\n    # Index  1 :  missing-ET azimuth    (phi_Et_miss)\n    # Indices  2-6  : object 1  ->  obj_1, E_1, p_T1, eta_1, phi_1\n    # Indices  7-11 : object 2  ->  obj_2, E_2 , p_T_2 , eta_2 , phi_2\n    # ...\n    # Indices 87-91 : object 18 ->  obj_18, E_18 , p_T_18 , eta_18 , phi_18\n    # Global features       = 2\n    # Per-object slice size = 5\n    # Max objects encoded   = 18\n\n    # TIPS\n    # When modifying data features or feature engineering: annotate tensor size as comments after \n    # each tensor operation to reduce dimension mismatches.\n\n    # REQUIREMENTS\n    # IMPORTANT: All state must be picklable with the std-lib pickle module.\n    # May allocate NumPy arrays or Torch tensors internally, but:\n    # transform() must be deterministic.\n    # Store only derived parameters needed for transform i.e. do not store the raw data\n    # itself in the preprocessor object.\n\n    def __init__(self):\n        self.col_means = None\n        self.col_stds = None\n\n    def make_loader_cfg(self) -> dict:\n        # LoaderSpec-first: evaluator rebuilds loaders from this.\n        return {\n            \"dataset_builder\": \"llm_script:CustomDataset\",   # default harness dataset\n            \"dataset_kwargs\": {},\n            \"loader_class\": \"torch_geometric.loader:DataLoader\",\n            \"batch_size\": 512,\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": False,\n            \"collate\": None,\n            \"extra_loader_kwargs\": {},\n            \"eval_overrides\": {\"shuffle\": False},\n        }\n\n    def fit(self, X, y=None):\n        self.col_means = torch.mean(X, dim=0)\n        self.col_stds = torch.std(X, dim=0, unbiased=False) + 1e-6\n        return self\n\n    def transform(self, X):\n        return (X - self.col_means) / self.col_stds  # normalize per column\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# ---------- MODEL DEFINITION ----------\nclass BinaryClassifier(nn.Module):\n    def __init__(self, sample_object):\n        super().__init__()\n        # sample_object is the Batch from first batch, x.shape[1] = 6\n        self.conv1 = gnn.GCNConv(in_channels=6, out_channels=64)\n        self.conv2 = gnn.GCNConv(64, 128)\n        self.conv3 = gnn.GCNConv(128, 128)\n        self.pool = gnn.global_mean_pool\n        self.fc = nn.Linear(128, 1)\n\n    def forward(self, batch):\n        x, edge_index = batch.x, batch.edge_index\n        x = F.relu(self.conv1(x, edge_index))\n        x = F.relu(self.conv2(x, edge_index))\n        x = F.relu(self.conv3(x, edge_index))\n        x = self.pool(x, batch.batch)\n        return self.fc(x)  # logit for BCEWithLogits\n\ndef make_model(example_object):\n    return BinaryClassifier(example_object)\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 20   # <LLM: adjust if you wish>\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    # REQUIREMENTS \n    #   Do NOT pass \"verbose=\" to any PyTorch scheduler (not supported in this image).\n    #   Must return trained_model, train_loss, val_loss, train_acc, val_acc\n    #   Use CUDA - torch.cuda.is_available()\n    #   Implement early-stopping.\n    #   Forward signature must match.\n\n    model.to(device)\n    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)\n    criterion = nn.BCEWithLogitsLoss()\n    best_val_loss = float('inf')\n    patience = 5\n    counter = 0\n\n    tr_loss = [] ; va_loss = [] ; tr_acc = [] ; va_acc = []\n\n    for epoch in range(epochs):\n        model.train()\n        epoch_train_loss = 0.0\n        epoch_train_acc = 0.0\n        for batch in train_loader:\n            batch = batch.to(device)\n            optimizer.zero_grad()\n            logits = model(batch)\n            loss = criterion(logits.squeeze(), batch.y.float())\n            loss.backward()\n            optimizer.step()\n            preds = (logits.sigmoid() > 0.5).float()\n            acc = (preds.squeeze() == batch.y).float().mean()\n            epoch_train_loss += loss.item()\n            epoch_train_acc += acc.item()\n        epoch_train_loss /= len(train_loader)\n        epoch_train_acc /= len(train_loader)\n        tr_loss.append(epoch_train_loss)\n        tr_acc.append(epoch_train_acc)\n\n        model.eval()\n        epoch_val_loss = 0.0\n        epoch_val_acc = 0.0\n        with torch.no_grad():\n            for batch in val_loader:\n                batch = batch.to(device)\n                logits = model(batch)\n                loss = criterion(logits.squeeze(), batch.y.float())\n                preds = (logits.sigmoid() > 0.5).float()\n                acc = (preds.squeeze() == batch.y).float().mean()\n                epoch_val_loss += loss.item()\n                epoch_val_acc += acc.item()\n        epoch_val_loss /= len(val_loader)\n        epoch_val_acc /= len(val_loader)\n        va_loss.append(epoch_val_loss)\n        va_acc.append(epoch_val_acc)\n\n        if epoch_val_loss < best_val_loss:\n            best_val_loss = epoch_val_loss\n            counter = 0\n        else:\n            counter += 1\n\n        if counter >= patience:\n            break\n\n    return model, tr_loss, va_loss, tr_acc, va_acc",
+    "reasoning": "",
+    "Outer_attempt": 2
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-12-23T16:32:43Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-12-23T16:32:43Z",
+        "metrics": {
+          ".\\outputs\\12-23\\FOURTOPS\\Q2\\script_x-ai_grok-code-fast-1_1732_2.py": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 242,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 242,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2025-12-23T16:33:12Z",
+    "passed": false,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/12-23/FOURTOPS/Q2/script_x-ai_grok-code-fast-1_1732_2.py\nargv2=--dryrun\n",
+      "stderr": "+ exec\n+ PY=outputs/12-23/FOURTOPS/Q2/script_x-ai_grok-code-fast-1_1732_2.py\n+ shift\n++ echo --dryrun\n++ tr -d '\\r\\n'\n++ xargs\n+ DRY=--dryrun\n+ [[ outputs/12-23/FOURTOPS/Q2/script_x-ai_grok-code-fast-1_1732_2.py == \\/\\u\\s\\r\\/\\l\\o\\c\\a\\l\\/\\b\\i\\n\\/\\t\\r\\a\\i\\n\\.\\s\\h ]]\n+ [[ --dryrun =~ (--dryrun|--dry-run) ]]\n+ TIMEOUT=3600\n+ : 0\n+ : 0\n+ ulimit -t 3600\n+ ((  MEMORY_LIMIT_GB > 0  ))\n+ ((  PIDS_LIMIT > 0  ))\n+ timeout --signal=KILL 3600s python outputs/12-23/FOURTOPS/Q2/script_x-ai_grok-code-fast-1_1732_2.py --dryrun\nmkdir -p failed for path /home/sandbox/.config/matplotlib: [Errno 30] Read-only file system: '/home/sandbox/.config'\nMatplotlib created a temporary cache directory at /tmp/matplotlib-vyc4zj4x because there was an issue with the default path (/home/sandbox/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.\nTraceback (most recent call last):\n  File \"/workspace/outputs/12-23/FOURTOPS/Q2/script_x-ai_grok-code-fast-1_1732_2.py\", line 347, in <module>\n    _run(dryrun=\"--dryrun\" in sys.argv)\n  File \"/workspace/outputs/12-23/FOURTOPS/Q2/script_x-ai_grok-code-fast-1_1732_2.py\", line 301, in _run\n    first_batch = next(iter(train_loader))\n                  ^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/torch/utils/data/dataloader.py\", line 708, in __next__\n    data = self._next_data()\n           ^^^^^^^^^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/torch/utils/data/dataloader.py\", line 764, in _next_data\n    data = self._dataset_fetcher.fetch(index)  # may raise StopIteration\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/torch/utils/data/_utils/fetch.py\", line 52, in fetch\n    data = [self.dataset[idx] for idx in possibly_batched_index]\n            ~~~~~~~~~~~~^^^^^\n  File \"/workspace/outputs/12-23/FOURTOPS/Q2/script_x-ai_grok-code-fast-1_1732_2.py\", line 89, in __getitem__\n    node_features = torch.stack(objs)  # (n_objs, 4)\n                    ^^^^^^^^^^^^^^^^^\nTypeError: expected Tensor as element 0 in argument 0, but got tuple\n"
+    },
+    "return_code": 1
+  }
+}

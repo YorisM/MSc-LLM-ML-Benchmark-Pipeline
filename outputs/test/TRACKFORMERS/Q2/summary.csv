@@ -1,0 +1,131 @@
+script,success,return_code,stdout,stderr,duration_s,max_rss_kb
+C:\Users\yoris\projects\Benchmark\outputs\test\TRACKFORMERS\Q2\mlp_padded\mlp_padded.py,False,1,"argv0=/usr/local/bin/train.sh
+argv1=outputs/test/TRACKFORMERS/Q2/mlp_padded/mlp_padded.py
+argv2=
+","+ exec
++ PY=outputs/test/TRACKFORMERS/Q2/mlp_padded/mlp_padded.py
++ shift
+++ echo ''
+++ tr -d '\r\n'
+++ xargs
++ DRY=
++ [[ outputs/test/TRACKFORMERS/Q2/mlp_padded/mlp_padded.py == \/\u\s\r\/\l\o\c\a\l\/\b\i\n\/\t\r\a\i\n\.\s\h ]]
++ [[ '' =~ (--dryrun|--dry-run) ]]
++ TIMEOUT=99999
++ : 0
++ : 0
++ ulimit -t 99999
++ ((  MEMORY_LIMIT_GB > 0  ))
++ ((  PIDS_LIMIT > 0  ))
++ timeout --signal=KILL 99999s python outputs/test/TRACKFORMERS/Q2/mlp_padded/mlp_padded.py
+mkdir -p failed for path /home/sandbox/.config/matplotlib: [Errno 30] Read-only file system: '/home/sandbox/.config'
+Matplotlib created a temporary cache directory at /tmp/matplotlib-jdwic2uk because there was an issue with the default path (/home/sandbox/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.
+[DEBUG] train_loader.collate_fn: <function MyPreprocessor._collate_fn at 0x7fa803dfde40>
+[DEBUG] collate from preproc: <function MyPreprocessor._collate_fn at 0x7fa803dfde40>
+[DEBUG] loader_cls: <class 'torch.utils.data.dataloader.DataLoader'>
+[DEBUG] first_batch type: <class 'list'>
+[DEBUG] normalise meta: {'source_type': 'list', 'mode': 'ragged_xy_list'}
+ERROR during training: The size of tensor a (399) must match the size of tensor b (256) at non-singleton dimension 1
+Traceback (most recent call last):
+  File ""/workspace/outputs/test/TRACKFORMERS/Q2/mlp_padded/mlp_padded.py"", line 292, in <module>
+    _run(dryrun=""--dryrun"" in sys.argv)
+  File ""/workspace/outputs/test/TRACKFORMERS/Q2/mlp_padded/mlp_padded.py"", line 244, in _run
+    trained_model, tr_loss, va_loss, tr_acc, va_acc = train_model(
+                                                      ^^^^^^^^^^^^
+  File ""/workspace/outputs/test/TRACKFORMERS/Q2/mlp_padded/mlp_padded.py"", line 172, in train_model
+    out = model(view.batch_x)
+          ^^^^^^^^^^^^^^^^^^^
+  File ""/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py"", line 1739, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py"", line 1750, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/workspace/outputs/test/TRACKFORMERS/Q2/mlp_padded/mlp_padded.py"", line 156, in forward
+    return logits.masked_select(mask)                         # [sumNi]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: The size of tensor a (399) must match the size of tensor b (256) at non-singleton dimension 1
+",20.684392800000012,972
+C:\Users\yoris\projects\Benchmark\outputs\test\TRACKFORMERS\Q2\transformer_padded\transformer_padded.py,False,1,"argv0=/usr/local/bin/train.sh
+argv1=outputs/test/TRACKFORMERS/Q2/transformer_padded/transformer_padded.py
+argv2=
+","+ exec
++ PY=outputs/test/TRACKFORMERS/Q2/transformer_padded/transformer_padded.py
++ shift
+++ echo ''
+++ tr -d '\r\n'
+++ xargs
++ DRY=
++ [[ outputs/test/TRACKFORMERS/Q2/transformer_padded/transformer_padded.py == \/\u\s\r\/\l\o\c\a\l\/\b\i\n\/\t\r\a\i\n\.\s\h ]]
++ [[ '' =~ (--dryrun|--dry-run) ]]
++ TIMEOUT=99999
++ : 0
++ : 0
++ ulimit -t 99999
++ ((  MEMORY_LIMIT_GB > 0  ))
++ ((  PIDS_LIMIT > 0  ))
++ timeout --signal=KILL 99999s python outputs/test/TRACKFORMERS/Q2/transformer_padded/transformer_padded.py
+mkdir -p failed for path /home/sandbox/.config/matplotlib: [Errno 30] Read-only file system: '/home/sandbox/.config'
+Matplotlib created a temporary cache directory at /tmp/matplotlib-j4y2xc0j because there was an issue with the default path (/home/sandbox/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.
+[DEBUG] train_loader.collate_fn: <function MyPreprocessor._collate_fn at 0x7fa138a2dee0>
+[DEBUG] collate from preproc: <function MyPreprocessor._collate_fn at 0x7fa138a2dee0>
+[DEBUG] loader_cls: <class 'torch.utils.data.dataloader.DataLoader'>
+[DEBUG] first_batch type: <class 'list'>
+[DEBUG] normalise meta: {'source_type': 'list', 'mode': 'ragged_xy_list'}
+ERROR during training: For batched (3-D) `query`, expected `key_padding_mask` to be `None` or 2-D but found 1-D tensor instead
+Traceback (most recent call last):
+  File ""/workspace/outputs/test/TRACKFORMERS/Q2/transformer_padded/transformer_padded.py"", line 304, in <module>
+    _run(dryrun=""--dryrun"" in sys.argv)
+  File ""/workspace/outputs/test/TRACKFORMERS/Q2/transformer_padded/transformer_padded.py"", line 256, in _run
+    trained_model, tr_loss, va_loss, tr_acc, va_acc = train_model(
+                                                      ^^^^^^^^^^^^
+  File ""/workspace/outputs/test/TRACKFORMERS/Q2/transformer_padded/transformer_padded.py"", line 183, in train_model
+    out = model(view.batch_x)
+          ^^^^^^^^^^^^^^^^^^^
+  File ""/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py"", line 1739, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py"", line 1750, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/workspace/outputs/test/TRACKFORMERS/Q2/transformer_padded/transformer_padded.py"", line 164, in forward
+    x = self.encoder(x, src_key_padding_mask=key_padding)  # [B,N,D]
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py"", line 1739, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py"", line 1750, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/opt/venv/lib/python3.12/site-packages/torch/nn/modules/transformer.py"", line 517, in forward
+    output = mod(
+             ^^^^
+  File ""/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py"", line 1739, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py"", line 1750, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/opt/venv/lib/python3.12/site-packages/torch/nn/modules/transformer.py"", line 920, in forward
+    + self._sa_block(x, src_mask, src_key_padding_mask, is_causal=is_causal)
+      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/opt/venv/lib/python3.12/site-packages/torch/nn/modules/transformer.py"", line 934, in _sa_block
+    x = self.self_attn(
+        ^^^^^^^^^^^^^^^
+  File ""/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py"", line 1739, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py"", line 1750, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/opt/venv/lib/python3.12/site-packages/torch/nn/modules/activation.py"", line 1373, in forward
+    attn_output, attn_output_weights = F.multi_head_attention_forward(
+                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/opt/venv/lib/python3.12/site-packages/torch/nn/functional.py"", line 6147, in multi_head_attention_forward
+    is_batched = _mha_shape_check(
+                 ^^^^^^^^^^^^^^^^^
+  File ""/opt/venv/lib/python3.12/site-packages/torch/nn/functional.py"", line 5904, in _mha_shape_check
+    assert key_padding_mask.dim() == 2, (
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: For batched (3-D) `query`, expected `key_padding_mask` to be `None` or 2-D but found 1-D tensor instead
+",15.815827100000035,120

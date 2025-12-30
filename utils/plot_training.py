@@ -1,13 +1,14 @@
 # utils/plot_training.py
 
 """
-Plot training/validation accuracy vs epochs for *all* models found under
+Plot training/validation accuracy or loss vs epochs for *all* models found under
 an outputs/… subtree.
 
 Basic usage:
   python utils\\plot_training.py outputs\\23-06\\FOURTOPS\\Q1
 
 Options:
+  --metric loss|acc           choose metric                 (default: loss)
   --dots / --lines            choose marker style           (mutually exclusive)
   --out FIG.png               save instead of showing
   --train-key train_acc       JSON key for training acc     (default: train_acc)
@@ -31,14 +32,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("input_dir", type=Path,
                    help="Path anywhere inside outputs/<DATE>/…")
     style = p.add_mutually_exclusive_group()
+    p.add_argument("--metric", default="loss", choices=["loss", "acc"])
     style.add_argument("--dots", action="store_true",
                        help="Scatter markers instead of lines.")
     style.add_argument("--lines", action="store_true",
                        help="Lines instead of scatter (default).")
-    p.add_argument("--train-key", default="train_acc",
-                   help="JSON key holding training accuracy list.")
-    p.add_argument("--val-key",   default="val_acc",
-                   help="JSON key holding validation accuracy list.")
     p.add_argument("--outfile",
                    help="Filename to save under input_dir. "
                         "If omitted, figure is shown on screen.")
@@ -85,6 +83,16 @@ def main() -> None:
     as_lines   = bool(args.lines)
     input_dir  = args.input_dir.resolve()
 
+    # choose default keys based on metric
+    if args.metric == "loss":
+        train_key = "train_loss"
+        val_key   = "val_loss"
+        ylabel    = "Loss"
+    else:
+        train_key = "train_acc"
+        val_key   = "val_acc"
+        ylabel    = "Accuracy"
+
     # ── extract path components for the plot title ────────────────────────
     try:
         out_idx = input_dir.parts.index("outputs")
@@ -106,7 +114,7 @@ def main() -> None:
                 model_dirs.append(m_dir)
 
     if not model_dirs:
-        sys.exit("‼️ No model folders found under given input dir.")
+        sys.exit("‼️No model folders found under given input dir.")
 
     logging.debug("Found %d model folders.", len(model_dirs))
 
@@ -127,7 +135,7 @@ def main() -> None:
             continue
 
         try:
-            train, val = _load_metrics(j_path, args.train_key, args.val_key)
+            train, val = _load_metrics(j_path, train_key, val_key)
         except (KeyError, TypeError) as e:
             print(f"⚠️  Bad JSON format in {j_path}: {e}")
             continue
@@ -150,8 +158,9 @@ def main() -> None:
                        label=f"{label_base} val", s=40)
 
     ax.set_xlabel("Epoch", fontsize=14)
-    ax.set_ylabel("Accuracy", fontsize=14)
-    ax.set_title(f"{challenge} - {question}: Training vs Validation Accuracy ({date_part})", fontsize=16)
+    ax.set_ylabel(ylabel, fontsize=14)
+    # ax.set_ylim(0.45, 0.6) - necessary for fked up loss epochs 1 & 2 o3-pro
+    ax.set_title(f"{challenge} - {question}: Training vs Validation {ylabel} ({date_part})", fontsize=16)
     ax.legend()
     #fig.tight_layout()
 

@@ -1,0 +1,71 @@
+{
+  "LLMGeneration": {
+    "model": "mistralai/devstral-2512:free",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 4174,
+    "prompt_chars": 16762,
+    "response_tokens": 1754,
+    "response_chars": 6979,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0,
+    "generation_ms": 172778,
+    "code": "# ---------- IMPORTS ----------\nimport torch.nn.functional as F\nfrom torch_geometric.data import Data, Batch\nfrom torch_geometric.nn import GCNConv, global_mean_pool\nfrom sklearn.preprocessing import StandardScaler\nfrom sklearn.cluster import DBSCAN\nimport numpy as np\n\n# ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.scaler = StandardScaler()\n        self.layer_means = None\n        self.layer_stds = None\n\n    def make_loader_cfg(self) -> dict:\n        return {\n            \"dataset_builder\": \"utils.llm_io:EventDataset\",\n            \"dataset_kwargs\": {},\n            \"loader_class\": \"torch.utils.data:DataLoader\",\n            \"batch_size\": 32,\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": False,\n            \"collate\": \"ragged_xy\",\n            \"extra_loader_kwargs\": {},\n            \"eval_overrides\": {\"shuffle\": False}\n        }\n\n    def fit(self, Xs):\n        # Stack all events for global statistics\n        all_X = np.concatenate(Xs, axis=0)\n        self.scaler.fit(all_X[:, :3])  # Scale r, theta, z\n\n        # Compute per-layer statistics\n        layer_stats = {}\n        for X in Xs:\n            layers = X[:, 3].astype(int)\n            for i, layer in enumerate(layers):\n                if layer not in layer_stats:\n                    layer_stats[layer] = []\n                layer_stats[layer].append(X[i, :3])\n\n        self.layer_means = {}\n        self.layer_stds = {}\n        for layer, hits in layer_stats.items():\n            hits = np.array(hits)\n            self.layer_means[layer] = np.mean(hits, axis=0)\n            self.layer_stds[layer] = np.std(hits, axis=0)\n\n        return self\n\n    def transform(self, X):\n        # Apply global scaling\n        X = X.clone()\n        X[:, :3] = torch.from_numpy(self.scaler.transform(X[:, :3].numpy())).float()\n\n        # Apply per-layer normalization\n        for i in range(X.shape[0]):\n            layer = int(X[i, 3].item())\n            if layer in self.layer_means:\n                X[i, :3] = (X[i, :3] - torch.from_numpy(self.layer_means[layer])) / (torch.from_numpy(self.layer_stds[layer]) + 1e-6)\n\n        return X\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# ---------- MODEL ARCHITECTURE ----------\nclass HitClassifier(nn.Module):\n    def __init__(self, example_batch_x):\n        super().__init__()\n        # Graph-based approach\n        self.conv1 = GCNConv(4, 64)\n        self.conv2 = GCNConv(64, 128)\n        self.conv3 = GCNConv(128, 256)\n        self.fc1 = nn.Linear(256, 128)\n        self.fc2 = nn.Linear(128, 64)\n        self.fc3 = nn.Linear(64, 1)  # Predict track ID\n\n        # Cluster parameters\n        self.eps = 0.5\n        self.min_samples = 4\n\n    def forward(self, batch_x):\n        # Convert ragged batch to graph\n        graphs = []\n        for x in batch_x:\n            # Create edges based on spatial proximity\n            pos = x[:, :3]\n            dist = torch.cdist(pos, pos)\n            edges = (dist < self.eps).nonzero(as_tuple=False).t()\n            edge_attr = dist[edges[0], edges[1]].unsqueeze(1)\n\n            # Create graph\n            graph = Data(x=x, edge_index=edges, edge_attr=edge_attr)\n            graphs.append(graph)\n\n        # Batch graphs\n        batch = Batch.from_data_list(graphs)\n\n        # Graph convolution\n        x = F.relu(self.conv1(batch.x, batch.edge_index, batch.edge_attr))\n        x = F.relu(self.conv2(x, batch.edge_index, batch.edge_attr))\n        x = F.relu(self.conv3(x, batch.edge_index, batch.edge_attr))\n\n        # Global pooling\n        x = global_mean_pool(x, batch.batch)\n\n        # MLP\n        x = F.relu(self.fc1(x))\n        x = F.relu(self.fc2(x))\n        x = self.fc3(x)\n\n        # Get predictions per hit\n        predictions = []\n        start_idx = 0\n        for i, graph in enumerate(graphs):\n            num_hits = graph.x.shape[0]\n            pred = x[start_idx:start_idx+num_hits]\n            predictions.append(pred)\n            start_idx += num_hits\n\n        # Convert to track IDs using clustering\n        final_predictions = []\n        for i, x in enumerate(batch_x):\n            pred = predictions[i].squeeze().cpu().numpy()\n            # DBSCAN clustering\n            clustering = DBSCAN(eps=self.eps, min_samples=self.min_samples).fit(x[:, :3].cpu().numpy())\n            labels = clustering.labels_\n            # Map cluster labels to track IDs (0 is noise)\n            track_ids = labels + 1  # Shift to make noise = 0\n            track_ids[track_ids == 1] = 0  # Noise becomes 0\n            final_predictions.append(torch.from_numpy(track_ids).long())\n\n        return final_predictions\n\ndef make_model(example_batch_x):\n    return HitClassifier(example_batch_x)\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 20\n\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)\n    criterion = nn.MSELoss()\n    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=3)\n\n    train_losses = []\n    val_losses = []\n    train_accs = []\n    val_accs = []\n\n    for epoch in range(epochs):\n        model.train()\n        epoch_train_loss = 0\n        epoch_train_acc = 0\n        count = 0\n\n        for batch in train_loader:\n            view = normalise_batch(batch, device=device)\n            xb, yb = view.batch_x, view.batch_y\n\n            optimizer.zero_grad()\n            out = model(xb)\n\n            # Calculate loss\n            loss = 0\n            for i in range(len(out)):\n                # Convert track IDs to continuous values for loss calculation\n                pred = out[i].float()\n                true = yb[i].float()\n                loss += criterion(pred, true)\n\n            loss.backward()\n            optimizer.step()\n\n            epoch_train_loss += loss.item()\n            count += 1\n\n        # Validation\n        model.eval()\n        epoch_val_loss = 0\n        epoch_val_acc = 0\n        val_count = 0\n\n        with torch.no_grad():\n            for batch in val_loader:\n                view = normalise_batch(batch, device=device)\n                xb, yb = view.batch_x, view.batch_y\n\n                out = model(xb)\n\n                # Calculate loss\n                loss = 0\n                for i in range(len(out)):\n                    pred = out[i].float()\n                    true = yb[i].float()\n                    loss += criterion(pred, true)\n\n                epoch_val_loss += loss.item()\n                val_count += 1\n\n        # Calculate metrics\n        avg_train_loss = epoch_train_loss / count\n        avg_val_loss = epoch_val_loss / val_count\n\n        train_losses.append(avg_train_loss)\n        val_losses.append(avg_val_loss)\n\n        # Update scheduler\n        scheduler.step(avg_val_loss)\n\n        print(f\"Epoch {epoch+1}/{epochs} - Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}\")\n\n    return model, train_losses, val_losses, train_accs, val_accs",
+    "reasoning": "",
+    "Outer_attempt": 3
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-12-29T13:30:37Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-12-29T13:30:37Z",
+        "metrics": {
+          ".\\outputs\\12-29\\TRACKFORMERS\\Q1\\script_mistralai_devstral-2512_free_1430_3.py": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 237,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 237,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2025-12-29T13:30:57Z",
+    "passed": false,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/12-29/TRACKFORMERS/Q1/script_mistralai_devstral-2512_free_1430_3.py\nargv2=--dryrun\n",
+      "stderr": "mkdir -p failed for path /home/sandbox/.config/matplotlib: [Errno 30] Read-only file system: '/home/sandbox/.config'\nMatplotlib created a temporary cache directory at /tmp/matplotlib-ei4spud_ because there was an issue with the default path (/home/sandbox/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.\nTraceback (most recent call last):\n  File \"/workspace/outputs/12-29/TRACKFORMERS/Q1/script_mistralai_devstral-2512_free_1430_3.py\", line 342, in <module>\n    _run(dryrun=\"--dryrun\" in sys.argv)\n  File \"/workspace/outputs/12-29/TRACKFORMERS/Q1/script_mistralai_devstral-2512_free_1430_3.py\", line 279, in _run\n    pre = make_preprocessor().fit(Xs)\n          ^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/outputs/12-29/TRACKFORMERS/Q1/script_mistralai_devstral-2512_free_1430_3.py\", line 89, in fit\n    layers = X[:, 3].astype(int)\n             ^^^^^^^^^^^^^^\nAttributeError: 'Tensor' object has no attribute 'astype'. Did you mean: 'dtype'?\n"
+    },
+    "return_code": 1
+  }
+}

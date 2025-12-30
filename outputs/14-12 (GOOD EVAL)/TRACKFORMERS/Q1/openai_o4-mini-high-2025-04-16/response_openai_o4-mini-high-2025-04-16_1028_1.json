@@ -1,0 +1,83 @@
+{
+  "LLMGeneration": {
+    "model": "openai/o4-mini-high-2025-04-16",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 3735,
+    "prompt_chars": 15761,
+    "response_tokens": 9391,
+    "response_chars": 1721,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.0454289,
+    "generation_ms": 62905,
+    "code": "import numpy as np\nimport torch\nfrom sklearn.cluster import DBSCAN\n\nclass MyPreprocessor:\n    def __init__(self):\n        pass\n\n    def _raw_reshape(self, data):\n        return data\n\n    def make_loader_cfg(self):\n        return None\n\n    def fit(self, data):\n        return self\n\n    def transform(self, data):\n        return data\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\nclass HitClassifier(nn.Module):\n    def __init__(self, example_batch_x):\n        super().__init__()\n\n    def forward(self, batch_x):\n        # Ensure we have a list of events\n        if isinstance(batch_x, torch.Tensor):\n            batch = [batch_x]\n        else:\n            batch = batch_x\n        preds = []\n        for X in batch:\n            # X: [N_hits, 4]\n            X_cpu = X.detach().cpu().numpy()\n            r = X_cpu[:, 0]            # [N_hits]\n            theta = X_cpu[:, 1]        # [N_hits]\n            z = X_cpu[:, 2]            # [N_hits]\n            # Compute slope feature\n            slope = z / (r + 1e-8)     # [N_hits]\n            # Embed theta on unit circle and combine with slope\n            feat = np.vstack([np.cos(theta), np.sin(theta), slope]).T  # [N_hits, 3]\n            # Cluster hits in (cosθ, sinθ, slope) space\n            cl = DBSCAN(eps=0.01, min_samples=4, metric='euclidean')\n            labels = cl.fit_predict(feat)  # [N_hits], -1 for noise\n            labels_t = torch.from_numpy(labels.astype(np.int64)).to(X.device)\n            preds.append(labels_t)\n        return preds\n\ndef make_model(example_batch_x):\n    return HitClassifier(example_batch_x)\n\ndef train_model(model, train_loader, val_loader, epochs):\n    # Non-parametric clustering: no training\n    return model, [], [], [], []",
+    "reasoning": "",
+    "Outer_attempt": 1
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-12-14T09:28:28Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-12-14T09:28:28Z",
+        "metrics": {
+          ".\\./outputs/14-12/TRACKFORMERS/Q1/script_openai_o4-mini-high-2025-04-16_1028_1.py": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 162,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 162,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2025-12-14T09:28:52Z",
+    "passed": true,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/14-12/TRACKFORMERS/Q1/script_openai_o4-mini-high-2025-04-16_1028_1.py\nargv2=--dryrun\n",
+      "stderr": "+ exec\n+ PY=outputs/14-12/TRACKFORMERS/Q1/script_openai_o4-mini-high-2025-04-16_1028_1.py\n+ shift\n++ echo --dryrun\n++ tr -d '\\r\\n'\n++ xargs\n+ DRY=--dryrun\n+ [[ outputs/14-12/TRACKFORMERS/Q1/script_openai_o4-mini-high-2025-04-16_1028_1.py == \\/\\u\\s\\r\\/\\l\\o\\c\\a\\l\\/\\b\\i\\n\\/\\t\\r\\a\\i\\n\\.\\s\\h ]]\n+ [[ --dryrun =~ (--dryrun|--dry-run) ]]\n+ TIMEOUT=3600\n+ : 0\n+ : 0\n+ ulimit -t 3600\n+ ((  MEMORY_LIMIT_GB > 0  ))\n+ ((  PIDS_LIMIT > 0  ))\n+ timeout --signal=KILL 3600s python outputs/14-12/TRACKFORMERS/Q1/script_openai_o4-mini-high-2025-04-16_1028_1.py --dryrun\nmkdir -p failed for path /home/sandbox/.config/matplotlib: [Errno 30] Read-only file system: '/home/sandbox/.config'\nMatplotlib created a temporary cache directory at /tmp/matplotlib-n1pxdxdp because there was an issue with the default path (/home/sandbox/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.\n+ python_rc=0\n+ [[ 0 -ne 0 ]]\n+ [[ --dryrun =~ (--dryrun|--dry-run) ]]\n+ echo 'Dry-run: skipping artefact manifest'\nDry-run: skipping artefact manifest\n+ exit 0\n"
+    },
+    "return_code": 0
+  },
+  "Evaluation": {
+    "__timestamp": "2025-12-14T13:46:58Z",
+    "passed": true,
+    "metrics": {
+      "ok": true,
+      "load_s": 2.27,
+      "eval_s": 2.07,
+      "FitAccuracy": 0.9801980198019802,
+      "accuracy": 0.10891089108910891
+    },
+    "runtime_s": 12.34
+  }
+}
