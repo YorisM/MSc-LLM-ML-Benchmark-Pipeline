@@ -1,0 +1,89 @@
+{
+  "LLMGeneration": {
+    "model": "mistralai/devstral-2512:free",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 4403,
+    "prompt_chars": 17599,
+    "response_tokens": 2379,
+    "response_chars": 9771,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0,
+    "generation_ms": 77176,
+    "code": "# ---------- IMPORTS ----------\nimport torch.nn.functional as F\nfrom torch_geometric.nn import GCNConv, global_mean_pool\nfrom torch_geometric.data import Data, Batch\nfrom sklearn.preprocessing import StandardScaler\nfrom sklearn.cluster import DBSCAN\nimport hdbscan\n\n#  -------- (OPTIONAL) CUSTOM DATASET  --------\nclass CustomDataset(Dataset):\n    def __init__(self, events, pre, train: bool = True, **kwargs):\n        self.events = events\n        self.pre = pre\n        self.train = train\n    def __len__(self):\n        return len(self.events)\n    def __getitem__(self, idx):\n        X, y = split_X_y(self.events[idx])\n        X = self.pre.transform(X) if self.pre is not None else X\n        # Convert to PyG Data format\n        data = Data(x=X, y=y)\n        return data\n\n# ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.scaler = StandardScaler()\n        self.layer_means = None\n        self.layer_stds = None\n\n    def make_loader_cfg(self) -> dict:\n        return {\n            \"dataset_builder\": \"llm_script:CustomDataset\",\n            \"dataset_kwargs\": {},\n            \"loader_class\": \"torch_geometric.loader:DataLoader\",\n            \"batch_size\": 32,\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": False,\n            \"collate\": None,\n            \"extra_loader_kwargs\": {},\n            \"eval_overrides\": {\"shuffle\": False}\n        }\n\n    def fit(self, Xs):\n        # Concatenate all events for global scaling\n        all_X = torch.cat(Xs, dim=0).numpy()\n        self.scaler.fit(all_X[:, :3])  # Scale r, theta, z\n\n        # Compute layer-wise statistics\n        layer_stats = {}\n        for X in Xs:\n            layers = X[:, 3].numpy()\n            for i, layer in enumerate(layers):\n                if layer not in layer_stats:\n                    layer_stats[layer] = []\n                layer_stats[layer].append(X[i, :3].numpy())\n\n        self.layer_means = {}\n        self.layer_stds = {}\n        for layer, hits in layer_stats.items():\n            hits = np.array(hits)\n            self.layer_means[layer] = np.mean(hits, axis=0)\n            self.layer_stds[layer] = np.std(hits, axis=0)\n\n        return self\n\n    def transform(self, X):\n        # Scale features\n        X = X.clone()\n        X[:, :3] = torch.from_numpy(self.scaler.transform(X[:, :3].numpy())).float()\n\n        # Layer-wise normalization\n        for i in range(X.shape[0]):\n            layer = X[i, 3].item()\n            if layer in self.layer_means:\n                X[i, :3] = (X[i, :3] - torch.from_numpy(self.layer_means[layer])) / (torch.from_numpy(self.layer_stds[layer]) + 1e-6)\n\n        return X\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# ---------- MODEL ARCHITECTURE ----------\nclass HitClassifier(nn.Module):\n    def __init__(self, example_batch_x):\n        super().__init__()\n        # Determine input features from example batch\n        if isinstance(example_batch_x, list):\n            # Torch ragged lane\n            self.input_dim = example_batch_x[0].shape[1]\n        else:\n            # PyG lane\n            self.input_dim = example_batch_x.x.shape[1]\n\n        # GNN layers\n        self.conv1 = GCNConv(self.input_dim, 64)\n        self.conv2 = GCNConv(64, 64)\n        self.conv3 = GCNConv(64, 32)\n\n        # Edge prediction head\n        self.edge_mlp = nn.Sequential(\n            nn.Linear(64 + 64, 128),\n            nn.ReLU(),\n            nn.Linear(128, 64),\n            nn.ReLU(),\n            nn.Linear(64, 1)\n        )\n\n        # Node embedding head\n        self.node_mlp = nn.Sequential(\n            nn.Linear(32, 64),\n            nn.ReLU(),\n            nn.Linear(64, 32)\n        )\n\n        # Clustering head\n        self.cluster_head = nn.Sequential(\n            nn.Linear(32, 16),\n            nn.ReLU(),\n            nn.Linear(16, 8)\n        )\n\n    def forward(self, batch_x):\n        if isinstance(batch_x, list):\n            # Torch ragged lane - convert to PyG batch\n            xs, ys = batch_x, None\n            graphs = []\n            for i, x in enumerate(xs):\n                # Create complete graph for each event\n                num_nodes = x.shape[0]\n                edge_index = torch.combinations(torch.arange(num_nodes), r=2).t()\n                graphs.append(Data(x=x, edge_index=edge_index))\n            batch = Batch.from_data_list(graphs)\n        else:\n            # PyG lane\n            batch = batch_x\n\n        # GNN forward pass\n        x = F.relu(self.conv1(batch.x, batch.edge_index))\n        x = F.relu(self.conv2(x, batch.edge_index))\n        x = F.relu(self.conv3(x, batch.edge_index))\n\n        # Edge prediction\n        row, col = batch.edge_index\n        edge_features = torch.cat([x[row], x[col]], dim=1)\n        edge_scores = self.edge_mlp(edge_features).squeeze()\n\n        # Filter edges based on learned scores\n        edge_mask = edge_scores > 0.5\n        filtered_edge_index = batch.edge_index[:, edge_mask]\n\n        # Update graph with filtered edges\n        batch.edge_index = filtered_edge_index\n\n        # Node embedding\n        node_embeddings = self.node_mlp(x)\n\n        # Get cluster assignments\n        cluster_features = self.cluster_head(node_embeddings).cpu().numpy()\n\n        # Use HDBSCAN for clustering\n        clusterer = hdbscan.HDBSCAN(\n            min_cluster_size=4,\n            min_samples=1,\n            cluster_selection_epsilon=0.1,\n            prediction_data=True\n        )\n        clusterer.fit(cluster_features)\n\n        # Get cluster labels\n        labels = torch.tensor(clusterer.labels_, dtype=torch.long, device=batch.x.device)\n\n        # Convert -1 (noise) to -1 in output\n        labels[labels == -1] = -1\n\n        # For ragged lane, split back into list\n        if isinstance(batch_x, list):\n            labels_list = []\n            start = 0\n            for x in batch_x:\n                num_nodes = x.shape[0]\n                labels_list.append(labels[start:start+num_nodes])\n                start += num_nodes\n            return labels_list\n        else:\n            return labels\n\ndef make_model(example_batch_x):\n    return HitClassifier(example_batch_x)\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 50\n\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)\n    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=5, factor=0.5)\n    criterion = nn.CrossEntropyLoss()\n\n    train_losses = []\n    val_losses = []\n    train_accs = []\n    val_accs = []\n\n    best_val_loss = float('inf')\n    best_model = None\n    patience = 10\n    patience_counter = 0\n\n    for epoch in range(epochs):\n        model.train()\n        total_loss = 0\n        correct = 0\n        total = 0\n\n        for batch in train_loader:\n            batch = batch.to(device)\n            optimizer.zero_grad()\n\n            # Forward pass\n            if isinstance(batch, list):\n                xs, ys = batch, None\n                out = model(xs)\n                # For ragged lane, we need to flatten for loss calculation\n                flat_out = torch.cat(out)\n                flat_ys = torch.cat([y for y in ys])\n            else:\n                out = model(batch)\n                flat_out = out\n                flat_ys = batch.y\n\n            # Filter out noise labels (-1) for loss calculation\n            mask = flat_ys != -1\n            if mask.sum() > 0:\n                loss = criterion(flat_out[mask], flat_ys[mask])\n                loss.backward()\n                optimizer.step()\n                total_loss += loss.item()\n\n                # Calculate accuracy\n                pred = flat_out[mask].argmax(dim=1)\n                correct += (pred == flat_ys[mask]).sum().item()\n                total += mask.sum().item()\n\n        # Validation\n        model.eval()\n        val_loss = 0\n        val_correct = 0\n        val_total = 0\n\n        with torch.no_grad():\n            for batch in val_loader:\n                batch = batch.to(device)\n\n                if isinstance(batch, list):\n                    xs, ys = batch, None\n                    out = model(xs)\n                    flat_out = torch.cat(out)\n                    flat_ys = torch.cat([y for y in ys])\n                else:\n                    out = model(batch)\n                    flat_out = out\n                    flat_ys = batch.y\n\n                mask = flat_ys != -1\n                if mask.sum() > 0:\n                    loss = criterion(flat_out[mask], flat_ys[mask])\n                    val_loss += loss.item()\n\n                    pred = flat_out[mask].argmax(dim=1)\n                    val_correct += (pred == flat_ys[mask]).sum().item()\n                    val_total += mask.sum().item()\n\n        # Calculate metrics\n        train_loss = total_loss / len(train_loader) if len(train_loader) > 0 else 0\n        train_acc = correct / total if total > 0 else 0\n        val_loss = val_loss / len(val_loader) if len(val_loader) > 0 else 0\n        val_acc = val_correct / val_total if val_total > 0 else 0\n\n        train_losses.append(train_loss)\n        val_losses.append(val_loss)\n        train_accs.append(train_acc)\n        val_accs.append(val_acc)\n\n        # Early stopping and model saving\n        if val_loss < best_val_loss:\n            best_val_loss = val_loss\n            best_model = model.state_dict()\n            patience_counter = 0\n        else:\n            patience_counter += 1\n            if patience_counter >= patience:\n                print(f\"Early stopping at epoch {epoch}\")\n                break\n\n        scheduler.step(val_loss)\n\n    # Load best model\n    if best_model is not None:\n        model.load_state_dict(best_model)\n\n    return model, train_losses, val_losses, train_accs, val_accs",
+    "reasoning": "",
+    "Outer_attempt": 3
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-12-30T16:14:58Z",
+    "PyLint": {
+      "passed": false,
+      "messages": [
+        {
+          "type": "error",
+          "module": "script_mistralai_devstral-2512_free_1714_3",
+          "obj": "train_model",
+          "line": 277,
+          "column": 48,
+          "endLine": 277,
+          "endColumn": 50,
+          "path": "outputs\\12-30\\TRACKFORMERS\\Q1\\script_mistralai_devstral-2512_free_1714_3.py",
+          "symbol": "not-an-iterable",
+          "message": "Non-iterable value ys is used in an iterating context",
+          "message-id": "E1133"
+        },
+        {
+          "type": "error",
+          "module": "script_mistralai_devstral-2512_free_1714_3",
+          "obj": "train_model",
+          "line": 310,
+          "column": 52,
+          "endLine": 310,
+          "endColumn": 54,
+          "path": "outputs\\12-30\\TRACKFORMERS\\Q1\\script_mistralai_devstral-2512_free_1714_3.py",
+          "symbol": "not-an-iterable",
+          "message": "Non-iterable value ys is used in an iterating context",
+          "message-id": "E1133"
+        }
+      ]
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-12-30T16:14:58Z",
+        "metrics": {
+          ".\\outputs\\12-30\\TRACKFORMERS\\Q1\\script_mistralai_devstral-2512_free_1714_3.py": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 328,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 328,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  }
+}

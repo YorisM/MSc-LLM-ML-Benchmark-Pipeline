@@ -1,0 +1,154 @@
+{
+  "LLMGeneration": {
+    "model": "deepseek/deepseek-v3.2",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 4099,
+    "prompt_chars": 15596,
+    "response_tokens": 7612,
+    "response_chars": 12785,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.004147431,
+    "generation_ms": 224212,
+    "code": "# -------------------------- START OF LLM BLOCK ------------------------------\n# <start code template>\n# ---------- IMPORTS ----------\nimport torch.nn.functional as F\nfrom torch.optim import AdamW\nfrom torch.optim.lr_scheduler import ReduceLROnPlateau\nimport numpy as np\nfrom sklearn.preprocessing import StandardScaler, RobustScaler\nimport torch_geometric\nfrom torch_geometric.data import Data, Batch\nfrom torch_geometric.nn import GATConv, global_mean_pool\nimport warnings\nwarnings.filterwarnings('ignore')\n\n\n# ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.kin_scaler = RobustScaler()\n        self.global_scaler = StandardScaler()\n        self.obj_id_mapping = {}\n        self.obj_id_counter = 0\n\n    def make_loader_cfg(self) -> dict:\n        return {\n            \"dataset_builder\": \"llm_script:CustomDataset\",\n            \"dataset_kwargs\": {},\n            \"loader_class\": \"torch_geometric.loader:DataLoader\",\n            \"batch_size\": 256,\n            \"shuffle\": True,\n            \"num_workers\": 2,\n            \"pin_memory\": True,\n            \"collate\": None,\n            \"extra_loader_kwargs\": {},\n            \"eval_overrides\": {\"shuffle\": False, \"batch_size\": 512}\n        }\n\n    def fit(self, X, y=None):\n        X_np = X.numpy() if torch.is_tensor(X) else X\n\n        # Process object kinematic features\n        obj_features_list = []\n        for i in range(18):\n            start_idx = 2 + i*5 + 1  # Skip obj_id, start at E\n            if start_idx + 3 < X_np.shape[1]:\n                obj_features = X_np[:, start_idx:start_idx+3]  # E, pT, eta\n                # Replace zeros (padding) with NaN for robust scaling\n                mask = obj_features != 0\n                obj_features_masked = np.where(mask, obj_features, np.nan)\n                obj_features_list.append(obj_features_masked)\n\n        if obj_features_list:\n            all_obj_features = np.concatenate(obj_features_list, axis=0)\n            # Fit scaler on non-zero (non-padded) values\n            non_nan_mask = ~np.isnan(all_obj_features[:, 0])\n            if np.any(non_nan_mask):\n                self.kin_scaler.fit(all_obj_features[non_nan_mask])\n\n        # Process global features\n        global_features = X_np[:, :2]\n        self.global_scaler.fit(global_features)\n\n        # Build object ID mapping\n        for i in range(18):\n            obj_id_idx = 2 + i*5\n            if obj_id_idx < X_np.shape[1]:\n                obj_ids = X_np[:, obj_id_idx].astype(int)\n                unique_ids = np.unique(obj_ids)\n                for uid in unique_ids:\n                    if uid != 0 and uid not in self.obj_id_mapping:\n                        self.obj_id_mapping[uid] = self.obj_id_counter\n                        self.obj_id_counter += 1\n\n        return self\n\n    def transform(self, X):\n        X_np = X.numpy() if torch.is_tensor(X) else X\n        batch_data = []\n\n        for event_idx in range(X_np.shape[0]):\n            event = X_np[event_idx]\n\n            # Extract and scale global features\n            global_feats = event[:2].reshape(1, -1)\n            global_feats_scaled = self.global_scaler.transform(global_feats).flatten()\n\n            # Process objects\n            node_features = []\n            node_objects = []\n\n            for obj_idx in range(18):\n                start_idx = 2 + obj_idx*5\n                if start_idx + 4 >= len(event):\n                    break\n\n                obj_id = int(event[start_idx])\n                if obj_id == 0:  # Padding\n                    continue\n\n                # Kinematic features: E, pT, eta, phi\n                kin_feats = event[start_idx+1:start_idx+5].reshape(1, -1)\n\n                # Scale kinematic features (excluding phi initially)\n                if kin_feats[0, 0] != 0:  # Non-zero energy\n                    kin_scaled = self.kin_scaler.transform(kin_feats[:, :3])\n                    # Keep phi as is (cyclic)\n                    phi = kin_feats[:, 3:4]\n                    kin_scaled_full = np.concatenate([kin_scaled, phi], axis=1)\n                else:\n                    continue  # Skip padded objects\n\n                # Encode object type\n                obj_type_encoded = np.zeros(self.obj_id_counter)\n                if obj_id in self.obj_id_mapping:\n                    obj_type_encoded[self.obj_id_mapping[obj_id]] = 1.0\n\n                # Create node feature: [scaled_kinematics, obj_type_one_hot, global_feats]\n                node_feat = np.concatenate([\n                    kin_scaled_full.flatten(),\n                    obj_type_encoded,\n                    global_feats_scaled\n                ])\n\n                node_features.append(node_feat)\n                node_objects.append(obj_idx)\n\n            if not node_features:\n                # Create dummy node for events with no objects\n                dummy_feat = np.zeros(4 + self.obj_id_counter + 2)\n                node_features.append(dummy_feat)\n                node_objects.append(0)\n\n            node_features = np.array(node_features, dtype=np.float32)\n\n            # Build fully connected graph\n            num_nodes = len(node_features)\n            if num_nodes > 1:\n                edge_index = []\n                for i in range(num_nodes):\n                    for j in range(num_nodes):\n                        if i != j:\n                            edge_index.append([i, j])\n                edge_index = np.array(edge_index, dtype=np.int64).T\n            else:\n                edge_index = np.array([[0], [0]], dtype=np.int64)\n\n            # Create PyG Data object\n            data = Data(\n                x=torch.from_numpy(node_features).float(),\n                edge_index=torch.from_numpy(edge_index).long(),\n                y=None  # Will be set by dataset\n            )\n            batch_data.append(data)\n\n        return batch_data\n\n\n# Custom Dataset for PyG\nclass CustomDataset(torch.utils.data.Dataset):\n    def __init__(self, events, pre, train: bool = True, **kwargs):\n        X, y = events\n        self.graphs = pre.transform(X)  # List of Data objects\n        self.labels = torch.as_tensor(y).long() if not torch.is_tensor(y) else y.long()\n\n    def __len__(self):\n        return len(self.graphs)\n\n    def __getitem__(self, idx):\n        data = self.graphs[idx]\n        data.y = self.labels[idx].unsqueeze(0)  # Add batch dimension\n        return data\n\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n\n# ---------- MODEL ARCHITECTURE ----------\nclass BinaryClassifier(nn.Module):\n    def __init__(self, sample_object):\n        super().__init__()\n        # sample_object is a Data object from PyG\n        node_feat_dim = sample_object.x.shape[1]\n\n        # Graph Attention Network layers\n        self.gat1 = GATConv(node_feat_dim, 128, heads=4, dropout=0.2)\n        self.gat2 = GATConv(128*4, 64, heads=2, dropout=0.2)\n        self.gat3 = GATConv(64*2, 32, heads=1, dropout=0.2)\n\n        # Batch normalization\n        self.bn1 = nn.BatchNorm1d(128*4)\n        self.bn2 = nn.BatchNorm1d(64*2)\n\n        # Global pooling and classifier\n        self.pool = global_mean_pool\n        self.classifier = nn.Sequential(\n            nn.Linear(32, 64),\n            nn.ReLU(),\n            nn.Dropout(0.3),\n            nn.BatchNorm1d(64),\n            nn.Linear(64, 32),\n            nn.ReLU(),\n            nn.Dropout(0.3),\n            nn.Linear(32, 1)\n        )\n\n        # Skip connection projection\n        self.skip_proj = nn.Linear(node_feat_dim, 32) if node_feat_dim != 32 else None\n\n    def forward(self, batch_x):\n        # PyG Batch object\n        x, edge_index, batch = batch_x.x, batch_x.edge_index, batch_x.batch\n\n        # Initial features\n        x0 = x\n\n        # GAT layers with residual connections\n        x1 = self.gat1(x, edge_index)  # [num_nodes, 128*4]\n        x1 = self.bn1(x1)\n        x1 = F.elu(x1)\n        x1 = F.dropout(x1, p=0.2, training=self.training)\n\n        x2 = self.gat2(x1, edge_index)  # [num_nodes, 64*2]\n        x2 = self.bn2(x2)\n        x2 = F.elu(x2)\n        x2 = F.dropout(x2, p=0.2, training=self.training)\n\n        x3 = self.gat3(x2, edge_index)  # [num_nodes, 32]\n        x3 = F.elu(x3)\n\n        # Global mean pooling\n        graph_features = self.pool(x3, batch)  # [batch_size, 32]\n\n        # Optional skip connection from initial features\n        if self.skip_proj is not None:\n            graph_init = self.pool(x0, batch)\n            graph_init_proj = self.skip_proj(graph_init)\n            graph_features = graph_features + graph_init_proj\n\n        # Classifier\n        logits = self.classifier(graph_features).squeeze(-1)  # [batch_size]\n\n        return logits\n\n\ndef make_model(example_object):\n    return BinaryClassifier(example_object)\n\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 50\n\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    optimizer = AdamW(model.parameters(), lr=0.001, weight_decay=1e-4)\n    scheduler = ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=5, verbose=False)\n\n    train_losses, val_losses = [], []\n    train_accs, val_accs = [], []\n\n    best_val_auc = 0.0\n    best_model_state = None\n    patience_counter = 0\n    patience = 10\n\n    for epoch in range(epochs):\n        # Training\n        model.train()\n        train_loss = 0.0\n        train_correct = 0\n        train_total = 0\n\n        for batch in train_loader:\n            batch = batch.to(device)\n            optimizer.zero_grad()\n\n            logits = model(batch)\n            loss = F.binary_cross_entropy_with_logits(logits, batch.y.float())\n\n            loss.backward()\n            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)\n            optimizer.step()\n\n            train_loss += loss.item() * batch.num_graphs\n            preds = (torch.sigmoid(logits) > 0.5).float()\n            train_correct += (preds == batch.y.float()).sum().item()\n            train_total += batch.num_graphs\n\n        train_loss = train_loss / train_total\n        train_acc = train_correct / train_total\n\n        # Validation\n        model.eval()\n        val_loss = 0.0\n        val_correct = 0\n        val_total = 0\n        all_probs = []\n        all_labels = []\n\n        with torch.no_grad():\n            for batch in val_loader:\n                batch = batch.to(device)\n                logits = model(batch)\n                loss = F.binary_cross_entropy_with_logits(logits, batch.y.float())\n\n                val_loss += loss.item() * batch.num_graphs\n                preds = (torch.sigmoid(logits) > 0.5).float()\n                val_correct += (preds == batch.y.float()).sum().item()\n                val_total += batch.num_graphs\n\n                probs = torch.sigmoid(logits).cpu().numpy()\n                labels = batch.y.cpu().numpy()\n                all_probs.extend(probs)\n                all_labels.extend(labels)\n\n        val_loss = val_loss / val_total\n        val_acc = val_correct / val_total\n\n        # Calculate AUC using sklearn\n        from sklearn.metrics import roc_auc_score\n        try:\n            val_auc = roc_auc_score(all_labels, all_probs)\n        except:\n            val_auc = 0.5\n\n        # Update learning rate scheduler based on AUC\n        scheduler.step(val_auc)\n\n        # Early stopping based on AUC\n        if val_auc > best_val_auc:\n            best_val_auc = val_auc\n            best_model_state = model.state_dict().copy()\n            patience_counter = 0\n        else:\n            patience_counter += 1\n\n        if patience_counter >= patience:\n            print(f\"Early stopping at epoch {epoch+1}\")\n            break\n\n        # Store metrics\n        train_losses.append(train_loss)\n        val_losses.append(val_loss)\n        train_accs.append(train_acc)\n        val_accs.append(val_acc)\n\n        if (epoch + 1) % 5 == 0:\n            print(f\"Epoch {epoch+1}/{epochs}: Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}, \"\n                  f\"Train Acc: {train_acc:.4f}, Val Acc: {val_acc:.4f}, Val AUC: {val_auc:.4f}\")\n\n    # Load best model\n    if best_model_state is not None:\n        model.load_state_dict(best_model_state)\n\n    return model, train_losses, val_losses, train_accs, val_accs\n\n# <end code template>\n# ---------------------------  END OF LLM-CODE BLOCK  ---------------------------",
+    "reasoning": "",
+    "Outer_attempt": 2
+  },
+  "StaticChecks": {
+    "__timestamp": "2026-01-06T22:18:11Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2026-01-06T22:18:11Z",
+        "metrics": {
+          ".\\outputs\\01-06\\FOURTOPS\\Q1\\script_deepseek_deepseek-v3.2_2317_2.py": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 336,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 336,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2026-01-06T22:18:33Z",
+    "passed": true,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/01-06/FOURTOPS/Q1/script_deepseek_deepseek-v3.2_2317_2.py\nargv2=--dryrun\nDry-run: skipping artefact manifest\n",
+      "stderr": ""
+    },
+    "return_code": 0
+  },
+  "Training": {
+    "__timestamp": "2026-01-07T10:53:49.305975+00:00",
+    "passed": true,
+    "resources": {
+      "cpu_seconds_user": 1.16,
+      "cpu_seconds_sys": 0.91,
+      "disk_read_mb": 46.6,
+      "disk_write_mb": 0.1,
+      "max_rss_kb": -307772,
+      "training_time_s": 7413.22,
+      "gpu_name": null,
+      "gpu_total_mb": null,
+      "gpu_peak_alloc_mb": null,
+      "cuda_available": null
+    },
+    "metrics": {
+      "epochs": 50,
+      "train_loss": [
+        0.5805871367652835,
+        0.5551785674056163,
+        0.5454922196894749,
+        0.541011833734463,
+        0.5365171476517169,
+        0.5327859524286339,
+        0.5310122863782677,
+        0.5290141307088261,
+        0.526878151365805,
+        0.5258519369484125,
+        0.5223781458678838,
+        0.521798000220429,
+        0.5205824235506884
+      ],
+      "val_loss": [
+        0.5487619977659675,
+        0.5308125950486705,
+        0.5272993190137822,
+        0.5269408322217477,
+        0.5349033678960968,
+        0.5540042222817658,
+        0.5746089417093235,
+        0.5926263280912196,
+        0.5849174847607768,
+        0.5629868250015014,
+        0.585068463296333,
+        0.5864606134656815,
+        0.571109037475179
+      ],
+      "train_acc": [
+        0.6930566877847528,
+        0.7187873721845426,
+        0.7281974037582193,
+        0.7316734048672292,
+        0.7346321439064459,
+        0.7370901732621029,
+        0.73779778777358,
+        0.7399951170460611,
+        0.7406779029781881,
+        0.7416503556693992,
+        0.743818718265972,
+        0.7438021658797387,
+        0.744153904087198
+      ],
+      "val_acc": [
+        0.7170192339523951,
+        0.7378091170920648,
+        0.7416161816797431,
+        0.7423444896878207,
+        0.7336378985003476,
+        0.7175158075942663,
+        0.6945410004303638,
+        0.6795444764458569,
+        0.6831198066673287,
+        0.7043400536299533,
+        0.6883503823617042,
+        0.6853709405104778,
+        0.6981825404707518
+      ]
+    },
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/01-06/FOURTOPS/Q1/deepseek_deepseek-v3.2/script_deepseek_deepseek-v3.2_2317_2.py\nargv2=\nEpoch 5/50: Train Loss: 0.5365, Val Loss: 0.5349, Train Acc: 0.7346, Val Acc: 0.7336, Val AUC: 0.8114\nEpoch 10/50: Train Loss: 0.5259, Val Loss: 0.5630, Train Acc: 0.7417, Val Acc: 0.7043, Val AUC: 0.7884\nEarly stopping at epoch 14\n#TRAIN_METRICS#{\"epochs\": 50, \"train_loss\": [0.5805871367652835, 0.5551785674056163, 0.5454922196894749, 0.541011833734463, 0.5365171476517169, 0.5327859524286339, 0.5310122863782677, 0.5290141307088261, 0.526878151365805, 0.5258519369484125, 0.5223781458678838, 0.521798000220429, 0.5205824235506884], \"val_loss\": [0.5487619977659675, 0.5308125950486705, 0.5272993190137822, 0.5269408322217477, 0.5349033678960968, 0.5540042222817658, 0.5746089417093235, 0.5926263280912196, 0.5849174847607768, 0.5629868250015014, 0.585068463296333, 0.5864606134656815, 0.571109037475179], \"train_acc\": [0.6930566877847528, 0.7187873721845426, 0.7281974037582193, 0.7316734048672292, 0.7346321439064459, 0.7370901732621029, 0.73779778777358, 0.7399951170460611, 0.7406779029781881, 0.7416503556693992, 0.743818718265972, 0.7438021658797387, 0.744153904087198], \"val_acc\": [0.7170192339523951, 0.7378091170920648, 0.7416161816797431, 0.7423444896878207, 0.7336378985003476, 0.7175158075942663, 0.6945410004303638, 0.6795444764458569, 0.6831198066673287, 0.7043400536299533, 0.6883503823617042, 0.6853709405104778, 0.6981825404707518]}\nHash manifest written â†’ deepseek_deepseek-v3.2_2317_2_manifest.sha256\n",
+      "stderr": "WARNING:matplotlib:mkdir -p failed for path /home/sandbox/.config/matplotlib: [Errno 30] Read-only file system: '/home/sandbox/.config'\nWARNING:matplotlib:Matplotlib created a temporary cache directory at /tmp/matplotlib-zy7oojth because there was an issue with the default path (/home/sandbox/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.\n"
+    }
+  }
+}

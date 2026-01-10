@@ -65,3 +65,18 @@ def get_or_create_run_id(*, create_new: bool = False) -> str:
 def new_run_id() -> str:
     """Convenience: always create a new run id for today and set it active."""
     return get_or_create_run_id(create_new=True)
+
+def require_active_run_id() -> str:
+    """
+    Return the currently active run id, even if it is from a previous day.
+
+    Use this for Stage 2/3 so a run can safely cross midnight without
+    switching output roots.
+    """
+    active = get_active_run_id()
+    if not active:
+        raise RuntimeError(
+            "No active run id found (outputs/.active_run_id missing). "
+            "Run Stage 1 generation first (which sets it), or pass --run-id explicitly."
+        )
+    return active

@@ -1,0 +1,76 @@
+{
+  "LLMGeneration": {
+    "model": "mistralai/mistral-large-2512",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 4108,
+    "prompt_chars": 15596,
+    "response_tokens": 2080,
+    "response_chars": 7937,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.005174,
+    "generation_ms": 35613,
+    "code": "# ---------- IMPORTS ----------\nfrom sklearn.preprocessing import RobustScaler\nfrom sklearn.metrics import roc_auc_score\nimport torch.nn.functional as F\nfrom torch.optim import AdamW\nfrom torch.optim.lr_scheduler import ReduceLROnPlateau\nimport numpy as np\n\n# ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.scaler = RobustScaler()\n        self.obj_ids = [0, 1, 2, 3, 4, 5, 6, 21, 22]  # Common object IDs in particle physics\n        self.global_features = 2\n        self.per_object_features = 4  # E, p_T, eta, phi (obj_id is categorical)\n        self.max_objects = 18\n\n    def make_loader_cfg(self) -> dict:\n        return {\n            \"dataset_builder\": \"llm_script:FourTopsDataset\",\n            \"dataset_kwargs\": {},\n\n            \"loader_class\": \"torch.utils.data:DataLoader\",\n            \"batch_size\": 512,\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": False,\n\n            \"collate\": None,\n\n            \"extra_loader_kwargs\": {},\n\n            \"eval_overrides\": {\"shuffle\": False,\n                               \"batch_size\": 1024}\n        }\n\n    def fit(self, X, y=None):\n        # Extract global features (E_T_miss, phi_Et_miss)\n        global_features = X[:, :self.global_features].numpy()\n        self.scaler.fit(global_features)\n        return self\n\n    def transform(self, X):\n        # Convert to numpy for sklearn\n        X_np = X.numpy() if torch.is_tensor(X) else X\n\n        # Scale global features\n        global_features = X_np[:, :self.global_features]\n        global_features_scaled = self.scaler.transform(global_features)\n\n        # Process object features\n        object_features = []\n        for i in range(self.max_objects):\n            start_idx = self.global_features + i * 5\n            end_idx = start_idx + 5\n            obj_slice = X_np[:, start_idx:end_idx]\n\n            # Split into obj_id and kinematic features\n            obj_ids = obj_slice[:, 0:1]\n            kinematics = obj_slice[:, 1:]\n\n            # One-hot encode obj_id (9 common IDs + 1 for padding/unknown)\n            obj_onehot = np.zeros((obj_ids.shape[0], len(self.obj_ids) + 1))\n            for j, obj_id in enumerate(self.obj_ids):\n                obj_onehot[:, j] = (obj_ids.ravel() == obj_id).astype(float)\n            # Last column for padding/unknown\n            obj_onehot[:, -1] = (obj_ids.ravel() == 0).astype(float)\n\n            # Combine features\n            combined = np.hstack([obj_onehot, kinematics])\n            object_features.append(combined)\n\n        # Stack all features\n        object_features = np.stack(object_features, axis=1)  # [N, 18, 4+4=8]\n        processed = np.hstack([global_features_scaled, object_features.reshape(X_np.shape[0], -1)])\n\n        return torch.from_numpy(processed).float()\n\n# ---------- MODEL ARCHITECTURE ----------\nclass BinaryClassifier(nn.Module):\n    def __init__(self, sample_object):\n        super().__init__()\n\n        # Determine input features from sample\n        input_features = sample_object.shape[1]\n\n        # Global features branch\n        self.global_branch = nn.Sequential(\n            nn.Linear(2, 64),\n            nn.ReLU(),\n            nn.BatchNorm1d(64),\n            nn.Dropout(0.2),\n            nn.Linear(64, 64),\n            nn.ReLU(),\n            nn.BatchNorm1d(64),\n            nn.Dropout(0.2)\n        )\n\n        # Object features branch (18 objects, 8 features each)\n        self.object_branch = nn.Sequential(\n            nn.Linear(18 * 8, 256),\n            nn.ReLU(),\n            nn.BatchNorm1d(256),\n            nn.Dropout(0.3),\n            nn.Linear(256, 128),\n            nn.ReLU(),\n            nn.BatchNorm1d(128),\n            nn.Dropout(0.3)\n        )\n\n        # Combined classifier\n        self.classifier = nn.Sequential(\n            nn.Linear(64 + 128, 128),\n            nn.ReLU(),\n            nn.BatchNorm1d(128),\n            nn.Dropout(0.3),\n            nn.Linear(128, 64),\n            nn.ReLU(),\n            nn.BatchNorm1d(64),\n            nn.Dropout(0.2),\n            nn.Linear(64, 1)\n        )\n\n    def forward(self, batch_x):\n        # Split global and object features\n        global_feats = batch_x[:, :2]  # [B, 2]\n        object_feats = batch_x[:, 2:]  # [B, 18*8]\n\n        # Process global features\n        global_out = self.global_branch(global_feats)  # [B, 64]\n\n        # Process object features\n        object_out = self.object_branch(object_feats)  # [B, 128]\n\n        # Combine and classify\n        combined = torch.cat([global_out, object_out], dim=1)  # [B, 192]\n        logits = self.classifier(combined)  # [B, 1]\n\n        return logits.squeeze(1)  # [B]\n\ndef make_model(example_object):\n    return BinaryClassifier(example_object)\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 30\n\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    device = torch.device(\"cuda\" if torch.cuda.is_available() else \"cpu\")\n    model = model.to(device)\n\n    optimizer = AdamW(model.parameters(), lr=3e-4, weight_decay=1e-5)\n    scheduler = ReduceLROnPlateau(optimizer, 'max', patience=3, factor=0.5, verbose=True)\n    criterion = nn.BCEWithLogitsLoss()\n\n    best_auc = 0.0\n    best_model = None\n    train_losses = []\n    val_losses = []\n    train_accs = []\n    val_accs = []\n\n    for epoch in range(epochs):\n        model.train()\n        train_loss = 0.0\n        train_preds = []\n        train_targets = []\n\n        for batch_x, batch_y in train_loader:\n            batch_x, batch_y = batch_x.to(device), batch_y.to(device)\n\n            optimizer.zero_grad()\n            logits = model(batch_x)\n            loss = criterion(logits, batch_y.float())\n            loss.backward()\n            optimizer.step()\n\n            train_loss += loss.item()\n            train_preds.append(torch.sigmoid(logits).detach().cpu().numpy())\n            train_targets.append(batch_y.detach().cpu().numpy())\n\n        train_loss /= len(train_loader)\n        train_preds = np.concatenate(train_preds)\n        train_targets = np.concatenate(train_targets)\n        train_auc = roc_auc_score(train_targets, train_preds)\n        train_acc = ((train_preds > 0.5) == train_targets).mean()\n\n        # Validation\n        model.eval()\n        val_loss = 0.0\n        val_preds = []\n        val_targets = []\n\n        with torch.no_grad():\n            for batch_x, batch_y in val_loader:\n                batch_x, batch_y = batch_x.to(device), batch_y.to(device)\n                logits = model(batch_x)\n                loss = criterion(logits, batch_y.float())\n                val_loss += loss.item()\n                val_preds.append(torch.sigmoid(logits).detach().cpu().numpy())\n                val_targets.append(batch_y.detach().cpu().numpy())\n\n        val_loss /= len(val_loader)\n        val_preds = np.concatenate(val_preds)\n        val_targets = np.concatenate(val_targets)\n        val_auc = roc_auc_score(val_targets, val_preds)\n        val_acc = ((val_preds > 0.5) == val_targets).mean()\n\n        # Update scheduler\n        scheduler.step(val_auc)\n\n        # Store metrics\n        train_losses.append(train_loss)\n        val_losses.append(val_loss)\n        train_accs.append(train_acc)\n        val_accs.append(val_acc)\n\n        print(f\"Epoch {epoch+1}/{epochs} - Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}, \"\n              f\"Train AUC: {train_auc:.4f}, Val AUC: {val_auc:.4f}, \"\n              f\"Train Acc: {train_acc:.4f}, Val Acc: {val_acc:.4f}\")\n\n        # Early stopping and model saving\n        if val_auc > best_auc:\n            best_auc = val_auc\n            best_model = model.state_dict()\n            patience = 0\n        else:\n            patience += 1\n            if patience >= 5:\n                print(\"Early stopping triggered\")\n                break\n\n    # Load best model\n    if best_model is not None:\n        model.load_state_dict(best_model)\n\n    return model, train_losses, val_losses, train_accs, val_accs",
+    "reasoning": "",
+    "Outer_attempt": 2
+  },
+  "StaticChecks": {
+    "__timestamp": "2026-01-06T21:51:01Z",
+    "PyLint": {
+      "passed": false,
+      "messages": [
+        {
+          "type": "error",
+          "module": "script_mistralai_mistral-large-2512_2250_2",
+          "obj": "_run",
+          "line": 306,
+          "column": 14,
+          "endLine": 306,
+          "endColumn": 31,
+          "path": "outputs\\01-06\\FOURTOPS\\Q1\\script_mistralai_mistral-large-2512_2250_2.py",
+          "symbol": "undefined-variable",
+          "message": "Undefined variable 'make_preprocessor'",
+          "message-id": "E0602"
+        }
+      ]
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2026-01-06T21:51:01Z",
+        "metrics": {
+          ".\\outputs\\01-06\\FOURTOPS\\Q1\\script_mistralai_mistral-large-2512_2250_2.py": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 260,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 260,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  }
+}

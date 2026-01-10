@@ -1,0 +1,202 @@
+{
+  "LLMGeneration": {
+    "model": "openai/gpt-5.2-pro",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 3869,
+    "prompt_chars": 15596,
+    "response_tokens": 9877,
+    "response_chars": 15353,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 1.740585,
+    "generation_ms": 584817,
+    "code": "import math\nimport numpy as np\nimport torch\nfrom torch import nn\nfrom sklearn.metrics import roc_auc_score\n\n# ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    \"\"\"\n    Produces a dense tensor with engineered global + per-object features.\n\n    Output layout (per event):\n      global: 7 floats\n      objects: 18 * 11 floats, where per-object = [obj_id, 10 continuous engineered feats]\n    Total F = 7 + 18*11 = 205\n    \"\"\"\n\n    def __init__(self):\n        self.n_obj = 18\n        self.obj_stride_in = 5\n        self.gdim = 7\n        self.c_obj = 10\n        self.per_obj_out = 1 + self.c_obj  # id + cont\n\n        self.eps = 1e-6\n\n        # Standardization params (numpy float32 for pickling)\n        self.global_mean_ = None  # [7]\n        self.global_std_ = None   # [7]\n        self.obj_mean_ = None     # [10]\n        self.obj_std_ = None      # [10]\n\n    def make_loader_cfg(self) -> dict:\n        bs = 1024 if torch.cuda.is_available() else 512\n        pin = bool(torch.cuda.is_available())\n        return {\n            \"dataset_builder\": \"llm_script:FourTopsDataset\",\n            \"dataset_kwargs\": {},\n\n            \"loader_class\": \"torch.utils.data:DataLoader\",\n            \"batch_size\": bs,\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": pin,\n\n            \"collate\": None,\n            \"extra_loader_kwargs\": {},\n\n            \"eval_overrides\": {\"shuffle\": False, \"batch_size\": bs},\n        }\n\n    @staticmethod\n    def _wrap_dphi(dphi: torch.Tensor) -> torch.Tensor:\n        # dphi wrapped to [-pi, pi]\n        return torch.atan2(torch.sin(dphi), torch.cos(dphi))\n\n    def _engineer(self, X: torch.Tensor):\n        \"\"\"\n        X: FloatTensor[N, 92]\n        Returns:\n          global_feats: FloatTensor[N, 7]\n          obj_ids:      FloatTensor[N, 18]\n          obj_cont:     FloatTensor[N, 18, 10]\n          mask:         BoolTensor[N, 18]\n        \"\"\"\n        if not torch.is_tensor(X):\n            X = torch.as_tensor(X)\n        X = X.float()\n\n        N = X.shape[0]\n        # Global inputs\n        met = X[:, 0] / 1000.0  # [N] in GeV\n        met_phi = X[:, 1]       # [N]\n\n        met_log = torch.log1p(torch.clamp(met, min=0.0))                 # [N]\n        met_sin = torch.sin(met_phi)                                     # [N]\n        met_cos = torch.cos(met_phi)                                     # [N]\n\n        # Objects\n        objs = X[:, 2:].reshape(N, self.n_obj, self.obj_stride_in)       # [N,18,5]\n        obj_id = objs[:, :, 0]                                           # [N,18]\n        E = objs[:, :, 1] / 1000.0                                       # [N,18] GeV\n        pt = objs[:, :, 2] / 1000.0                                      # [N,18] GeV\n        eta = objs[:, :, 3]                                              # [N,18]\n        phi = objs[:, :, 4]                                              # [N,18]\n\n        mask = (obj_id > 0.0) & (pt > 0.0)                               # [N,18] bool\n\n        logE = torch.log1p(torch.clamp(E, min=0.0))                      # [N,18]\n        logpt = torch.log1p(torch.clamp(pt, min=0.0))                    # [N,18]\n\n        abs_eta = torch.abs(eta)                                         # [N,18]\n        sinphi = torch.sin(phi)                                          # [N,18]\n        cosphi = torch.cos(phi)                                          # [N,18]\n\n        dphi_met = self._wrap_dphi(phi - met_phi[:, None])               # [N,18]\n        sin_dphi = torch.sin(dphi_met)                                   # [N,18]\n        cos_dphi = torch.cos(dphi_met)                                   # [N,18]\n\n        # mass from E and p=pt*cosh(eta)\n        p = pt * torch.cosh(eta)                                         # [N,18]\n        mass2 = E * E - p * p                                            # [N,18]\n        mass = torch.sqrt(torch.clamp(mass2, min=0.0))                   # [N,18]\n\n        pt_over_E = pt / (E + self.eps)                                  # [N,18]\n\n        # Event-level aggregates\n        pt_masked = pt.masked_fill(~mask, 0.0)                           # [N,18]\n        mass_masked = mass.masked_fill(~mask, 0.0)                       # [N,18]\n        ht = pt_masked.sum(dim=1)                                        # [N]\n        ht_log = torch.log1p(torch.clamp(ht, min=0.0))                   # [N]\n        nobj = mask.sum(dim=1).float()                                   # [N]\n        nobj_scaled = nobj / float(self.n_obj)                           # [N]\n        max_pt = pt_masked.max(dim=1).values                             # [N]\n        max_pt_log = torch.log1p(torch.clamp(max_pt, min=0.0))           # [N]\n        sum_mass = mass_masked.sum(dim=1)                                # [N]\n        sum_mass_log = torch.log1p(torch.clamp(sum_mass, min=0.0))       # [N]\n\n        global_feats = torch.stack(\n            [met_log, met_sin, met_cos, ht_log, nobj_scaled, max_pt_log, sum_mass_log],\n            dim=1\n        )  # [N,7]\n\n        # Per-object continuous features [N,18,10]\n        obj_cont = torch.stack(\n            [logE, logpt, eta, abs_eta, sinphi, cosphi, mass, sin_dphi, cos_dphi, pt_over_E],\n            dim=2\n        )  # [N,18,10]\n\n        return global_feats, obj_id, obj_cont, mask\n\n    def fit(self, X, y=None):\n        with torch.no_grad():\n            global_feats, obj_id, obj_cont, mask = self._engineer(X)\n            # Global mean/std over events\n            g = global_feats.double()                                    # [N,7]\n            g_mean = g.mean(dim=0)                                       # [7]\n            g_var = (g - g_mean).pow(2).mean(dim=0)                      # [7]\n            g_std = torch.sqrt(g_var + 1e-6)                             # [7]\n\n            # Object mean/std over all real objects\n            m = mask.unsqueeze(-1)                                       # [N,18,1] bool\n            oc = obj_cont.double()                                       # [N,18,10]\n            w = m.double()\n            denom = w.sum(dim=(0, 1)).clamp(min=1.0)                     # [1]\n            oc_mean = (oc * w).sum(dim=(0, 1)) / denom                   # [10]\n            oc_var = ((oc - oc_mean) * w).pow(2).sum(dim=(0, 1)) / denom # [10]\n            oc_std = torch.sqrt(oc_var + 1e-6)                           # [10]\n\n            self.global_mean_ = g_mean.float().cpu().numpy()\n            self.global_std_ = g_std.float().cpu().numpy()\n            self.obj_mean_ = oc_mean.float().cpu().numpy()\n            self.obj_std_ = oc_std.float().cpu().numpy()\n\n        return self\n\n    def transform(self, X):\n        with torch.no_grad():\n            global_feats, obj_id, obj_cont, mask = self._engineer(X)\n            # Standardize\n            gm = torch.from_numpy(self.global_mean_).to(global_feats.device)  # [7]\n            gs = torch.from_numpy(self.global_std_).to(global_feats.device)   # [7]\n            om = torch.from_numpy(self.obj_mean_).to(obj_cont.device)         # [10]\n            os = torch.from_numpy(self.obj_std_).to(obj_cont.device)          # [10]\n\n            global_z = (global_feats - gm) / gs                               # [N,7]\n            obj_z = (obj_cont - om) / os                                      # [N,18,10]\n            obj_z = obj_z * mask.unsqueeze(-1).float()                        # [N,18,10] (keep padded at 0)\n\n            # Flatten per-object with id first\n            obj_pack = torch.cat([obj_id.unsqueeze(-1), obj_z], dim=2)        # [N,18,11]\n            obj_flat = obj_pack.reshape(obj_pack.shape[0], -1)               # [N,198]\n\n            out = torch.cat([global_z, obj_flat], dim=1)                     # [N,205]\n            return out.float()\n\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n\n# ---------- MODEL ARCHITECTURE ----------\nclass BinaryClassifier(nn.Module):\n    def __init__(self, sample_object):\n        super().__init__()\n\n        self.n_obj = 18\n        self.gdim = 7\n        self.per_obj = 11\n        self.c_obj = 10\n\n        in_dim = int(sample_object.shape[1])\n        expected = self.gdim + self.n_obj * self.per_obj\n        if in_dim != expected:\n            raise ValueError(f\"Unexpected input dim {in_dim}, expected {expected}\")\n\n        self.emb_size = 128\n        self.type_emb_dim = 16\n        self.d_model = 64\n\n        self.type_emb = nn.Embedding(self.emb_size, self.type_emb_dim)\n\n        tok_in = self.type_emb_dim + self.c_obj  # 16 + 10 = 26\n        self.tok_proj = nn.Sequential(\n            nn.Linear(tok_in, self.d_model),\n            nn.GELU(),\n            nn.LayerNorm(self.d_model),\n            nn.Dropout(0.10),\n            nn.Linear(self.d_model, self.d_model),\n            nn.GELU(),\n            nn.LayerNorm(self.d_model),\n        )\n\n        # Learned CLS token\n        self.cls = nn.Parameter(torch.zeros(1, 1, self.d_model))\n        nn.init.normal_(self.cls, std=0.02)\n\n        enc_layer = nn.TransformerEncoderLayer(\n            d_model=self.d_model,\n            nhead=4,\n            dim_feedforward=256,\n            dropout=0.10,\n            activation=\"gelu\",\n            batch_first=True,\n            norm_first=True,\n        )\n        self.encoder = nn.TransformerEncoder(enc_layer, num_layers=2)\n\n        self.global_mlp = nn.Sequential(\n            nn.Linear(self.gdim, 32),\n            nn.GELU(),\n            nn.LayerNorm(32),\n            nn.Dropout(0.10),\n            nn.Linear(32, 32),\n            nn.GELU(),\n            nn.LayerNorm(32),\n        )\n\n        # CLS (64) + mean pool (64) + max pool (64) + global (32) = 224\n        self.head = nn.Sequential(\n            nn.Linear(64 + 64 + 64 + 32, 192),\n            nn.GELU(),\n            nn.LayerNorm(192),\n            nn.Dropout(0.15),\n            nn.Linear(192, 64),\n            nn.GELU(),\n            nn.LayerNorm(64),\n            nn.Dropout(0.10),\n            nn.Linear(64, 1),\n        )\n\n    def forward(self, batch_x):\n        # batch_x: FloatTensor[B,205]\n        x = batch_x\n        B = x.shape[0]\n\n        global_x = x[:, : self.gdim]  # [B,7]\n        obj_flat = x[:, self.gdim :]  # [B,198]\n        obj = obj_flat.reshape(B, self.n_obj, self.per_obj)  # [B,18,11]\n\n        obj_id = obj[:, :, 0]  # [B,18] float\n        obj_cont = obj[:, :, 1:]  # [B,18,10]\n\n        # mask: padded objects have id==0\n        mask = obj_id > 0.0  # [B,18] bool\n\n        # embedding\n        ids = torch.round(obj_id).long().clamp(0, self.emb_size - 1)  # [B,18]\n        type_e = self.type_emb(ids)  # [B,18,16]\n\n        tok = torch.cat([type_e, obj_cont], dim=2)  # [B,18,26]\n        tok = self.tok_proj(tok)  # [B,18,64]\n        tok = tok * mask.unsqueeze(-1).float()  # [B,18,64]\n\n        # Transformer with CLS\n        cls = self.cls.expand(B, 1, self.d_model)  # [B,1,64]\n        seq = torch.cat([cls, tok], dim=1)  # [B,19,64]\n\n        # src_key_padding_mask: True means \"ignore\"\n        pad_mask = torch.cat([torch.zeros(B, 1, device=mask.device, dtype=torch.bool), ~mask], dim=1)  # [B,19]\n        h = self.encoder(seq, src_key_padding_mask=pad_mask)  # [B,19,64]\n\n        h_cls = h[:, 0, :]  # [B,64]\n        h_obj = h[:, 1:, :]  # [B,18,64]\n\n        # Masked mean/max pooling\n        m = mask.unsqueeze(-1)  # [B,18,1]\n        denom = m.float().sum(dim=1).clamp(min=1.0)  # [B,1]\n        h_mean = (h_obj * m.float()).sum(dim=1) / denom  # [B,64]\n\n        h_obj_for_max = h_obj.masked_fill(~m, -1e9)  # [B,18,64]\n        h_max = h_obj_for_max.max(dim=1).values  # [B,64]\n        # If an event had no objects (unlikely), max would be -1e9; clip to 0\n        h_max = torch.where(torch.isfinite(h_max), h_max, torch.zeros_like(h_max))\n        h_max = torch.clamp(h_max, min=-50.0, max=50.0)\n\n        g = self.global_mlp(global_x)  # [B,32]\n\n        feat = torch.cat([h_cls, h_mean, h_max, g], dim=1)  # [B,224]\n        logit = self.head(feat).squeeze(1)  # [B]\n        return logit\n\n\ndef make_model(example_object):\n    return BinaryClassifier(example_object)\n\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 25\n\n\n@torch.no_grad()\ndef _eval_epoch(model, loader, device):\n    model.eval()\n    losses = []\n    logits_all = []\n    y_all = []\n    crit = nn.BCEWithLogitsLoss()\n\n    for xb, yb in loader:\n        xb = xb.to(device, non_blocking=True)\n        yb = yb.to(device, non_blocking=True).float()\n        out = model(xb)  # [B]\n        loss = crit(out, yb)\n        losses.append(loss.detach().float().item())\n        logits_all.append(out.detach().float().cpu())\n        y_all.append(yb.detach().float().cpu())\n\n    logits = torch.cat(logits_all, dim=0).numpy()\n    y = torch.cat(y_all, dim=0).numpy().astype(np.int64)\n\n    try:\n        auc = float(roc_auc_score(y, logits))\n    except Exception:\n        auc = float(\"nan\")\n\n    preds = (logits >= 0.0).astype(np.int64)\n    acc = float((preds == y).mean())\n    return float(np.mean(losses)), acc, auc\n\n\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    crit = nn.BCEWithLogitsLoss()\n    optimizer = torch.optim.AdamW(model.parameters(), lr=6e-4, weight_decay=1e-2)\n\n    steps_per_epoch = max(1, len(train_loader))\n    scheduler = torch.optim.lr_scheduler.OneCycleLR(\n        optimizer,\n        max_lr=1.5e-3,\n        epochs=max(1, epochs),\n        steps_per_epoch=steps_per_epoch,\n        pct_start=0.15,\n        div_factor=15.0,\n        final_div_factor=50.0,\n        anneal_strategy=\"cos\",\n    )\n\n    use_amp = (device.type == \"cuda\")\n    scaler = torch.cuda.amp.GradScaler(enabled=use_amp)\n\n    train_loss_hist, val_loss_hist = [], []\n    train_acc_hist, val_acc_hist = [], []\n\n    best_auc = -1.0\n    best_state = None\n    patience = 6\n    bad = 0\n\n    for ep in range(int(epochs)):\n        model.train()\n        running_loss = 0.0\n        correct = 0\n        total = 0\n\n        for xb, yb in train_loader:\n            xb = xb.to(device, non_blocking=True)\n            yb = yb.to(device, non_blocking=True).float()\n\n            optimizer.zero_grad(set_to_none=True)\n\n            with torch.cuda.amp.autocast(enabled=use_amp):\n                out = model(xb)                       # [B]\n                loss = crit(out, yb)\n\n            scaler.scale(loss).backward()\n            scaler.unscale_(optimizer)\n            torch.nn.utils.clip_grad_norm_(model.parameters(), 2.0)\n            scaler.step(optimizer)\n            scaler.update()\n            scheduler.step()\n\n            running_loss += loss.detach().float().item() * xb.size(0)\n            pred = (out.detach() >= 0.0).long()\n            correct += (pred == yb.long()).sum().item()\n            total += xb.size(0)\n\n        tr_loss = running_loss / max(1, total)\n        tr_acc = correct / max(1, total)\n\n        va_loss, va_acc, va_auc = _eval_epoch(model, val_loader, device)\n\n        train_loss_hist.append(float(tr_loss))\n        val_loss_hist.append(float(va_loss))\n        train_acc_hist.append(float(tr_acc))\n        val_acc_hist.append(float(va_acc))\n\n        if va_auc > best_auc + 1e-5:\n            best_auc = va_auc\n            best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}\n            bad = 0\n        else:\n            bad += 1\n            if bad >= patience:\n                break\n\n    if best_state is not None:\n        model.load_state_dict(best_state)\n\n    trained_model = model\n    return trained_model, train_loss_hist, val_loss_hist, train_acc_hist, val_acc_hist",
+    "reasoning": "",
+    "Outer_attempt": 1
+  },
+  "StaticChecks": {
+    "__timestamp": "2026-01-06T22:37:33Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2026-01-06T22:37:33Z",
+        "metrics": {
+          ".\\outputs\\01-06\\FOURTOPS\\Q1\\script_openai_gpt-5.2-pro_2337_1.py": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 405,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 405,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2026-01-06T22:37:57Z",
+    "passed": true,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/01-06/FOURTOPS/Q1/script_openai_gpt-5.2-pro_2337_1.py\nargv2=--dryrun\nDry-run: skipping artefact manifest\n",
+      "stderr": "/opt/venv/lib/python3.12/site-packages/torch/nn/modules/transformer.py:385: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True\n  warnings.warn(\n/workspace/outputs/01-06/FOURTOPS/Q1/script_openai_gpt-5.2-pro_2337_1.py:415: FutureWarning: `torch.cuda.amp.GradScaler(args...)` is deprecated. Please use `torch.amp.GradScaler('cuda', args...)` instead.\n  scaler = torch.cuda.amp.GradScaler(enabled=use_amp)\n/workspace/outputs/01-06/FOURTOPS/Q1/script_openai_gpt-5.2-pro_2337_1.py:437: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.\n  with torch.cuda.amp.autocast(enabled=use_amp):\n"
+    },
+    "return_code": 0
+  },
+  "Training": {
+    "__timestamp": "2026-01-07T11:29:35.709524+00:00",
+    "passed": true,
+    "resources": {
+      "cpu_seconds_user": 1.22,
+      "cpu_seconds_sys": 1.05,
+      "disk_read_mb": 46.8,
+      "disk_write_mb": 0.3,
+      "max_rss_kb": -168,
+      "training_time_s": 712.53,
+      "gpu_name": null,
+      "gpu_total_mb": null,
+      "gpu_peak_alloc_mb": null,
+      "cuda_available": null
+    },
+    "metrics": {
+      "epochs": 25,
+      "train_loss": [
+        0.5796180012945267,
+        0.5288618721671796,
+        0.5167900006150823,
+        0.5093407098260488,
+        0.5031753779922741,
+        0.49675094262267105,
+        0.49296924685762183,
+        0.48893782152092247,
+        0.4852087086803755,
+        0.4831474462578959,
+        0.4818980278511947,
+        0.4791850103388367,
+        0.4772920150742224,
+        0.4751470453461478,
+        0.47365186703523926,
+        0.4713151714128553,
+        0.46967047409355955,
+        0.4677486104686239,
+        0.4662601106457107,
+        0.4646164947667949,
+        0.463213387384174,
+        0.4617351379622416,
+        0.46061159100548793,
+        0.45995828114037485,
+        0.459439581931751
+      ],
+      "val_loss": [
+        0.5259390850861867,
+        0.5079819897810618,
+        0.4988459418217341,
+        0.49526104231675466,
+        0.4946570207675298,
+        0.48201485971609753,
+        0.4795671045780182,
+        0.47863625089327494,
+        0.47629024386405944,
+        0.47474027077356973,
+        0.4705515762170156,
+        0.47133335570494334,
+        0.47059071958065035,
+        0.4689627339442571,
+        0.46684842705726626,
+        0.4671009719371796,
+        0.4673669477303823,
+        0.4674287557601929,
+        0.46477248668670657,
+        0.46774774889151255,
+        0.46418870985507965,
+        0.4647822360197703,
+        0.4643079141775767,
+        0.4642244686683019,
+        0.4642503609259923
+      ],
+      "train_acc": [
+        0.6947491692771159,
+        0.7393371596932843,
+        0.7476381813893246,
+        0.7517721398511112,
+        0.7551281361599291,
+        0.7589062183176982,
+        0.7610290618521293,
+        0.763400191180061,
+        0.7649602535825571,
+        0.7663423778330444,
+        0.7678900259458654,
+        0.769011450113177,
+        0.7707494506676819,
+        0.7717674224210348,
+        0.7727812560778293,
+        0.7741013088799414,
+        0.7746889185912265,
+        0.7763317429248894,
+        0.7766834811323488,
+        0.7773621289679173,
+        0.7788352913426881,
+        0.7801470679516835,
+        0.7799153345444163,
+        0.7806519157318017,
+        0.78068088240771
+      ],
+      "val_acc": [
+        0.7472440162876155,
+        0.7562816565696693,
+        0.756645810573708,
+        0.7617108617207932,
+        0.7619757009964577,
+        0.7709802363690536,
+        0.7703843479988082,
+        0.7713443903730923,
+        0.7733306849405767,
+        0.7733306849405767,
+        0.7770384347998808,
+        0.7763432317012613,
+        0.7775350084417519,
+        0.7776343231701262,
+        0.7778991624457907,
+        0.7801171913794815,
+        0.7804482404740622,
+        0.7802496110173138,
+        0.7804482404740622,
+        0.780348925745688,
+        0.7805475552024366,
+        0.7792564637335717,
+        0.7804813453835204,
+        0.7808123944781011,
+        0.7799847717416493
+      ]
+    },
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/01-06/FOURTOPS/Q1/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2337_1.py\nargv2=\n#TRAIN_METRICS#{\"epochs\": 25, \"train_loss\": [0.5796180012945267, 0.5288618721671796, 0.5167900006150823, 0.5093407098260488, 0.5031753779922741, 0.49675094262267105, 0.49296924685762183, 0.48893782152092247, 0.4852087086803755, 0.4831474462578959, 0.4818980278511947, 0.4791850103388367, 0.4772920150742224, 0.4751470453461478, 0.47365186703523926, 0.4713151714128553, 0.46967047409355955, 0.4677486104686239, 0.4662601106457107, 0.4646164947667949, 0.463213387384174, 0.4617351379622416, 0.46061159100548793, 0.45995828114037485, 0.459439581931751], \"val_loss\": [0.5259390850861867, 0.5079819897810618, 0.4988459418217341, 0.49526104231675466, 0.4946570207675298, 0.48201485971609753, 0.4795671045780182, 0.47863625089327494, 0.47629024386405944, 0.47474027077356973, 0.4705515762170156, 0.47133335570494334, 0.47059071958065035, 0.4689627339442571, 0.46684842705726626, 0.4671009719371796, 0.4673669477303823, 0.4674287557601929, 0.46477248668670657, 0.46774774889151255, 0.46418870985507965, 0.4647822360197703, 0.4643079141775767, 0.4642244686683019, 0.4642503609259923], \"train_acc\": [0.6947491692771159, 0.7393371596932843, 0.7476381813893246, 0.7517721398511112, 0.7551281361599291, 0.7589062183176982, 0.7610290618521293, 0.763400191180061, 0.7649602535825571, 0.7663423778330444, 0.7678900259458654, 0.769011450113177, 0.7707494506676819, 0.7717674224210348, 0.7727812560778293, 0.7741013088799414, 0.7746889185912265, 0.7763317429248894, 0.7766834811323488, 0.7773621289679173, 0.7788352913426881, 0.7801470679516835, 0.7799153345444163, 0.7806519157318017, 0.78068088240771], \"val_acc\": [0.7472440162876155, 0.7562816565696693, 0.756645810573708, 0.7617108617207932, 0.7619757009964577, 0.7709802363690536, 0.7703843479988082, 0.7713443903730923, 0.7733306849405767, 0.7733306849405767, 0.7770384347998808, 0.7763432317012613, 0.7775350084417519, 0.7776343231701262, 0.7778991624457907, 0.7801171913794815, 0.7804482404740622, 0.7802496110173138, 0.7804482404740622, 0.780348925745688, 0.7805475552024366, 0.7792564637335717, 0.7804813453835204, 0.7808123944781011, 0.7799847717416493]}\nHash manifest written â†’ openai_gpt-5.2-pro_2337_1_manifest.sha256\n",
+      "stderr": "/opt/venv/lib/python3.12/site-packages/torch/nn/modules/transformer.py:385: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True\n  warnings.warn(\n/workspace/outputs/01-06/FOURTOPS/Q1/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2337_1.py:415: FutureWarning: `torch.cuda.amp.GradScaler(args...)` is deprecated. Please use `torch.amp.GradScaler('cuda', args...)` instead.\n  scaler = torch.cuda.amp.GradScaler(enabled=use_amp)\n/workspace/outputs/01-06/FOURTOPS/Q1/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2337_1.py:437: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.\n  with torch.cuda.amp.autocast(enabled=use_amp):\n/workspace/outputs/01-06/FOURTOPS/Q1/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2337_1.py:437: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.\n  with torch.cuda.amp.autocast(enabled=use_amp):\n/workspace/outputs/01-06/FOURTOPS/Q1/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2337_1.py:437: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.\n  with torch.cuda.amp.autocast(enabled=use_amp):\n/workspace/outputs/01-06/FOURTOPS/Q1/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2337_1.py:437: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.\n  with torch.cuda.amp.autocast(enabled=use_amp):\n/workspace/outputs/01-06/FOURTOPS/Q1/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2337_1.py:437: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.\n  with torch.cuda.amp.autocast(enabled=use_amp):\n/workspace/outputs/01-06/FOURTOPS/Q1/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2337_1.py:437: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.\n  with torch.cuda.amp.autocast(enabled=use_amp):\n/workspace/outputs/01-06/FOURTOPS/Q1/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2337_1.py:437: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.\n  with torch.cuda.amp.autocast(enabled=use_amp):\n/workspace/outputs/01-06/FOURTOPS/Q1/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2337_1.py:437: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.\n  with torch.cuda.amp.autocast(enabled=use_amp):\n/workspace/outputs/01-06/FOURTOPS/Q1/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2337_1.py:437: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.\n  with torch.cuda.amp.autocast(enabled=use_amp):\n/workspace/outputs/01-06/FOURTOPS/Q1/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2337_1.py:437: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.\n  with torch.cuda.amp.autocast(enabled=use_amp):\n/workspace/outputs/01-06/FOURTOPS/Q1/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2337_1.py:437: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.\n  with torch.cuda.amp.autocast(enabled=use_amp):\n/workspace/outputs/01-06/FOURTOPS/Q1/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2337_1.py:437: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.\n  with torch.cuda.amp.autocast(enabled=use_amp):\n/workspace/outputs/01-06/FOURTOPS/Q1/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2337_1.py:437: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.\n  with torch.cuda.amp.autocast(enabled=use_amp):\n/workspace/outputs/01-06/FOURTOPS/Q1/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2337_1.py:437: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.\n  with torch.cuda.amp.autocast(enabled=use_amp):\n/workspace/outputs/01-06/FOURTOPS/Q1/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2337_1.py:437: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.\n  with torch.cuda.amp.autocast(enabled=use_amp):\n/workspace/outputs/01-06/FOURTOPS/Q1/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2337_1.py:437: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.\n  with torch.cuda.amp.autocast(enabled=use_amp):\n/workspace/outputs/01-06/FOURTOPS/Q1/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2337_1.py:437: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.\n  with torch.cuda.amp.autocast(enabled=use_amp):\n/workspace/outputs/01-06/FOURTOPS/Q1/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2337_1.py:437: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.\n  with torch.cuda.amp.autocast(enabled=use_amp):\n/workspace/outputs/01-06/FOURTOPS/Q1/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2337_1.py:437: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.\n  with torch.cuda.amp.autocast(enabled=use_amp):\n/workspace/outputs/01-06/FOURTOPS/Q1/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2337_1.py:437: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.\n  with torch.cuda.amp.autocast(enabled=use_amp):\n/workspace/outputs/01-06/FOURTOPS/Q1/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2337_1.py:437: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.\n  with torch.cuda.amp.autocast(enabled=use_amp):\n/workspace/outputs/01-06/FOURTOPS/Q1/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2337_1.py:437: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.\n  with torch.cuda.amp.autocast(enabled=use_amp):\n/workspace/outputs/01-06/FOURTOPS/Q1/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2337_1.py:437: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.\n  with torch.cuda.amp.autocast(enabled=use_amp):\n/workspace/outputs/01-06/FOURTOPS/Q1/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2337_1.py:437: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.\n  with torch.cuda.amp.autocast(enabled=use_amp):\n/workspace/outputs/01-06/FOURTOPS/Q1/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2337_1.py:437: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.\n  with torch.cuda.amp.autocast(enabled=use_amp):\nWARNING:matplotlib:mkdir -p failed for path /home/sandbox/.config/matplotlib: [Errno 30] Read-only file system: '/home/sandbox/.config'\nWARNING:matplotlib:Matplotlib created a temporary cache directory at /tmp/matplotlib-eetggr85 because there was an issue with the default path (/home/sandbox/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.\n"
+    }
+  }
+}

@@ -5,7 +5,7 @@ Plot training/validation accuracy or loss vs epochs for *all* models found under
 an outputs/… subtree.
 
 Basic usage:
-  python utils\\plot_training.py outputs\\23-06\\FOURTOPS\\Q1
+    python -m utils.plot_training ".\outputs\01-05(2)\FOURTOPS\\Q1" --out FOURTOPS_Q1-1_TRAIN_LOSS.PNG --ylow 0.4 --yhigh 0.8
 
 Options:
   --metric loss|acc           choose metric                 (default: loss)
@@ -13,6 +13,8 @@ Options:
   --out FIG.png               save instead of showing
   --train-key train_acc       JSON key for training acc     (default: train_acc)
   --val-key   val_acc         JSON key for val acc          (default: val_acc)
+  --ylow YLOW 
+  --yhigh YHIGH  y-limits for the plot
 """
 
 from __future__ import annotations
@@ -21,7 +23,7 @@ import argparse, json, itertools, sys, logging
 
 import matplotlib.pyplot as plt
 from matplotlib.colors import to_rgb
-from utils import iter_input_dir, SKIP_DIRS
+from utils.utils import iter_input_dir, SKIP_DIRS
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -31,15 +33,21 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Plot training/val accuracy curves")
     p.add_argument("input_dir", type=Path,
                    help="Path anywhere inside outputs/<DATE>/…")
-    style = p.add_mutually_exclusive_group()
     p.add_argument("--metric", default="loss", choices=["loss", "acc"])
+
+    style = p.add_mutually_exclusive_group()
     style.add_argument("--dots", action="store_true",
                        help="Scatter markers instead of lines.")
     style.add_argument("--lines", action="store_true",
                        help="Lines instead of scatter (default).")
+    
     p.add_argument("--outfile",
-                   help="Filename to save under input_dir. "
-                        "If omitted, figure is shown on screen.")
+                   help="Filename to save under input_dir. If omitted, figure is shown on screen.")
+    
+    p.add_argument("--ylow", type=float, default=None,
+                    help="Lower y-limit for the plot (float). Omit for auto.")
+    p.add_argument("--yhigh", type=float, default=None,
+                    help="Upper y-limit for the plot (float). Omit for auto.")
     return p
 
 
@@ -131,7 +139,7 @@ def main() -> None:
     for m_dir, base_col in zip(model_dirs, base_colors):
         j_path = _find_training_json(m_dir)
         if not j_path:
-            print(f"⚠️  No training JSON in {m_dir}; skipping")
+            print(f"⚠️ No training JSON in {m_dir}; skipping")
             continue
 
         try:
@@ -159,10 +167,15 @@ def main() -> None:
 
     ax.set_xlabel("Epoch", fontsize=14)
     ax.set_ylabel(ylabel, fontsize=14)
-    # ax.set_ylim(0.45, 0.6) - necessary for fked up loss epochs 1 & 2 o3-pro
+
+    # y-lims
+    if args.ylow is not None and args.yhigh is not None and args.ylow >= args.yhigh:
+        raise ValueError(f"--ylow must be < --yhigh (got {args.ylow} >= {args.yhigh})")
+    if args.ylow is not None or args.yhigh is not None:
+        ax.set_ylim(bottom=args.ylow, top=args.yhigh)
+
     ax.set_title(f"{challenge} - {question}: Training vs Validation {ylabel} ({date_part})", fontsize=16)
     ax.legend()
-    #fig.tight_layout()
 
     if args.outfile:
         out_path = input_dir / args.outfile

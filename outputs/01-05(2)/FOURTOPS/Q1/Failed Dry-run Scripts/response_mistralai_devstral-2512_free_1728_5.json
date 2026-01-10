@@ -1,0 +1,71 @@
+{
+  "LLMGeneration": {
+    "model": "mistralai/devstral-2512:free",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 4108,
+    "prompt_chars": 15596,
+    "response_tokens": 2035,
+    "response_chars": 7730,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0,
+    "generation_ms": 30352,
+    "code": "# -------------------------- START OF LLM BLOCK ------------------------------\n# <start code template>\n# ---------- IMPORTS ----------\nfrom torch.nn import functional as F\nfrom torch.optim import Adam\nfrom torch.optim.lr_scheduler import ReduceLROnPlateau\nfrom sklearn.preprocessing import StandardScaler\nfrom sklearn.metrics import roc_auc_score\nimport numpy as np\n\n#  -------- (OPTIONAL) CUSTOM DATASET  --------\n# class CustomDataset(Dataset):\n#  REQUIREMENT: If you want a custom dataset: in make_loader_cfg set dataset_builder to \"llm_script:CustomDataset\"\n#    def __init__(self, events, pre, train: bool = True, **kwargs):\n#        X, y = events\n#        self.X = pre.transform(X) if pre is not None else X\n#        self.y = y\n#    def __len__(self):\n#        return int(self.y.shape[0])\n#    def __getitem__(self, idx):\n#        return self.X[idx], self.y[idx]\n\n# ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.scaler = StandardScaler()\n        self.global_scaler = StandardScaler()\n        self.obj_scaler = StandardScaler()\n\n    def make_loader_cfg(self) -> dict:\n        return {\n            \"dataset_builder\": \"llm_script:FourTopsDataset\",\n            \"dataset_kwargs\": {},\n            \"loader_class\": \"torch.utils.data:DataLoader\",\n            \"batch_size\": 1024,\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": True,\n            \"collate\": None,\n            \"extra_loader_kwargs\": {},\n            \"eval_overrides\": {\"shuffle\": False, \"batch_size\": 1024}\n        }\n\n    def fit(self, X, y=None):\n        # Separate global and object features\n        global_features = X[:, :2]  # E_T_miss, phi_Et_miss\n        obj_features = X[:, 2:].reshape(-1, 18, 5)  # [n_events, 18, 5]\n\n        # Flatten object features for scaling\n        obj_flat = obj_features.reshape(-1, 5)\n\n        # Fit scalers\n        self.global_scaler.fit(global_features)\n        self.obj_scaler.fit(obj_flat)\n        return self\n\n    def transform(self, X):\n        # Apply scaling\n        global_features = X[:, :2]\n        obj_features = X[:, 2:].reshape(-1, 18, 5)\n\n        # Scale global features\n        global_scaled = self.global_scaler.transform(global_features)\n\n        # Scale object features\n        obj_flat = obj_features.reshape(-1, 5)\n        obj_scaled = self.obj_scaler.transform(obj_flat)\n        obj_scaled = obj_scaled.reshape(-1, 18, 5)\n\n        # Combine features\n        X_scaled = np.concatenate([\n            global_scaled,\n            obj_scaled.reshape(-1, 90)\n        ], axis=1)\n\n        return torch.from_numpy(X_scaled).float()\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# ---------- MODEL ARCHITECTURE ----------\nclass BinaryClassifier(nn.Module):\n    def __init__(self, sample_object):\n        super().__init__()\n        # Extract input dimensions from sample\n        self.global_dim = 2\n        self.obj_dim = 5\n        self.max_objects = 18\n\n        # Global feature processing\n        self.global_encoder = nn.Sequential(\n            nn.Linear(self.global_dim, 32),\n            nn.BatchNorm1d(32),\n            nn.ReLU(),\n            nn.Dropout(0.2)\n        )\n\n        # Object feature processing\n        self.obj_encoder = nn.Sequential(\n            nn.Linear(self.obj_dim, 32),\n            nn.BatchNorm1d(32),\n            nn.ReLU(),\n            nn.Dropout(0.2)\n        )\n\n        # Attention mechanism for objects\n        self.attention = nn.Sequential(\n            nn.Linear(32, 16),\n            nn.Tanh(),\n            nn.Linear(16, 1)\n        )\n\n        # Final classifier\n        self.classifier = nn.Sequential(\n            nn.Linear(32 + 32, 128),\n            nn.BatchNorm1d(128),\n            nn.ReLU(),\n            nn.Dropout(0.3),\n            nn.Linear(128, 64),\n            nn.BatchNorm1d(64),\n            nn.ReLU(),\n            nn.Dropout(0.3),\n            nn.Linear(64, 1)\n        )\n\n    def forward(self, batch_x):\n        # Split features\n        global_feat = batch_x[:, :2]  # [B, 2]\n        obj_feat = batch_x[:, 2:].reshape(-1, self.max_objects, self.obj_dim)  # [B, 18, 5]\n\n        # Process global features\n        global_encoded = self.global_encoder(global_feat)  # [B, 32]\n\n        # Process object features\n        obj_encoded = self.obj_encoder(obj_feat)  # [B, 18, 32]\n\n        # Attention weights\n        attn_weights = F.softmax(self.attention(obj_encoded), dim=1)  # [B, 18, 1]\n        obj_context = torch.sum(attn_weights * obj_encoded, dim=1)  # [B, 32]\n\n        # Combine features\n        combined = torch.cat([global_encoded, obj_context], dim=1)  # [B, 64]\n\n        # Classification\n        logits = self.classifier(combined)  # [B, 1]\n        return logits.squeeze(-1)\n\ndef make_model(example_object):\n    return BinaryClassifier(example_object)\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 50\n\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    device = torch.device(\"cuda\" if torch.cuda.is_available() else \"cpu\")\n    model = model.to(device)\n\n    criterion = nn.BCEWithLogitsLoss()\n    optimizer = Adam(model.parameters(), lr=1e-3, weight_decay=1e-5)\n    scheduler = ReduceLROnPlateau(optimizer, 'min', patience=5, factor=0.5, verbose=True)\n\n    best_val_auc = 0\n    best_model = None\n\n    train_losses = []\n    val_losses = []\n    train_aucs = []\n    val_aucs = []\n\n    for epoch in range(epochs):\n        # Training phase\n        model.train()\n        epoch_train_loss = 0\n        train_preds = []\n        train_targets = []\n\n        for batch_x, batch_y in train_loader:\n            batch_x, batch_y = batch_x.to(device), batch_y.to(device).float()\n\n            optimizer.zero_grad()\n            logits = model(batch_x)\n            loss = criterion(logits, batch_y.unsqueeze(1))\n\n            loss.backward()\n            optimizer.step()\n\n            epoch_train_loss += loss.item() * batch_x.size(0)\n            train_preds.extend(logits.sigmoid().detach().cpu().numpy())\n            train_targets.extend(batch_y.cpu().numpy())\n\n        # Validation phase\n        model.eval()\n        epoch_val_loss = 0\n        val_preds = []\n        val_targets = []\n\n        with torch.no_grad():\n            for batch_x, batch_y in val_loader:\n                batch_x, batch_y = batch_x.to(device), batch_y.to(device).float()\n\n                logits = model(batch_x)\n                loss = criterion(logits, batch_y.unsqueeze(1))\n\n                epoch_val_loss += loss.item() * batch_x.size(0)\n                val_preds.extend(logits.sigmoid().detach().cpu().numpy())\n                val_targets.extend(batch_y.cpu().numpy())\n\n        # Calculate metrics\n        train_loss = epoch_train_loss / len(train_loader.dataset)\n        val_loss = epoch_val_loss / len(val_loader.dataset)\n\n        train_auc = roc_auc_score(train_targets, train_preds)\n        val_auc = roc_auc_score(val_targets, val_preds)\n\n        train_losses.append(train_loss)\n        val_losses.append(val_loss)\n        train_aucs.append(train_auc)\n        val_aucs.append(val_auc)\n\n        # Update scheduler\n        scheduler.step(val_loss)\n\n        # Early stopping and model saving\n        if val_auc > best_val_auc:\n            best_val_auc = val_auc\n            best_model = model.state_dict()\n            patience_counter = 0\n        else:\n            patience_counter += 1\n\n        print(f\"Epoch {epoch+1}/{epochs} - Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}, Train AUC: {train_auc:.4f}, Val AUC: {val_auc:.4f}\")\n\n    # Load best model\n    model.load_state_dict(best_model)\n\n    return model, train_losses, val_losses, train_aucs, val_aucs\n\n# <end code template>\n# ---------------------------  END OF LLM-CODE BLOCK  ---------------------------",
+    "reasoning": "",
+    "Outer_attempt": 5
+  },
+  "StaticChecks": {
+    "__timestamp": "2026-01-05T16:28:59Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2026-01-05T16:28:59Z",
+        "metrics": {
+          ".\\outputs\\01-05(2)\\FOURTOPS\\Q1\\script_mistralai_devstral-2512_free_1728_5.py": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 243,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 243,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2026-01-05T16:29:20Z",
+    "passed": false,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/01-05(2)/FOURTOPS/Q1/script_mistralai_devstral-2512_free_1728_5.py\nargv2=--dryrun\nERROR during training: running_mean should contain 18 elements not 32\n",
+      "stderr": "/opt/venv/lib/python3.12/site-packages/torch/optim/lr_scheduler.py:62: UserWarning: The verbose parameter is deprecated. Please use get_last_lr() to access the learning rate.\n  warnings.warn(\nTraceback (most recent call last):\n  File \"/workspace/outputs/01-05(2)/FOURTOPS/Q1/script_mistralai_devstral-2512_free_1728_5.py\", line 372, in <module>\n    _run(dryrun=\"--dryrun\" in sys.argv)\n  File \"/workspace/outputs/01-05(2)/FOURTOPS/Q1/script_mistralai_devstral-2512_free_1728_5.py\", line 332, in _run\n    trained_model, tr_loss, va_loss, tr_acc, va_acc = train_model(\n                                                      ^^^^^^^^^^^^\n  File \"/workspace/outputs/01-05(2)/FOURTOPS/Q1/script_mistralai_devstral-2512_free_1728_5.py\", line 237, in train_model\n    logits = model(batch_x)\n             ^^^^^^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py\", line 1739, in _wrapped_call_impl\n    return self._call_impl(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py\", line 1750, in _call_impl\n    return forward_call(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/outputs/01-05(2)/FOURTOPS/Q1/script_mistralai_devstral-2512_free_1728_5.py\", line 191, in forward\n    obj_encoded = self.obj_encoder(obj_feat)  # [B, 18, 32]\n                  ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py\", line 1739, in _wrapped_call_impl\n    return self._call_impl(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py\", line 1750, in _call_impl\n    return forward_call(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/torch/nn/modules/container.py\", line 250, in forward\n    input = module(input)\n            ^^^^^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py\", line 1739, in _wrapped_call_impl\n    return self._call_impl(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py\", line 1750, in _call_impl\n    return forward_call(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/torch/nn/modules/batchnorm.py\", line 193, in forward\n    return F.batch_norm(\n           ^^^^^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/torch/nn/functional.py\", line 2822, in batch_norm\n    return torch.batch_norm(\n           ^^^^^^^^^^^^^^^^^\nRuntimeError: running_mean should contain 18 elements not 32\n"
+    },
+    "return_code": 1
+  }
+}

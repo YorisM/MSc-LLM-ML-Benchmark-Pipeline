@@ -1,0 +1,150 @@
+{
+  "LLMGeneration": {
+    "model": "openai/gpt-5.1-codex-max",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 3869,
+    "prompt_chars": 15596,
+    "response_tokens": 11724,
+    "response_chars": 7269,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.12207625,
+    "generation_ms": 141626,
+    "code": "import torch\nimport torch.nn as nn\nimport torch.nn.functional as F\nimport torch.optim as optim\nimport copy\n\nclass MyPreprocessor:\n    # Custom preprocessor with feature augmentation and normalization\n    def __init__(self):\n        self.mean_ = None\n        self.std_ = None\n        self.num_obj_types = None\n        self.obj_type_vals = None\n\n    def make_loader_cfg(self) -> dict:\n        return {\n            \"dataset_builder\": \"llm_script:FourTopsDataset\",\n            \"dataset_kwargs\": {},\n            \"loader_class\": \"torch.utils.data:DataLoader\",\n            \"batch_size\": 512,\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": torch.cuda.is_available(),\n            \"collate\": None,\n            \"extra_loader_kwargs\": {},\n            \"eval_overrides\": {\"shuffle\": False, \"batch_size\": 512}\n        }\n\n    def fit(self, X, y=None):\n        X_t = torch.as_tensor(X)\n        if X_t.ndim != 2:\n            X_t = X_t.view(X_t.shape[0], -1)\n        with torch.no_grad():\n            obj_ids_flat = X_t[:, 2:].reshape(-1, 5)[:, 0]\n            max_id = int(obj_ids_flat.max().item()) if obj_ids_flat.numel() > 0 else 1\n            if max_id < 1:\n                max_id = 1\n            self.num_obj_types = max_id\n            self.obj_type_vals = torch.arange(1, self.num_obj_types + 1)\n            aug = self._augment(X_t)\n            self.mean_ = aug.mean(dim=0)\n            self.std_ = aug.std(dim=0)\n            self.std_ = torch.where(self.std_ < 1e-6, torch.ones_like(self.std_), self.std_)\n        return self\n\n    def _augment(self, X):\n        X_t = torch.as_tensor(X).float()\n        if X_t.ndim != 2:\n            X_t = X_t.view(X_t.shape[0], -1)\n        base0 = X_t[:, :2]                                      # [N,2]\n        obj_feat = X_t[:, 2:].reshape(-1, 18, 5)                # [N,18,5]\n        pts = obj_feat[:, :, 2]                                 # [N,18]\n        idx = torch.argsort(pts, dim=1, descending=True)        # [N,18]\n        idx_exp = idx.unsqueeze(-1).expand(-1, -1, 5)           # [N,18,5]\n        obj_sorted = torch.gather(obj_feat, 1, idx_exp)         # [N,18,5]\n        X_sorted = torch.cat([base0, obj_sorted.reshape(X_t.size(0), -1)], dim=1)  # [N,92]\n        mask = (obj_sorted[:, :, 0] > 0).float()                # [N,18]\n        pt = obj_sorted[:, :, 2]                                # [N,18]\n        energy = obj_sorted[:, :, 1]                            # [N,18]\n        eta = obj_sorted[:, :, 3]                               # [N,18]\n        num_obj = mask.sum(dim=1)                               # [N]\n        sum_pt = (pt * mask).sum(dim=1)                         # [N]\n        sum_energy = (energy * mask).sum(dim=1)                 # [N]\n        max_pt = (pt * mask).max(dim=1).values                  # [N]\n        mean_pt = sum_pt / num_obj.clamp(min=1)                 # [N]\n        std_pt = torch.sqrt(((pt - mean_pt.unsqueeze(1)) ** 2 * mask).sum(dim=1) / num_obj.clamp(min=1) + 1e-6)  # [N]\n        mean_eta = (eta * mask).sum(dim=1) / num_obj.clamp(min=1)  # [N]\n        mean_energy = sum_energy / num_obj.clamp(min=1)            # [N]\n        counts_list = []\n        n_types = self.num_obj_types if self.num_obj_types is not None else int(obj_sorted[:, :, 0].max().item()) if obj_sorted.numel() > 0 else 1\n        n_types = max(1, n_types)\n        for k in range(1, n_types + 1):\n            counts_list.append((obj_sorted[:, :, 0] == float(k)).sum(dim=1))  # each [N]\n        counts = torch.stack(counts_list, dim=1)                               # [N, n_types]\n        additional = torch.stack([num_obj, sum_pt, sum_energy, max_pt, mean_pt, std_pt, mean_eta, mean_energy], dim=1)  # [N,8]\n        out = torch.cat([X_sorted, additional, counts], dim=1)                 # [N, 92+8+n_types]\n        return out\n\n    def transform(self, X):\n        aug = self._augment(X)\n        if self.mean_ is not None and self.std_ is not None:\n            aug = (aug - self.mean_) / self.std_\n        return aug\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\nclass BinaryClassifier(nn.Module):\n    def __init__(self, sample_object):\n        super().__init__()\n        in_dim = sample_object.shape[-1]\n        self.net = nn.Sequential(\n            nn.Linear(in_dim, 256),\n            nn.BatchNorm1d(256),\n            nn.SiLU(),\n            nn.Dropout(0.3),\n            nn.Linear(256, 128),\n            nn.BatchNorm1d(128),\n            nn.SiLU(),\n            nn.Dropout(0.2),\n            nn.Linear(128, 64),\n            nn.BatchNorm1d(64),\n            nn.SiLU(),\n            nn.Dropout(0.1),\n            nn.Linear(64, 1)\n        )\n\n    def forward(self, batch_x):\n        x = batch_x\n        out = self.net(x)\n        return out.squeeze(-1)\n\ndef make_model(example_object):\n    return BinaryClassifier(example_object)\n\nEPOCHS = 12\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    optimizer = optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-4)\n    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=2)\n    criterion = nn.BCEWithLogitsLoss()\n    train_loss, val_loss, train_acc, val_acc = [], [], [], []\n    best_val_loss = float('inf')\n    best_state = None\n    patience = 4\n    patience_counter = 0\n    for epoch in range(epochs):\n        model.train()\n        running_loss = 0.0\n        correct = 0\n        total = 0\n        for xb, yb in train_loader:\n            xb = xb.to(device)\n            yb = yb.to(device)\n            optimizer.zero_grad()\n            logits = model(xb)                                   # [B]\n            loss = criterion(logits, yb.float())\n            loss.backward()\n            optimizer.step()\n            running_loss += loss.item() * yb.size(0)\n            preds = (torch.sigmoid(logits) > 0.5).long()\n            correct += (preds == yb).sum().item()\n            total += yb.size(0)\n        epoch_train_loss = running_loss / max(1, total)\n        epoch_train_acc = correct / max(1, total)\n        train_loss.append(epoch_train_loss)\n        train_acc.append(epoch_train_acc)\n        model.eval()\n        val_running_loss = 0.0\n        v_correct = 0\n        v_total = 0\n        with torch.no_grad():\n            for xb, yb in val_loader:\n                xb = xb.to(device)\n                yb = yb.to(device)\n                logits = model(xb)\n                loss = criterion(logits, yb.float())\n                val_running_loss += loss.item() * yb.size(0)\n                preds = (torch.sigmoid(logits) > 0.5).long()\n                v_correct += (preds == yb).sum().item()\n                v_total += yb.size(0)\n        epoch_val_loss = val_running_loss / max(1, v_total)\n        epoch_val_acc = v_correct / max(1, v_total)\n        val_loss.append(epoch_val_loss)\n        val_acc.append(epoch_val_acc)\n        scheduler.step(epoch_val_loss)\n        if epoch_val_loss < best_val_loss - 1e-4:\n            best_val_loss = epoch_val_loss\n            best_state = copy.deepcopy(model.state_dict())\n            patience_counter = 0\n        else:\n            patience_counter += 1\n        if patience_counter >= patience:\n            break\n    if best_state is not None:\n        model.load_state_dict(best_state)\n    return model, train_loss, val_loss, train_acc, val_acc",
+    "reasoning": "",
+    "Outer_attempt": 1
+  },
+  "StaticChecks": {
+    "__timestamp": "2026-01-06T22:27:17Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2026-01-06T22:27:17Z",
+        "metrics": {
+          ".\\outputs\\01-06\\FOURTOPS\\Q1\\script_openai_gpt-5.1-codex-max_2327_1.py": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 259,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 259,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2026-01-06T22:27:38Z",
+    "passed": true,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/01-06/FOURTOPS/Q1/script_openai_gpt-5.1-codex-max_2327_1.py\nargv2=--dryrun\nDry-run: skipping artefact manifest\n",
+      "stderr": ""
+    },
+    "return_code": 0
+  },
+  "Training": {
+    "__timestamp": "2026-01-07T11:17:43.162129+00:00",
+    "passed": true,
+    "resources": {
+      "cpu_seconds_user": 1.2,
+      "cpu_seconds_sys": 1.02,
+      "disk_read_mb": 46.8,
+      "disk_write_mb": 0.3,
+      "max_rss_kb": 404,
+      "training_time_s": 113.29,
+      "gpu_name": null,
+      "gpu_total_mb": null,
+      "gpu_peak_alloc_mb": null,
+      "cuda_available": null
+    },
+    "metrics": {
+      "epochs": 12,
+      "train_loss": [
+        0.5437515847244617,
+        0.5316166438182152,
+        0.5278434896538967,
+        0.5263244979648644,
+        0.5248867619286597,
+        0.5241185924919918,
+        0.5237186374527347,
+        0.523419405997914,
+        0.523069725093025,
+        0.5227671876670764,
+        0.522958562473436,
+        0.5210496831409966
+      ],
+      "val_loss": [
+        0.5234643737565845,
+        0.5227837601433201,
+        0.5192588295036644,
+        0.5182479699006773,
+        0.5171329183083138,
+        0.5177484562484062,
+        0.5165128146962368,
+        0.515967965570009,
+        0.5168938954663331,
+        0.5180261586077634,
+        0.5164624207064874,
+        0.5150825182715235
+      ],
+      "train_acc": [
+        0.7270801176874662,
+        0.7365232540336096,
+        0.7383771212917483,
+        0.7396226883558101,
+        0.7400199456254112,
+        0.7411330935996061,
+        0.7410337792822058,
+        0.741311031751615,
+        0.7407565268127967,
+        0.7411993031445395,
+        0.7414889699036238,
+        0.7423827987602263
+      ],
+      "val_acc": [
+        0.7436024762472274,
+        0.7406892442149171,
+        0.7432714271526467,
+        0.7454232462674215,
+        0.745654980633628,
+        0.7455887708147119,
+        0.74476114807826,
+        0.7458867149998345,
+        0.745654980633628,
+        0.7433707418810209,
+        0.7446949382593439,
+        0.7458867149998345
+      ]
+    },
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/01-06/FOURTOPS/Q1/openai_gpt-5.1-codex-max/script_openai_gpt-5.1-codex-max_2327_1.py\nargv2=\n#TRAIN_METRICS#{\"epochs\": 12, \"train_loss\": [0.5437515847244617, 0.5316166438182152, 0.5278434896538967, 0.5263244979648644, 0.5248867619286597, 0.5241185924919918, 0.5237186374527347, 0.523419405997914, 0.523069725093025, 0.5227671876670764, 0.522958562473436, 0.5210496831409966], \"val_loss\": [0.5234643737565845, 0.5227837601433201, 0.5192588295036644, 0.5182479699006773, 0.5171329183083138, 0.5177484562484062, 0.5165128146962368, 0.515967965570009, 0.5168938954663331, 0.5180261586077634, 0.5164624207064874, 0.5150825182715235], \"train_acc\": [0.7270801176874662, 0.7365232540336096, 0.7383771212917483, 0.7396226883558101, 0.7400199456254112, 0.7411330935996061, 0.7410337792822058, 0.741311031751615, 0.7407565268127967, 0.7411993031445395, 0.7414889699036238, 0.7423827987602263], \"val_acc\": [0.7436024762472274, 0.7406892442149171, 0.7432714271526467, 0.7454232462674215, 0.745654980633628, 0.7455887708147119, 0.74476114807826, 0.7458867149998345, 0.745654980633628, 0.7433707418810209, 0.7446949382593439, 0.7458867149998345]}\nHash manifest written â†’ openai_gpt-5.1-codex-max_2327_1_manifest.sha256\n",
+      "stderr": "WARNING:matplotlib:mkdir -p failed for path /home/sandbox/.config/matplotlib: [Errno 30] Read-only file system: '/home/sandbox/.config'\nWARNING:matplotlib:Matplotlib created a temporary cache directory at /tmp/matplotlib-3rs85n6w because there was an issue with the default path (/home/sandbox/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.\n"
+    }
+  }
+}

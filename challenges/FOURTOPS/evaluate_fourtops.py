@@ -1,10 +1,11 @@
 # challenges/FOURTOPS/evaluate_fourtops.py
 
-import torch, logging
+import torch, logging, itertools
 import numpy as np, pandas as pd
 from pathlib import Path
 from sklearn.metrics import roc_curve, accuracy_score, auc
-from utils.llm_io import _initialize_artefacts, normalise_batch, assert_binary_output, build_dataset, build_dataloader
+from utils.llm_io import _initialize_artefacts, build_dataset, build_dataloader
+from challenges.FOURTOPS.utils_fourtops import detect_and_assert_lane_fourtops, make_view_by_lane_fourtops, assert_binary_output
 from utils.loaderspec import LoaderSpec
 
 
@@ -63,18 +64,33 @@ def evaluate_FOURTOPS(model_path: str, test_loader):
       }
     """
 
+    # Initialise debice
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logging.info("Evaluating %s on %s", model_path, device)
 
+    # Initialise model
     model, _preproc = _initialize_artefacts(model_path)
     model = model.to(device).eval()
+
+    # Reload LoaderSpec to detect which batch lane the LLM used
+    model_dir = Path(model_path).resolve().parent
+    base = _base_from_model_path(model_path)
+    spec = LoaderSpec.from_json(model_dir / f"{base}_loaderspec.json")
+
+    # Detect + assert lane once from the first batch
+    it = iter(test_loader)
+    try:
+        first_batch = next(it)
+    except StopIteration:
+        raise RuntimeError("Empty test_loader")
+    mode = detect_and_assert_lane_fourtops(spec, first_batch)
 
     all_probs: list[float] = []
     all_labels: list[int] = []
 
     with torch.no_grad():
-        for batch in test_loader:
-            view = normalise_batch(batch, device=device)
+        for batch in itertools.chain([first_batch], it):
+            view = make_view_by_lane_fourtops(mode, batch, device=device)
 
             if view.batch_y is None:
                 raise RuntimeError("FOURTOPS evaluation requires labels (batch_y) in the dataloader output.")

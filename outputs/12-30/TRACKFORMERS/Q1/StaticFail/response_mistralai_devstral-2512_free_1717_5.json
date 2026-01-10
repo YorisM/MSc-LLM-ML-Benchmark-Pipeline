@@ -1,0 +1,76 @@
+{
+  "LLMGeneration": {
+    "model": "mistralai/devstral-2512:free",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 4403,
+    "prompt_chars": 17599,
+    "response_tokens": 2349,
+    "response_chars": 10005,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0,
+    "generation_ms": 41545,
+    "code": "# ---------- IMPORTS ----------\nimport torch.nn.functional as F\nfrom torch_geometric.nn import GCNConv, global_mean_pool\nfrom torch_geometric.data import Data\nfrom sklearn.preprocessing import StandardScaler\nfrom sklearn.cluster import DBSCAN\nimport hdbscan\n\n# ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.scaler = StandardScaler()\n        self.layer_encoder = None\n        self.n_layers = None\n\n    def make_loader_cfg(self) -> dict:\n        return {\n            \"dataset_builder\": \"utils.llm_io:EventDataset\",\n            \"dataset_kwargs\": {},\n            \"loader_class\": \"torch_geometric.loader:DataLoader\",\n            \"batch_size\": 32,\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": False,\n            \"collate\": None,\n            \"extra_loader_kwargs\": {},\n            \"eval_overrides\": {\"shuffle\": False}\n        }\n\n    def fit(self, Xs):\n        # Collect all hits for scaling\n        all_hits = torch.cat(Xs, dim=0).numpy()\n        self.scaler.fit(all_hits[:, :3])  # Scale r, theta, z\n\n        # Encode layer_id\n        unique_layers = torch.unique(torch.cat([x[:, 3] for x in Xs]))\n        self.n_layers = len(unique_layers)\n        self.layer_encoder = {l.item(): i for i, l in enumerate(unique_layers)}\n        return self\n\n    def transform(self, X):\n        # Scale coordinates\n        scaled = self.scaler.transform(X[:, :3].numpy())\n        scaled = torch.from_numpy(scaled).float()\n\n        # Encode layer_id\n        layer_encoded = torch.tensor([self.layer_encoder[l.item()] for l in X[:, 3]], dtype=torch.float).unsqueeze(1)\n\n        # Combine features\n        return torch.cat([scaled, layer_encoded], dim=1)\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# ---------- MODEL ARCHITECTURE ----------\nclass HitClassifier(nn.Module):\n    def __init__(self, example_batch_x):\n        super().__init__()\n        # Get feature dimensions from example batch\n        if isinstance(example_batch_x, list):\n            # Torch ragged lane\n            x = example_batch_x[0]\n            self.input_dim = x.shape[1]\n        else:\n            # PyG lane\n            self.input_dim = example_batch_x.x.shape[1]\n\n        # GNN layers\n        self.conv1 = GCNConv(self.input_dim, 64)\n        self.conv2 = GCNConv(64, 128)\n        self.conv3 = GCNConv(128, 64)\n\n        # MLP for node classification\n        self.mlp = nn.Sequential(\n            nn.Linear(64, 128),\n            nn.ReLU(),\n            nn.Linear(128, 64),\n            nn.ReLU(),\n            nn.Linear(64, 32)\n        )\n\n        # Track head\n        self.track_head = nn.Linear(32, 1)\n\n    def forward(self, batch_x):\n        if isinstance(batch_x, list):\n            # Torch ragged lane - convert to PyG format\n            graphs = []\n            for x, y in zip(batch_x, batch_y):\n                edge_index = self._build_edges(x)\n                graphs.append(Data(x=x, edge_index=edge_index))\n            batch = torch_geometric.data.Batch.from_data_list(graphs)\n        else:\n            # PyG lane\n            batch = batch_x\n\n        # GNN processing\n        x = F.relu(self.conv1(batch.x, batch.edge_index))\n        x = F.relu(self.conv2(x, batch.edge_index))\n        x = F.relu(self.conv3(x, batch.edge_index))\n\n        # Global pooling for graph-level features\n        graph_feat = global_mean_pool(x, batch.batch)\n\n        # Node features\n        node_feat = self.mlp(x)\n\n        # Combine features\n        combined = torch.cat([node_feat, graph_feat[batch.batch]], dim=1)\n\n        # Predict track scores\n        track_scores = self.track_head(combined).squeeze()\n\n        # Cluster hits into tracks\n        labels = self._cluster_hits(combined, track_scores)\n\n        if isinstance(batch_x, list):\n            # Split back into ragged format\n            return torch.split(labels, [x.shape[0] for x in batch_x])\n        else:\n            return labels\n\n    def _build_edges(self, x, k=5):\n        # Build k-NN graph\n        dist = torch.cdist(x[:, :3], x[:, :3])\n        _, topk = torch.topk(dist, k=k+1, largest=False)\n        edges = []\n        for i in range(x.shape[0]):\n            for j in topk[i, 1:]:  # Skip self-loop\n                edges.append([i, j.item()])\n        return torch.tensor(edges, dtype=torch.long).t().contiguous()\n\n    def _cluster_hits(self, features, scores):\n        # Convert to numpy for clustering\n        feat_np = features.cpu().numpy()\n        score_np = scores.cpu().numpy()\n\n        # Use HDBSCAN for clustering\n        clusterer = hdbscan.HDBSCAN(\n            min_cluster_size=4,\n            min_samples=1,\n            cluster_selection_epsilon=0.1,\n            prediction_data=True\n        )\n        clusterer.fit(feat_np)\n\n        # Get labels\n        labels = torch.tensor(clusterer.labels_, dtype=torch.long)\n\n        # Map to track IDs (0 for noise, 1+ for tracks)\n        unique_labels = torch.unique(labels)\n        track_mapping = {l.item(): i+1 for i, l in enumerate(unique_labels) if l != -1}\n        track_mapping[-1] = 0  # Noise\n\n        mapped_labels = torch.zeros_like(labels)\n        for k, v in track_mapping.items():\n            mapped_labels[labels == k] = v\n\n        return mapped_labels\n\ndef make_model(example_batch_x):\n    return HitClassifier(example_batch_x)\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 20\n\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)\n    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=3)\n    criterion = nn.CrossEntropyLoss()\n\n    train_loss, val_loss = [], []\n    train_acc, val_acc = [], []\n\n    for epoch in range(epochs):\n        model.train()\n        epoch_train_loss = 0\n        epoch_train_acc = 0\n        count = 0\n\n        for batch in train_loader:\n            if isinstance(batch, (list, tuple)) and len(batch) == 2:\n                # Torch ragged lane\n                xs, ys = batch\n                xs = [x.to(device) for x in xs]\n                ys = [y.to(device) for y in ys]\n                batch = xs\n                true_labels = ys\n            else:\n                # PyG lane\n                batch = batch.to(device)\n                true_labels = batch.y\n\n            optimizer.zero_grad()\n\n            # Forward pass\n            out = model(batch)\n\n            # Calculate loss\n            if isinstance(out, list):\n                loss = 0\n                acc = 0\n                for pred, true in zip(out, true_labels):\n                    # Convert true labels to 0-based for loss\n                    unique_true = torch.unique(true)\n                    label_mapping = {l.item(): i for i, l in enumerate(unique_true)}\n                    mapped_true = torch.tensor([label_mapping[l.item()] for l in true], device=device)\n\n                    loss += criterion(pred.float(), mapped_true.float())\n                    acc += (pred == true).float().mean()\n                loss /= len(out)\n                acc /= len(out)\n            else:\n                # Convert true labels to 0-based for loss\n                unique_true = torch.unique(true_labels)\n                label_mapping = {l.item(): i for i, l in enumerate(unique_true)}\n                mapped_true = torch.tensor([label_mapping[l.item()] for l in true_labels], device=device)\n\n                loss = criterion(out.float(), mapped_true.float())\n                acc = (out == true_labels).float().mean()\n\n            # Backward pass\n            loss.backward()\n            optimizer.step()\n\n            epoch_train_loss += loss.item()\n            epoch_train_acc += acc.item()\n            count += 1\n\n        # Validation\n        model.eval()\n        epoch_val_loss = 0\n        epoch_val_acc = 0\n        val_count = 0\n\n        with torch.no_grad():\n            for batch in val_loader:\n                if isinstance(batch, (list, tuple)) and len(batch) == 2:\n                    # Torch ragged lane\n                    xs, ys = batch\n                    xs = [x.to(device) for x in xs]\n                    ys = [y.to(device) for y in ys]\n                    batch = xs\n                    true_labels = ys\n                else:\n                    # PyG lane\n                    batch = batch.to(device)\n                    true_labels = batch.y\n\n                out = model(batch)\n\n                if isinstance(out, list):\n                    loss = 0\n                    acc = 0\n                    for pred, true in zip(out, true_labels):\n                        unique_true = torch.unique(true)\n                        label_mapping = {l.item(): i for i, l in enumerate(unique_true)}\n                        mapped_true = torch.tensor([label_mapping[l.item()] for l in true], device=device)\n\n                        loss += criterion(pred.float(), mapped_true.float())\n                        acc += (pred == true).float().mean()\n                    loss /= len(out)\n                    acc /= len(out)\n                else:\n                    unique_true = torch.unique(true_labels)\n                    label_mapping = {l.item(): i for i, l in enumerate(unique_true)}\n                    mapped_true = torch.tensor([label_mapping[l.item()] for l in true_labels], device=device)\n\n                    loss = criterion(out.float(), mapped_true.float())\n                    acc = (out == true_labels).float().mean()\n\n                epoch_val_loss += loss.item()\n                epoch_val_acc += acc.item()\n                val_count += 1\n\n        # Update scheduler\n        scheduler.step(epoch_val_loss)\n\n        # Store metrics\n        train_loss.append(epoch_train_loss / count)\n        train_acc.append(epoch_train_acc / count)\n        val_loss.append(epoch_val_loss / val_count)\n        val_acc.append(epoch_val_acc / val_count)\n\n        print(f\"Epoch {epoch+1}/{epochs} - Train Loss: {train_loss[-1]:.4f}, Val Loss: {val_loss[-1]:.4f}\")\n\n    return model, train_loss, val_loss, train_acc, val_acc",
+    "reasoning": "",
+    "Outer_attempt": 5
+  },
+  "StaticChecks": {
+    "__timestamp": "2025-12-30T16:17:22Z",
+    "PyLint": {
+      "passed": false,
+      "messages": [
+        {
+          "type": "error",
+          "module": "script_mistralai_devstral-2512_free_1717_5",
+          "obj": "HitClassifier.forward",
+          "line": 140,
+          "column": 37,
+          "endLine": 140,
+          "endColumn": 44,
+          "path": "outputs\\12-30\\TRACKFORMERS\\Q1\\script_mistralai_devstral-2512_free_1717_5.py",
+          "symbol": "undefined-variable",
+          "message": "Undefined variable 'batch_y'",
+          "message-id": "E0602"
+        }
+      ]
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2025-12-30T16:17:21Z",
+        "metrics": {
+          ".\\outputs\\12-30\\TRACKFORMERS\\Q1\\script_mistralai_devstral-2512_free_1717_5.py": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 307,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 307,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  }
+}

@@ -1,0 +1,119 @@
+{
+  "LLMGeneration": {
+    "model": "mistralai/mistral-large-2512",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 4404,
+    "prompt_chars": 17785,
+    "response_tokens": 3252,
+    "response_chars": 12996,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.00708,
+    "generation_ms": 54975,
+    "code": "# ---------- IMPORTS ----------\nfrom torch.nn import functional as F\nfrom torch.optim import AdamW\nfrom torch.optim.lr_scheduler import CosineAnnealingLR\nfrom sklearn.preprocessing import StandardScaler\nimport numpy as np\nfrom scipy.spatial import KDTree\nfrom scipy.sparse import csr_matrix\nfrom scipy.sparse.csgraph import connected_components\nfrom collections import defaultdict\n\n# ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.scaler = StandardScaler()\n        self.layer_stats = None\n\n    def make_loader_cfg(self) -> dict:\n        return {\n            \"dataset_builder\": \"utils.llm_io:EventDataset\",\n            \"dataset_kwargs\": {},\n\n            \"loader_class\": \"torch.utils.data:DataLoader\",\n            \"batch_size\": 32,\n            \"shuffle\": True,\n            \"num_workers\": 4,\n            \"pin_memory\": True,\n\n            \"collate\": \"ragged_xy\",\n            \"extra_loader_kwargs\": {},\n\n            \"eval_overrides\": {\"shuffle\": False, \"num_workers\": 0}\n        }\n\n    def fit(self, Xs):\n        # Compute global statistics for normalization\n        all_X = np.concatenate(Xs, axis=0)\n        self.scaler.fit(all_X[:, :3])  # Only scale r, theta, z\n\n        # Compute layer statistics\n        layer_ids = np.unique(all_X[:, 3])\n        self.layer_stats = {int(lid): {\n            'count': np.sum(all_X[:, 3] == lid),\n            'mean_r': np.mean(all_X[all_X[:, 3] == lid, 0]),\n            'std_r': np.std(all_X[all_X[:, 3] == lid, 0])\n        } for lid in layer_ids}\n\n        return self\n\n    def transform(self, X):\n        # X shape: [N_hits, 4]\n        X = X.clone().numpy() if torch.is_tensor(X) else X.copy()\n\n        # Normalize r, theta, z\n        X[:, :3] = self.scaler.transform(X[:, :3])\n\n        # Add layer-specific features\n        layer_id = X[:, 3].astype(int)\n        layer_features = np.zeros((X.shape[0], 3))\n        for i, lid in enumerate(layer_id):\n            if lid in self.layer_stats:\n                stats = self.layer_stats[lid]\n                layer_features[i, 0] = stats['count']\n                layer_features[i, 1] = stats['mean_r']\n                layer_features[i, 2] = stats['std_r']\n\n        # Combine features\n        X = np.hstack([X, layer_features])  # [N_hits, 7]\n\n        return torch.FloatTensor(X)\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# ---------- MODEL ARCHITECTURE ----------\nclass HitClassifier(nn.Module):\n    def __init__(self, example_batch_x):\n        super().__init__()\n\n        # Determine input feature dimension\n        if isinstance(example_batch_x, list):\n            input_dim = example_batch_x[0].shape[1]\n        else:\n            input_dim = example_batch_x.shape[1]\n\n        # Embedding layers\n        self.hit_embed = nn.Sequential(\n            nn.Linear(input_dim, 128),\n            nn.ReLU(),\n            nn.BatchNorm1d(128),\n            nn.Linear(128, 128),\n            nn.ReLU()\n        )\n\n        # Graph neural network components\n        self.edge_mlp = nn.Sequential(\n            nn.Linear(128 * 2, 64),\n            nn.ReLU(),\n            nn.Linear(64, 1)\n        )\n\n        # Output layers\n        self.output = nn.Sequential(\n            nn.Linear(128, 64),\n            nn.ReLU(),\n            nn.Linear(64, 32),\n            nn.ReLU(),\n            nn.Linear(32, 16)\n        )\n\n        # Track classification head\n        self.classifier = nn.Linear(16, 1)  # Will use sigmoid for edge classification\n\n        # Initialize weights\n        self._init_weights()\n\n    def _init_weights(self):\n        for m in self.modules():\n            if isinstance(m, nn.Linear):\n                nn.init.xavier_normal_(m.weight)\n                if m.bias is not None:\n                    nn.init.zeros_(m.bias)\n            elif isinstance(m, nn.BatchNorm1d):\n                nn.init.ones_(m.weight)\n                nn.init.zeros_(m.bias)\n\n    def forward(self, Xs):\n        # Xs: list of tensors [N_i, F]\n        device = next(self.parameters()).device\n\n        # Process each event in batch\n        all_embeddings = []\n        all_batch_indices = []\n\n        for i, X in enumerate(Xs):\n            X = X.to(device)\n            embeddings = self.hit_embed(X)  # [N_i, 128]\n            all_embeddings.append(embeddings)\n            all_batch_indices.append(torch.full((X.shape[0],), i, device=device))\n\n        # Concatenate all embeddings\n        embeddings = torch.cat(all_embeddings, dim=0)  # [N_total, 128]\n        batch_indices = torch.cat(all_batch_indices, dim=0)  # [N_total]\n\n        # Build complete graph for each event\n        edge_scores = []\n        edge_indices = []\n\n        for i, X in enumerate(Xs):\n            # Get embeddings for this event\n            mask = (batch_indices == i)\n            event_emb = embeddings[mask]  # [N_i, 128]\n\n            # Build k-NN graph (k=10)\n            k = min(10, event_emb.shape[0] - 1)\n            if k <= 0:\n                continue\n\n            # Compute pairwise distances\n            dist = torch.cdist(event_emb, event_emb)  # [N_i, N_i]\n            _, topk_indices = dist.topk(k, largest=False)  # [N_i, k]\n\n            # Create edges\n            src = torch.arange(event_emb.shape[0], device=device).repeat_interleave(k)\n            dst = topk_indices.flatten()\n\n            # Remove self-loops\n            valid_edges = src != dst\n            src = src[valid_edges]\n            dst = dst[valid_edges]\n\n            # Get edge features\n            edge_feat = torch.cat([\n                event_emb[src],\n                event_emb[dst]\n            ], dim=1)  # [N_edges, 256]\n\n            # Compute edge scores\n            scores = self.edge_mlp(edge_feat).squeeze(1)  # [N_edges]\n            scores = torch.sigmoid(scores)\n\n            # Store edges and scores\n            edge_indices.append(torch.stack([src, dst], dim=0))\n            edge_scores.append(scores)\n\n        if not edge_indices:\n            # Handle case with no edges (single hit events)\n            return embeddings\n\n        # Stack all edges and scores\n        edge_index = torch.cat(edge_indices, dim=1)  # [2, N_total_edges]\n        edge_score = torch.cat(edge_scores, dim=0)  # [N_total_edges]\n\n        # Apply edge filtering\n        edge_mask = edge_score > 0.5\n        edge_index = edge_index[:, edge_mask]\n\n        # Message passing (simple GCN-style)\n        row, col = edge_index\n        deg = torch.bincount(row, minlength=embeddings.shape[0]).float()\n        deg_inv_sqrt = deg.pow(-0.5)\n        deg_inv_sqrt[deg_inv_sqrt == float('inf')] = 0\n\n        norm = deg_inv_sqrt[row] * deg_inv_sqrt[col]\n\n        # Aggregate neighbor messages\n        msg = embeddings[col] * norm.unsqueeze(1)\n        agg = torch.zeros_like(embeddings)\n        agg.scatter_add_(0, row.unsqueeze(1).expand(-1, embeddings.shape[1]), msg)\n\n        # Update embeddings\n        embeddings = embeddings + agg\n\n        # Final output\n        out = self.output(embeddings)  # [N_total, 16]\n\n        return out\n\n    def predict_labels(self, Xs):\n        device = next(self.parameters()).device\n        Xs = [x.to(device) for x in Xs]\n\n        # Get embeddings\n        with torch.no_grad():\n            embeddings = self.forward(Xs)  # [N_total, 16]\n\n        # Split by event\n        labels_list = []\n        start_idx = 0\n\n        for X in Xs:\n            n_hits = X.shape[0]\n            event_emb = embeddings[start_idx:start_idx + n_hits]  # [N_i, 16]\n            start_idx += n_hits\n\n            # Skip if too few hits\n            if n_hits < 2:\n                labels_list.append(torch.zeros(n_hits, dtype=torch.long, device=device) - 1)\n                continue\n\n            # Build similarity matrix\n            sim = torch.mm(event_emb, event_emb.t())  # [N_i, N_i]\n            sim = torch.sigmoid(sim)\n\n            # Threshold to create adjacency matrix\n            adj = (sim > 0.5).float().cpu().numpy()\n\n            # Find connected components\n            n_components, component_labels = connected_components(\n                csr_matrix(adj), directed=False, return_labels=True\n            )\n\n            # Convert to torch tensor\n            component_labels = torch.from_numpy(component_labels).to(device)\n\n            # Assign noise (-1) to small components\n            component_sizes = torch.bincount(component_labels)\n            noise_mask = component_sizes[component_labels] < 4\n            component_labels[noise_mask] = -1\n\n            labels_list.append(component_labels)\n\n        return labels_list\n\ndef make_model(example_batch_x):\n    return HitClassifier(example_batch_x)\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 20\n\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    device = next(model.parameters()).device\n    optimizer = AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)\n    scheduler = CosineAnnealingLR(optimizer, T_max=epochs)\n\n    best_val_loss = float('inf')\n    patience = 3\n    patience_counter = 0\n\n    train_losses = []\n    val_losses = []\n    train_accs = []\n    val_accs = []\n\n    for epoch in range(epochs):\n        model.train()\n        total_loss = 0.0\n        total_correct = 0\n        total_samples = 0\n\n        for Xs, ys in train_loader:\n            Xs = [x.to(device) for x in Xs]\n            ys = [y.to(device) for y in ys]\n\n            optimizer.zero_grad()\n\n            # Forward pass\n            embeddings = model(Xs)  # [N_total, 16]\n\n            # Compute loss (we'll use a simple contrastive loss)\n            loss = 0.0\n            start_idx = 0\n\n            for i, (X, y) in enumerate(zip(Xs, ys)):\n                n_hits = X.shape[0]\n                event_emb = embeddings[start_idx:start_idx + n_hits]  # [N_i, 16]\n                event_y = y  # [N_i]\n\n                # Skip noise hits (track_id = 0)\n                non_noise_mask = (event_y != 0)\n                if non_noise_mask.sum() < 2:\n                    start_idx += n_hits\n                    continue\n\n                event_emb = event_emb[non_noise_mask]\n                event_y = event_y[non_noise_mask]\n\n                # Create positive and negative pairs\n                same_track = (event_y.unsqueeze(0) == event_y.unsqueeze(1)).float()\n                diff_track = 1 - same_track\n\n                # Compute pairwise distances\n                dist = torch.cdist(event_emb, event_emb)  # [N, N]\n\n                # Contrastive loss\n                pos_loss = same_track * dist.pow(2)\n                neg_loss = diff_track * torch.clamp(1.0 - dist, min=0).pow(2)\n                loss += (pos_loss + neg_loss).sum() / (non_noise_mask.sum() ** 2)\n\n                start_idx += n_hits\n\n            if loss > 0:\n                loss.backward()\n                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)\n                optimizer.step()\n\n            total_loss += loss.item()\n\n        # Validation\n        model.eval()\n        val_loss = 0.0\n        val_correct = 0\n        val_samples = 0\n\n        with torch.no_grad():\n            for Xs, ys in val_loader:\n                Xs = [x.to(device) for x in Xs]\n                ys = [y.to(device) for y in ys]\n\n                embeddings = model(Xs)\n                start_idx = 0\n\n                for i, (X, y) in enumerate(zip(Xs, ys)):\n                    n_hits = X.shape[0]\n                    event_emb = embeddings[start_idx:start_idx + n_hits]\n                    event_y = y\n\n                    non_noise_mask = (event_y != 0)\n                    if non_noise_mask.sum() < 2:\n                        start_idx += n_hits\n                        continue\n\n                    event_emb = event_emb[non_noise_mask]\n                    event_y = event_y[non_noise_mask]\n\n                    dist = torch.cdist(event_emb, event_emb)\n                    same_track = (event_y.unsqueeze(0) == event_y.unsqueeze(1)).float()\n                    diff_track = 1 - same_track\n\n                    pos_loss = same_track * dist.pow(2)\n                    neg_loss = diff_track * torch.clamp(1.0 - dist, min=0).pow(2)\n                    val_loss += (pos_loss + neg_loss).sum() / (non_noise_mask.sum() ** 2)\n\n                    start_idx += n_hits\n\n        # Update learning rate\n        scheduler.step()\n\n        # Calculate average losses\n        avg_train_loss = total_loss / len(train_loader)\n        avg_val_loss = val_loss / len(val_loader)\n\n        train_losses.append(avg_train_loss)\n        val_losses.append(avg_val_loss)\n\n        # Early stopping\n        if avg_val_loss < best_val_loss:\n            best_val_loss = avg_val_loss\n            patience_counter = 0\n        else:\n            patience_counter += 1\n            if patience_counter >= patience:\n                print(f\"Early stopping at epoch {epoch+1}\")\n                break\n\n        print(f\"Epoch {epoch+1}/{epochs} - Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}\")\n\n    return model, train_losses, val_losses, train_accs, val_accs",
+    "reasoning": "",
+    "Outer_attempt": 3
+  },
+  "StaticChecks": {
+    "__timestamp": "2026-01-05T11:22:01Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2026-01-05T11:22:01Z",
+        "metrics": {
+          ".\\outputs\\01-05(2)\\TRACKFORMERS\\Q1\\script_mistralai_mistral-large-2512_1221_3.py": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 357,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 357,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2026-01-05T11:22:19Z",
+    "passed": true,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/01-05(2)/TRACKFORMERS/Q1/script_mistralai_mistral-large-2512_1221_3.py\nargv2=--dryrun\nEpoch 1/1 - Train Loss: 12.7251, Val Loss: 2.7671\nDry-run: skipping artefact manifest\n",
+      "stderr": ""
+    },
+    "return_code": 0
+  },
+  "Training": {
+    "__timestamp": "2026-01-09T10:02:35.150992+00:00",
+    "passed": true,
+    "resources": {
+      "cpu_seconds_user": 0.39,
+      "cpu_seconds_sys": 0.73,
+      "disk_read_mb": 46.6,
+      "disk_write_mb": 0.0,
+      "max_rss_kb": -31884,
+      "training_time_s": 956.8,
+      "gpu_name": null,
+      "gpu_total_mb": null,
+      "gpu_peak_alloc_mb": null,
+      "cuda_available": null
+    },
+    "metrics": {
+      "epochs": 20,
+      "train_loss": [
+        10.388108825683593,
+        9.720739574432374,
+        22.92415274810791,
+        30.5551446685791
+      ],
+      "val_loss": [
+        11.534481048583984,
+        12.248549461364746,
+        29.68478012084961,
+        29.84250831604004
+      ],
+      "train_acc": null,
+      "val_acc": null
+    },
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/01-09/TRACKFORMERS/Q1/mistralai_mistral-large-2512/script_mistralai_mistral-large-2512_1221_3.py\nargv2=\nEpoch 1/20 - Train Loss: 10.3881, Val Loss: 11.5345\nEpoch 2/20 - Train Loss: 9.7207, Val Loss: 12.2485\nEpoch 3/20 - Train Loss: 22.9242, Val Loss: 29.6848\nEarly stopping at epoch 4\n#TRAIN_METRICS#{\"epochs\": 20, \"train_loss\": [10.388108825683593, 9.720739574432374, 22.92415274810791, 30.5551446685791], \"val_loss\": [11.534481048583984, 12.248549461364746, 29.68478012084961, 29.84250831604004], \"train_acc\": null, \"val_acc\": null}\nHash manifest written â†’ mistralai_mistral-large-2512_1221_3_manifest.sha256\n",
+      "stderr": "WARNING:matplotlib:mkdir -p failed for path /home/sandbox/.config/matplotlib: [Errno 30] Read-only file system: '/home/sandbox/.config'\nWARNING:matplotlib:Matplotlib created a temporary cache directory at /tmp/matplotlib-4otnd5c1 because there was an issue with the default path (/home/sandbox/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.\n"
+    }
+  },
+  "Evaluation": {
+    "__timestamp": "2026-01-09T17:12:05Z",
+    "passed": true,
+    "metrics": {
+      "ok": true,
+      "load_s": 4.33,
+      "eval_s": 18.94,
+      "FitAccuracy": 0.0
+    },
+    "runtime_s": 29.86
+  }
+}

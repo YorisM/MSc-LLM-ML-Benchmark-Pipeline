@@ -1,0 +1,76 @@
+{
+  "LLMGeneration": {
+    "model": "deepseek/deepseek-v3.2",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 4099,
+    "prompt_chars": 15596,
+    "response_tokens": 9276,
+    "response_chars": 12814,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.00532192,
+    "generation_ms": 1274332,
+    "code": "import torch\nimport torch.nn as nn\nimport torch.nn.functional as F\nfrom torch.utils.data import DataLoader, Dataset\nimport numpy as np\nfrom sklearn.preprocessing import StandardScaler, QuantileTransformer\nimport torch_geometric\nfrom torch_geometric.data import Data, Batch\nfrom torch_geometric.nn import GCNConv, global_mean_pool, GraphConv, GATConv\nimport warnings\nwarnings.filterwarnings('ignore')\n\n# -------------------------- START OF LLM BLOCK ------------------------------\n# ---------- IMPORTS ----------\n# Already imported above\n\n# ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.global_scaler = StandardScaler()\n        self.obj_scaler = StandardScaler()\n        self.obj_id_encoder = QuantileTransformer(n_quantiles=100, output_distribution='normal')\n        self.mask_value = -999.0\n\n    def make_loader_cfg(self) -> dict:\n        return {\n            \"dataset_builder\": \"llm_script:FourTopsDataset\",\n            \"dataset_kwargs\": {},\n            \"loader_class\": \"torch.utils.data:DataLoader\",\n            \"batch_size\": 512,\n            \"shuffle\": True,\n            \"num_workers\": 4,\n            \"pin_memory\": True,\n            \"collate\": None,\n            \"extra_loader_kwargs\": {},\n            \"eval_overrides\": {\"shuffle\": False, \"batch_size\": 512}\n        }\n\n    def fit(self, X, y=None):\n        X_np = X.numpy() if torch.is_tensor(X) else X\n\n        # Process global features\n        global_feats = X_np[:, :2]\n        self.global_scaler.fit(global_feats)\n\n        # Process object features\n        obj_feats_list = []\n        for i in range(18):\n            start_idx = 2 + i * 5\n            end_idx = start_idx + 5\n            obj_slice = X_np[:, start_idx:end_idx]\n            mask = obj_slice[:, 0] != 0  # obj_id != 0 indicates real object\n            real_objs = obj_slice[mask]\n            if len(real_objs) > 0:\n                obj_feats_list.append(real_objs[:, 1:])  # Exclude obj_id\n\n        if obj_feats_list:\n            all_obj_feats = np.vstack(obj_feats_list)\n            self.obj_scaler.fit(all_obj_feats)\n\n            # Fit obj_id encoder\n            all_obj_ids = np.concatenate([X_np[:, 2 + i*5][X_np[:, 2 + i*5] != 0] \n                                        for i in range(18)])\n            if len(all_obj_ids) > 0:\n                self.obj_id_encoder.fit(all_obj_ids.reshape(-1, 1))\n\n        return self\n\n    def transform(self, X):\n        if torch.is_tensor(X):\n            X_np = X.numpy()\n        else:\n            X_np = X.copy()\n\n        # Normalize global features\n        X_np[:, :2] = self.global_scaler.transform(X_np[:, :2])\n\n        # Process each object\n        obj_masks = []\n        for i in range(18):\n            start_idx = 2 + i * 5\n            obj_id_idx = start_idx\n            feat_start = start_idx + 1\n            feat_end = start_idx + 5\n\n            # Create mask: obj_id != 0 indicates real object\n            mask = X_np[:, obj_id_idx] != 0\n            obj_masks.append(mask)\n\n            # Encode obj_id\n            obj_ids = X_np[:, obj_id_idx].reshape(-1, 1)\n            if hasattr(self.obj_id_encoder, 'n_quantiles_'):\n                encoded_ids = self.obj_id_encoder.transform(obj_ids)\n                X_np[:, obj_id_idx] = encoded_ids.flatten()\n\n            # Normalize kinematic features for real objects\n            if mask.any():\n                feats = X_np[:, feat_start:feat_end]\n                feats_normalized = feats.copy()\n                feats_normalized[mask] = self.obj_scaler.transform(feats[mask])\n                X_np[:, feat_start:feat_end] = feats_normalized\n\n        # Create additional features\n        processed = []\n        for event_idx in range(X_np.shape[0]):\n            event = X_np[event_idx]\n            features = []\n\n            # Global features\n            features.extend(event[:2])  # [2]\n\n            # Collect all real objects\n            obj_features = []\n            for i in range(18):\n                start_idx = 2 + i * 5\n                if event[start_idx] != self.mask_value and event[start_idx] != 0:\n                    obj_feat = event[start_idx:start_idx+5]  # [5]\n                    obj_features.append(obj_feat)\n\n            if obj_features:\n                obj_array = np.array(obj_features)  # [N_obj, 5]\n\n                # Object counts and statistics\n                features.append(len(obj_features))  # [1]\n\n                # Mean of kinematic features\n                features.extend(np.mean(obj_array[:, 1:], axis=0))  # [4]\n\n                # Std of kinematic features\n                features.extend(np.std(obj_array[:, 1:], axis=0))  # [4]\n\n                # Max of kinematic features\n                features.extend(np.max(obj_array[:, 1:], axis=0))  # [4]\n\n                # Min of kinematic features  \n                features.extend(np.min(obj_array[:, 1:], axis=0))  # [4]\n\n                # Sum of pT\n                features.append(np.sum(obj_array[:, 2]))  # [1]\n\n                # HT-like feature (scalar sum of pT)\n                features.append(np.sum(obj_array[:, 2]))  # [1]\n\n                # Missing ET significance\n                if np.sum(obj_array[:, 2]) > 0:\n                    features.append(event[0] / np.sum(obj_array[:, 2]))  # [1]\n                else:\n                    features.append(0.0)\n            else:\n                # Pad with zeros if no objects\n                features.extend([0] * 22)  # 1 + 4*4 + 2 + 1 = 22\n\n            processed.append(features)\n\n        # Ensure consistent size\n        max_len = max(len(f) for f in processed)\n        for i in range(len(processed)):\n            if len(processed[i]) < max_len:\n                processed[i].extend([0.0] * (max_len - len(processed[i])))\n\n        return torch.tensor(np.array(processed), dtype=torch.float32)\n\n# ---------- MODEL ARCHITECTURE ----------\nclass BinaryClassifier(nn.Module):\n    def __init__(self, sample_object):\n        super().__init__()\n        input_dim = sample_object.shape[-1] if len(sample_object.shape) > 1 else sample_object.shape[0]\n\n        # Feature processing layers\n        self.bn_input = nn.BatchNorm1d(input_dim)\n\n        # Main network with skip connections\n        self.fc1 = nn.Linear(input_dim, 512)\n        self.bn1 = nn.BatchNorm1d(512)\n        self.dropout1 = nn.Dropout(0.3)\n\n        self.fc2 = nn.Linear(512, 256)\n        self.bn2 = nn.BatchNorm1d(256)\n        self.dropout2 = nn.Dropout(0.3)\n\n        self.fc3 = nn.Linear(256, 128)\n        self.bn3 = nn.BatchNorm1d(128)\n        self.dropout3 = nn.Dropout(0.2)\n\n        self.fc4 = nn.Linear(128, 64)\n        self.bn4 = nn.BatchNorm1d(64)\n\n        # Skip connection from fc2 to output\n        self.skip_fc = nn.Linear(256, 64)\n\n        # Output layer\n        self.output = nn.Linear(128, 1)  # 64 + 64 from skip\n\n        # Initialize weights\n        self._initialize_weights()\n\n    def _initialize_weights(self):\n        for m in self.modules():\n            if isinstance(m, nn.Linear):\n                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')\n                if m.bias is not None:\n                    nn.init.constant_(m.bias, 0)\n            elif isinstance(m, nn.BatchNorm1d):\n                nn.init.constant_(m.weight, 1)\n                nn.init.constant_(m.bias, 0)\n\n    def forward(self, batch_x):\n        # Input shape: [batch_size, features]\n        x = self.bn_input(batch_x)  # [B, F]\n\n        # First block\n        x1 = F.relu(self.bn1(self.fc1(x)))  # [B, 512]\n        x1 = self.dropout1(x1)\n\n        # Second block\n        x2 = F.relu(self.bn2(self.fc2(x1)))  # [B, 256]\n        x2_skip = self.skip_fc(x2)  # [B, 64]\n        x2 = self.dropout2(x2)\n\n        # Third block\n        x3 = F.relu(self.bn3(self.fc3(x2)))  # [B, 128]\n        x3 = self.dropout3(x3)\n\n        # Fourth block\n        x4 = F.relu(self.bn4(self.fc4(x3)))  # [B, 64]\n\n        # Combine with skip connection\n        combined = torch.cat([x4, x2_skip], dim=1)  # [B, 128]\n\n        # Output\n        out = self.output(combined)  # [B, 1]\n        return out.squeeze(-1)  # [B]\n\ndef make_model(example_object):\n    return BinaryClassifier(example_object)\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 100\n\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    device = torch.device(\"cuda\" if torch.cuda.is_available() else \"cpu\")\n    model = model.to(device)\n\n    # Loss with label smoothing\n    criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([1.0]).to(device))\n\n    # Optimizer with weight decay\n    optimizer = torch.optim.AdamW(model.parameters(), lr=0.001, weight_decay=1e-4)\n\n    # Learning rate scheduler\n    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(\n        optimizer, mode='max', factor=0.5, patience=5, verbose=False\n    )\n\n    # Training history\n    train_loss_history = []\n    val_loss_history = []\n    train_acc_history = []\n    val_acc_history = []\n\n    best_val_auc = 0\n    best_model_state = None\n    patience_counter = 0\n    max_patience = 15\n\n    for epoch in range(epochs):\n        # Training phase\n        model.train()\n        train_loss = 0\n        train_correct = 0\n        train_total = 0\n\n        for batch_X, batch_y in train_loader:\n            batch_X, batch_y = batch_X.to(device), batch_y.float().to(device)\n\n            optimizer.zero_grad()\n            outputs = model(batch_X)\n            loss = criterion(outputs, batch_y)\n            loss.backward()\n\n            # Gradient clipping\n            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)\n\n            optimizer.step()\n\n            train_loss += loss.item() * batch_X.size(0)\n            preds = torch.sigmoid(outputs) > 0.5\n            train_correct += (preds == batch_y.bool()).sum().item()\n            train_total += batch_X.size(0)\n\n        train_loss = train_loss / train_total\n        train_acc = train_correct / train_total\n\n        # Validation phase\n        model.eval()\n        val_loss = 0\n        val_correct = 0\n        val_total = 0\n        all_probs = []\n        all_labels = []\n\n        with torch.no_grad():\n            for batch_X, batch_y in val_loader:\n                batch_X, batch_y = batch_X.to(device), batch_y.float().to(device)\n                outputs = model(batch_X)\n                loss = criterion(outputs, batch_y)\n\n                val_loss += loss.item() * batch_X.size(0)\n                preds = torch.sigmoid(outputs) > 0.5\n                val_correct += (preds == batch_y.bool()).sum().item()\n                val_total += batch_X.size(0)\n\n                # Store for AUC calculation\n                probs = torch.sigmoid(outputs)\n                all_probs.extend(probs.cpu().numpy())\n                all_labels.extend(batch_y.cpu().numpy())\n\n        val_loss = val_loss / val_total\n        val_acc = val_correct / val_total\n\n        # Calculate AUC\n        from sklearn.metrics import roc_auc_score\n        if len(all_probs) > 0:\n            val_auc = roc_auc_score(all_labels, all_probs)\n        else:\n            val_auc = 0.5\n\n        # Update learning rate based on AUC\n        scheduler.step(val_auc)\n\n        # Early stopping based on AUC\n        if val_auc > best_val_auc:\n            best_val_auc = val_auc\n            best_model_state = model.state_dict().copy()\n            patience_counter = 0\n        else:\n            patience_counter += 1\n\n        # Store history\n        train_loss_history.append(train_loss)\n        val_loss_history.append(val_loss)\n        train_acc_history.append(train_acc)\n        val_acc_history.append(val_acc)\n\n        # Print progress\n        if (epoch + 1) % 10 == 0:\n            print(f'Epoch {epoch+1}/{epochs}: '\n                  f'Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}, '\n                  f'Train Acc: {train_acc:.4f}, Val Acc: {val_acc:.4f}, '\n                  f'Val AUC: {val_auc:.4f}')\n\n        # Early stopping\n        if patience_counter >= max_patience:\n            print(f'Early stopping at epoch {epoch+1}')\n            break\n\n    # Load best model\n    if best_model_state is not None:\n        model.load_state_dict(best_model_state)\n\n    return model, train_loss_history, val_loss_history, train_acc_history, val_acc_history",
+    "reasoning": "",
+    "Outer_attempt": 1
+  },
+  "StaticChecks": {
+    "__timestamp": "2026-01-06T22:14:14Z",
+    "PyLint": {
+      "passed": false,
+      "messages": [
+        {
+          "type": "error",
+          "module": "script_deepseek_deepseek-v3.2_2314_1",
+          "obj": "_run",
+          "line": 431,
+          "column": 14,
+          "endLine": 431,
+          "endColumn": 31,
+          "path": "outputs\\01-06\\FOURTOPS\\Q1\\script_deepseek_deepseek-v3.2_2314_1.py",
+          "symbol": "undefined-variable",
+          "message": "Undefined variable 'make_preprocessor'",
+          "message-id": "E0602"
+        }
+      ]
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2026-01-06T22:14:14Z",
+        "metrics": {
+          ".\\outputs\\01-06\\FOURTOPS\\Q1\\script_deepseek_deepseek-v3.2_2314_1.py": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 326,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 326,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  }
+}

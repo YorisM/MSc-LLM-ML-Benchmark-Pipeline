@@ -1,0 +1,45 @@
+{
+  "anthropic_claude-sonnet-4.5": {
+    "ok": true,
+    "load_s": 3.47,
+    "eval_s": 13.03,
+    "FitAccuracy": 0.2708166768565113,
+    "missing_files": []
+  },
+  "google_gemini-3-pro-preview": {
+    "missing_files": [
+      "*_loss.png",
+      "*_accuracy.png",
+      "*_manifest.sha256"
+    ]
+  },
+  "mistralai_mistral-large-2512": {
+    "missing_files": [
+      "*_accuracy.png",
+      "*_manifest.sha256"
+    ]
+  },
+  "openai_gpt-5.1-codex-max": {
+    "ok": true,
+    "load_s": 4.02,
+    "eval_s": 7.34,
+    "FitAccuracy": 0.9212129050463246,
+    "missing_files": []
+  },
+  "openai_gpt-5.2-pro": {
+    "ok": true,
+    "load_s": 4.51,
+    "eval_s": 10.53,
+    "FitAccuracy": 0.8108745238207214,
+    "missing_files": []
+  },
+  "x-ai_grok-code-fast-1": {
+    "ok": true,
+    "load_s": 3.34,
+    "eval_s": 2.31,
+    "FitAccuracy": 0.39794478671871325,
+    "missing_files": [
+      "*_loss.png"
+    ]
+  }
+}

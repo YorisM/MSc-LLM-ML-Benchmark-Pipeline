@@ -1,0 +1,71 @@
+{
+  "LLMGeneration": {
+    "model": "x-ai/grok-code-fast-1",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 4154,
+    "prompt_chars": 16219,
+    "response_tokens": 6150,
+    "response_chars": 8216,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.01002124,
+    "generation_ms": 37078,
+    "code": "# ---------- IMPORTS ----------\n# No additional imports needed\n\n# ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        pass\n\n    def make_loader_cfg(self) -> dict:\n        return {\n            \"dataset_builder\": \"llm_script:MyDataset\",\n            \"dataset_kwargs\": {},\n            \"loader_class\": \"torch_geometric.loader.DataLoader\",\n            \"batch_size\": 512,\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": False,\n            \"collate\": None,\n            \"extra_loader_kwargs\": {},\n            \"eval_overrides\": {\"shuffle\": False, \n                               \"batch_size\": 512}\n        }\n\n    def fit(self, X, y=None):\n        return self\n\n    def transform(self, X, y=None):\n        import torch\n        from torch_geometric.data import Data\n\n        data_list = []\n        for event in range(X.shape[0]):\n            event_data = X[event]\n            E_T_miss = event_data[0]\n            phi_E_T_miss = event_data[1]\n            global_features = torch.tensor([0.0, E_T_miss, E_T_miss, 0.0, phi_E_T_miss])\n\n            obj_list = []\n            for k in range(18):\n                idx = 2 + k * 5\n                obj, E, p_T, eta, phi = event_data[idx:idx+5]\n                if obj == 0.0 or E == 0.0:\n                    break\n                obj_list.append([obj, E, p_T, eta, phi])\n            if not obj_list:\n                # If no objects, add dummy object to avoid empty graph\n                obj_list.append([1.0, 1.0, 1.0, 0.0, 0.0])\n            n_obj = len(obj_list)\n            node_features = torch.tensor(obj_list + [global_features.tolist()])  # [n_obj+1, 5]\n\n            edge_index = []\n            edge_attr = []\n            for i in range(n_obj):\n                for j in range(i+1, n_obj):\n                    obj_i, E_i, p_T_i, eta_i, phi_i = obj_list[i]\n                    obj_j, E_j, p_T_j, eta_j, phi_j = obj_list[j]\n                    delta_eta = eta_i - eta_j\n                    delta_phi = phi_i - phi_j\n                    delta_phi = torch.remainder(delta_phi, 2 * torch.pi)\n                    delta_phi = delta_phi - 2 * torch.pi * (delta_phi > torch.pi)\n                    delta_R = torch.sqrt(delta_eta**2 + delta_phi**2)\n\n                    p_x_i = p_T_i * torch.cos(phi_i)\n                    p_y_i = p_T_i * torch.sin(phi_i)\n                    p_z_i = p_T_i * torch.sinh(eta_i)\n                    p_x_j = p_T_j * torch.cos(phi_j)\n                    p_y_j = p_T_j * torch.sin(phi_j)\n                    p_z_j = p_T_j * torch.sinh(eta_j)\n                    p_tot_x = p_x_i + p_x_j\n                    p_tot_y = p_y_i + p_y_j\n                    p_tot_z = p_z_i + p_z_j\n                    E_tot = E_i + E_j\n                    m_2 = E_tot**2 - p_tot_x**2 - p_tot_y**2 - p_tot_z**2\n                    m_ij = torch.sqrt(torch.relu(m_2))\n\n                    edge_index.extend([[i, j], [j, i]])\n                    edge_attr.extend([[delta_R, m_ij], [delta_R, m_ij]])\n\n            # Edges from/to global node\n            global_idx = n_obj\n            for j in range(n_obj):\n                edge_index.extend([[global_idx, j], [j, global_idx]])\n                edge_attr.extend([[0.0, 0.0], [0.0, 0.0]])\n\n            dataset = Data(\n                x=node_features.float(),\n                edge_index=torch.tensor(edge_index, dtype=torch.long).t().contiguous(),\n                edge_attr=torch.tensor(edge_attr, dtype=torch.float),\n                y=torch.tensor(y[event], dtype=torch.long)\n            )\n            data_list.append(dataset)\n        return data_list\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\nclass MyDataset:\n    def __init__(self, events, pre, train: bool = True, **kwargs):\n        self.data_list = pre.transform(*events)\n\n    def __len__(self):\n        return len(self.data_list)\n\n    def __getitem__(self, idx):\n        return self.data_list[idx]\n\n# ---------- MODEL ARCHITECTURE ----------\nimport torch_geometric.nn as pyg_nn\nfrom torch_geometric.nn import global_mean_pool\n\nclass BinaryClassifier(nn.Module):\n    def __init__(self, sample_object):\n        super().__init__()\n        self.num_obj_types = 10  # Assumed max obj type\n        embed_dim = 8\n        self.obj_embed = nn.Embedding(self.num_obj_types + 1, embed_dim)  # +1 for 0-index\n        node_in = embed_dim + 4  # obj_embed + E, p_T, eta, phi\n        edge_in = 2  # delta_R, m_ij\n        hidden = 64\n        self.conv1 = pyg_nn.TransformerConv(node_in, hidden, heads=2, edge_dim=edge_in)\n        self.bn1 = nn.LayerNorm(hidden * 2)\n        self.conv2 = pyg_nn.TransformerConv(hidden * 2, hidden, heads=2, edge_dim=edge_in)\n        self.bn2 = nn.LayerNorm(hidden * 2)\n        self.final = nn.Linear(hidden * 2, 1)\n\n    def forward(self, G):\n        x_embed = self.obj_embed(G.x[:, 0].long())  # [n_nodes, embed_dim]\n        x_cont = G.x[:, 1:]  # [n_nodes, 4]\n        x = torch.cat([x_embed, x_cont], dim=1).float()  # [n_nodes, embed_dim+4]\n        x = self.conv1(x, G.edge_index, G.edge_attr)\n        x = self.bn1(x).relu()\n        x = self.conv2(x, G.edge_index, G.edge_attr)\n        x = self.bn2(x).relu()\n        graph_feat = global_mean_pool(x, G.batch)  # [n_graphs, hidden*2]\n        out = self.final(graph_feat)  # [n_graphs, 1]\n        return out.squeeze(-1)  # [n_graphs]\n\ndef make_model(example_object):\n    return BinaryClassifier(example_object)\n\n# ---------- MODEL TRAINING ----------\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    import torch.optim as optim\n    from sklearn.metrics import roc_auc_score\n\n    optimizer = optim.Adam(model.parameters(), lr=1e-3)\n    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.5)\n    criterion = nn.BCEWithLogitsLoss()\n\n    train_losses, val_losses, train_accs, val_accs = [], [], [], []\n    best_val_loss = float('inf')\n    patience = 5\n    patience_counter = 0\n\n    for epoch in range(epochs):\n        model.train()\n        train_loss = 0.0\n        train_correct = 0\n        train_total = 0\n        for batch in train_loader:\n            batch = batch.to(device)\n            optimizer.zero_grad()\n            outputs = model(batch)\n            targets = batch.y.float()\n            loss = criterion(outputs, targets)\n            loss.backward()\n            optimizer.step()\n            train_loss += loss.item() * batch.num_graphs\n            preds = torch.sigmoid(outputs) > 0.5\n            train_correct += (preds == targets).sum().item()\n            train_total += batch.num_graphs\n        train_loss /= train_total\n        train_acc = train_correct / train_total\n\n        model.eval()\n        val_loss = 0.0\n        val_correct = 0\n        val_total = 0\n        val_preds_list = []\n        val_targets_list = []\n        with torch.no_grad():\n            for batch in val_loader:\n                batch = batch.to(device)\n                outputs = model(batch)\n                targets = batch.y.float()\n                loss = criterion(outputs, targets)\n                val_loss += loss.item() * batch.num_graphs\n                preds = torch.sigmoid(outputs) > 0.5\n                val_correct += (preds == targets).sum().item()\n                val_total += batch.num_graphs\n                val_preds_list.extend(outputs.cpu().numpy())\n                val_targets_list.extend(targets.cpu().numpy())\n        val_loss /= val_total\n        val_acc = val_correct / val_total\n        val_auc = roc_auc_score(val_targets_list, val_preds_list)\n\n        train_losses.append(train_loss)\n        val_losses.append(val_loss)\n        train_accs.append(train_acc)\n        val_accs.append(val_acc)\n\n        print(f\"Epoch {epoch+1}: Train Loss {train_loss:.4f}, Val Loss {val_loss:.4f}, Train Acc {train_acc:.4f}, Val Acc {val_acc:.4f}, Val AUC {val_auc:.4f}\")\n\n        # Early stopping on val_loss\n        if val_loss < best_val_loss:\n            best_val_loss = val_loss\n            patience_counter = 0\n        else:\n            patience_counter += 1\n            if patience_counter >= patience:\n                break\n\n        scheduler.step()\n\n    # Return the last (or best, but simplify to last)\n    return model, train_losses, val_losses, train_accs, val_accs",
+    "reasoning": "",
+    "Outer_attempt": 1
+  },
+  "StaticChecks": {
+    "__timestamp": "2026-01-05T20:02:32Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2026-01-05T20:02:32Z",
+        "metrics": {
+          ".\\outputs\\01-05(2)\\FOURTOPS\\Q2\\script_x-ai_grok-code-fast-1_2102_1.py": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 272,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 272,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2026-01-05T20:03:00Z",
+    "passed": false,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/01-05(2)/FOURTOPS/Q2/script_x-ai_grok-code-fast-1_2102_1.py\nargv2=--dryrun\n",
+      "stderr": "Traceback (most recent call last):\n  File \"/workspace/outputs/01-05(2)/FOURTOPS/Q2/script_x-ai_grok-code-fast-1_2102_1.py\", line 349, in <module>\n    _run(dryrun=\"--dryrun\" in sys.argv)\n  File \"/workspace/outputs/01-05(2)/FOURTOPS/Q2/script_x-ai_grok-code-fast-1_2102_1.py\", line 290, in _run\n    spec = enforce_pyg_policy(spec, require_torch_collate=False)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/utils/loaderspec.py\", line 311, in enforce_pyg_policy\n    spec2.validate()\n  File \"/workspace/utils/loaderspec.py\", line 147, in validate\n    raise ValueError(f\"{name} must be of form 'module:symbol', got {path!r}.\")\nValueError: loader.class must be of form 'module:symbol', got 'torch_geometric.loader.DataLoader'.\n"
+    },
+    "return_code": 1
+  }
+}

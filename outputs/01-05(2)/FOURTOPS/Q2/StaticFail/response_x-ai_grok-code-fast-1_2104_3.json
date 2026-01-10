@@ -1,0 +1,115 @@
+{
+  "LLMGeneration": {
+    "model": "x-ai/grok-code-fast-1",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 4154,
+    "prompt_chars": 16219,
+    "response_tokens": 6918,
+    "response_chars": 11581,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.01047052,
+    "generation_ms": 36767,
+    "code": "# <start code template>\n# ---------- IMPORTS ----------\n# NOTE: Some imports (torch, nn, numpy, DataLoader) are already available (see prefix).\n# Only import extra std-lib modules or modules available in the environment, i.e: torch, scipy, sklearn (sub-)modules you actually use.\n# <LLM: Import modules>\nimport torch.nn.functional as F\nimport torch_geometric\nfrom torch_geometric.data import Data\nfrom torch_geometric.nn import GNNConv, global_mean_pool\nfrom torch.optim import Adam\nfrom sklearn.metrics import roc_auc_score\n\n#  -------- (OPTIONAL) CUSTOM DATASET  --------\nclass CustomDataset(Dataset):\n    # REQUIREMENT: If you want a custom dataset: in make_loader_cfg set dataset_builder to \"llm_script:CustomDataset\"\n    def __init__(self, events, pre, train: bool = True, **kwargs):\n        objects, global_ = events\n        self.objects = objects  # [n, 18, 5]\n        self.global_ = global_  # [n, 2]\n        self.y = pre.y if hasattr(pre, 'y') else None  # Wait, no: y is part of events? Wait, in code below.\n        # Actually, events is (X2, y), but in harness, build_dataset(spec, (X, y), pre, train)\n        # In code: train_ds = build_dataset(spec, (X_train, Y_train), pre, train=True)\n        # And spec[\"dataset_builder\"] = \"llm_script:CustomDataset\"\n        # build_dataset calls CustomDataset((X_train, Y_train), pre, train=True)\n        X2, y = events\n        objects, global_ = pre.transform(X2)\n        self.objects = objects  # [n, 18, 5]\n        self.global_ = global_  # [n, 2]\n        self.y = y.long() if torch.is_tensor(y) else torch.as_tensor(y).long()\n    def __len__(self):\n        return len(self.y)\n    def __getitem__(self, idx):\n        obj = self.objects[idx]  # [18, 5]\n        glob = self.global_[idx]  # [2]\n        label = self.y[idx]\n        # Filter out padded objects: mask where obj_id != 0 and E > 0\n        mask = (obj[:, 0] != 0) & (obj[:, 1] > 0)\n        nodes = obj[mask].float()  # [num_nodes, 5], [obj_id, E, pT, eta, phi]\n        num_nodes = nodes.shape[0]\n        if num_nodes < 1:\n            # Handle empty: create a dummy node with global features\n            nodes = torch.zeros(1, 5)  # dummy node, features all 0\n            num_nodes = 1\n        # Build node features: use obj_id as float, and kin\n        x = nodes  # [num_nodes, 5]\n        # Build fully connected edges\n        edge_index = torch.empty(2, num_nodes * num_nodes, dtype=torch.long)\n        edge_attr = torch.empty(num_nodes * num_nodes, 2, dtype=torch.float32)  # m_ij, delta_r\n        k = 0\n        for ii in range(num_nodes):\n            for jj in range(num_nodes):\n                edge_index[0, k] = ii\n                edge_index[1, k] = jj\n                # Compute pairwise features\n                eta1, phi1 = nodes[ii, 3], nodes[ii, 4]\n                eta2, phi2 = nodes[jj, 3], nodes[jj, 4]\n                deta = eta1 - eta2\n                dphi = phi1 - phi2\n                dphi = (dphi + math.pi) % (2 * math.pi) - math.pi\n                delta_r = torch.sqrt(deta**2 + dphi**2)\n                # Invariant mass\n                E1, pT1 = nodes[ii, 1], nodes[ii, 2]\n                E2, pT2 = nodes[jj, 1], nodes[jj, 2]\n                px1 = pT1 * torch.cos(phi1)\n                py1 = pT1 * torch.sin(phi1)\n                pz1 = pT1 * torch.sinh(eta1)\n                px2 = pT2 * torch.cos(phi2)\n                py2 = pT2 * torch.sin(phi2)\n                pz2 = pT2 * torch.sinh(eta2)\n                E_sum = E1 + E2\n                px_sum = px1 + px2\n                py_sum = py1 + py2\n                pz_sum = pz1 + pz2\n                m_ij = torch.sqrt(E_sum**2 - (px_sum**2 + py_sum**2 + pz_sum**2))\n                edge_attr[k] = torch.tensor([m_ij, delta_r])\n                k += 1\n        data = Data(x=x, edge_index=edge_index, edge_attr=edge_attr, y=label.unsqueeze(0))  # y as [1]\n        return data\n\n# ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    # REQUIREMENTS\n    #   - IMPORTANT: All state must be picklable with the std-lib pickle module.\n    #   - May allocate NumPy arrays or Torch tensors internally, but: transform() must be deterministic.\n    #   - Store only derived parameters needed for transform i.e. do not store the raw data itself in the preprocessor object.\n\n    # TIPS\n    #   - When modifying data features or feature engineering: annotate tensor size as comments after \n    #   - each tensor operation to reduce dimension mismatches.\n\n    # DATA SPECIFICS\n    #    Total flat length per event (X_train & X_val): 92\n    #    Index  0 :  missing-ET magnitude  (E_T_miss)\n    #    Index  1 :  missing-ET azimuth    (phi_Et_miss)\n    #    Indices  2-6  : object 1  ->  obj_1, E_1, p_T1, eta_1, phi_1\n    #    Indices  7-11 : object 2  ->  obj_2, E_2 , p_T_2 , eta_2 , phi_2\n    #    ...\n    #    Indices 87-91 : object 18 ->  obj_18, E_18 , p_T_18 , eta_18 , phi_18\n    #    Global features       = 2\n    #    Per-object slice size = 5\n    #    Max objects encoded   = 18\n\n    # <LLM: Write code to preprocess the data> \n\n    def __init__(self):\n        # <LLM: Define and initialize any stateful components here>\n        pass\n\n    def make_loader_cfg(self) -> dict:\n        # LoaderSpec-first: evaluator rebuilds loaders from this. Configure as you please.\n        return {\n            \"dataset_builder\": \"llm_script:CustomDataset\",   # custom dataset for PyG graphs\n            \"dataset_kwargs\": {},\n\n            \"loader_class\": \"torch_geometric.loader:DataLoader\",     # PyG DataLoader\n            \"batch_size\": 512,\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": False,\n\n            # NO custom collate callables allowed.\n            \"collate\": None,\n\n            \"extra_loader_kwargs\": {},\n\n            # evaluation overrides (optional):\n            \"eval_overrides\": {\"shuffle\": False, \n                                \"batch_size\": 512} # Or whatever you want\n        }\n\n    def fit(self, X, y=None):\n        # <LLM: Extract statistics for transform>\n        return self\n\n    def transform(self, X):\n        # <LLM: Apply pre-processing logic>\n        # Reshape to objects and global\n        global_feat = X[:, :2]  # [n_events, 2]\n        objects = X[:, 2:].reshape(X.shape[0], 18, 5)  # [n_events, 18, 5]\n        return objects, global_feat  # return tuple of tensors\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# ---------- MODEL ARCHITECTURE ----------\n# MODEL I/O BATCH CONTRACT (CHOOSE ONE LANE)\n# You MUST choose exactly one of the two supported input lanes and keep it consistent:\n#\n# --- LANE A: Torch dense batch (default) ---\n# Loader:\n#   - loader_class: \"torch.utils.data:DataLoader\"\n#   - collate: None\n# Batch from DataLoader:\n#   (Xb, yb) where\n#     Xb: FloatTensor[B, F]\n#     yb: LongTensor[B] (or [B,1])\n# Model forward:\n#   out = model(Xb)\n#   out must be FloatTensor[B] or FloatTensor[B,1] (logits or probabilities)\n#\n# --- LANE B: PyTorch Geometric (PyG) graphs ---\n# Loader:\n#   - loader_class: \"torch_geometric.loader:DataLoader\"\n#   - collate: None\n# Dataset samples MUST be torch_geometric.data.Data with at least:\n#   data.x : FloatTensor[N_i, F]\n#   data.edge_index : LongTensor[2, E_i]   (or equivalent; your model can build edges too)\n#   data.y : LongTensor[1]                (GRAPH-LEVEL label for the event!)\n# Batch from DataLoader:\n#   G : torch_geometric.data.Batch (has G.x, G.edge_index, G.batch, and G.y)\n# Model forward:\n#   out = model(G)\n#   out must be FloatTensor[num_graphs] or FloatTensor[num_graphs,1] (logits or probabilities)\n#\n# Any other batch shapes are NOT supported.\n\nclass BinaryClassifier(nn.Module):\n    def __init__(self, sample_object):\n        super().__init__()\n        # Input: num node features = 5, edge_attr = 2\n        self.conv1 = GNNConv(in_channels=5, out_channels=64, num_layers=1, edge_attr_channels=2)\n        self.conv2 = GNNConv(in_channels=64, out_channels=128, num_layers=1, edge_attr_channels=2)\n        self.pool = global_mean_pool\n        self.lin1 = nn.Linear(128, 64)\n        self.lin2 = nn.Linear(64, 1)\n\n    # <LLM: optionally build extra layers here>\n\n    def forward(self, G):\n        # IMPORTANT output must be logits/probabilities per event\n        # Batch G\n        x, edge_index, edge_attr, batch = G.x, G.edge_index, G.edge_attr, G.batch\n        x = self.conv1(x, edge_index, edge_attr)\n        x = F.relu(x)\n        x = self.conv2(x, edge_index, edge_attr)\n        x = F.relu(x)\n        x = self.pool(x, batch)  # [batch_size, 128]\n        x = self.lin1(x)\n        x = F.relu(x)\n        out = self.lin2(x).squeeze(-1)  # [batch_size]\n        return out\n\ndef make_model(example_object):\n    return BinaryClassifier(example_object)\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 10   # <LLM: adjust if you wish>\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    # REQUIREMENTS\n    #   - Must return: trained_model, train_loss, val_loss, train_acc, val_acc\n    #   - Do NOT pass \"verbose=\" to any PyTorch scheduler (not supported in this image).\n\n    # <LLM: Write code to define training loop, use the code above>\n    # <LLM: Implement early stopping if possible>\n    optimizer = Adam(model.parameters(), lr=1e-3)\n    criterion = nn.BCEWithLogitsLoss()\n\n    train_loss_list = []\n    val_loss_list = []\n    train_acc_list = []\n    val_acc_list = []\n\n    best_auc = 0\n    best_model_state = None\n    patience = 5\n    counter = 0\n\n    for epoch in range(epochs):\n        model.train()\n        train_loss = 0\n        train_preds = []\n        train_labels = []\n        for batch in train_loader:\n            batch = batch.to(device)\n            optimizer.zero_grad()\n            out = model(batch)  # [batch_size]\n            loss = criterion(out, batch.y.float())\n            loss.backward()\n            optimizer.step()\n            train_loss += loss.item()\n            train_preds.extend(out.detach().cpu().numpy())\n            train_labels.extend(batch.y.cpu().numpy())\n        train_loss /= len(train_loader)\n\n        # Accuracy\n        train_acc = ((torch.tensor(train_preds) > 0).float() == torch.tensor(train_labels)).float().mean().item()\n\n        model.eval()\n        val_loss = 0\n        val_preds = []\n        val_labels = []\n        with torch.no_grad():\n            for batch in val_loader:\n                batch = batch.to(device)\n                out = model(batch)\n                loss = criterion(out, batch.y.float())\n                val_loss += loss.item()\n                val_preds.extend(out.detach().cpu().numpy())\n                val_labels.extend(batch.y.cpu().numpy())\n        val_loss /= len(val_loader)\n        val_acc = ((torch.tensor(val_preds) > 0).float() == torch.tensor(val_labels)).float().mean().item()\n\n        # AUC\n        try:\n            auc = roc_auc_score(val_labels, val_preds)\n        except ValueError:\n            auc = 0  # if only one class\n\n        if auc > best_auc:\n            best_auc = auc\n            best_model_state = model.state_dict()\n            counter = 0\n        else:\n            counter += 1\n\n        if counter >= patience:\n            print(f\"Early stopping at epoch {epoch}\")\n            break\n\n        train_loss_list.append(train_loss)\n        val_loss_list.append(val_loss)\n        train_acc_list.append(train_acc)\n        val_acc_list.append(val_acc)\n\n    model.load_state_dict(best_model_state)\n    return model, train_loss_list, val_loss_list, train_acc_list, val_acc_list\n\n# DO NOT execute the pipeline here – the harness will do that.\n# <end code template>",
+    "reasoning": "",
+    "Outer_attempt": 3
+  },
+  "StaticChecks": {
+    "__timestamp": "2026-01-05T20:04:52Z",
+    "PyLint": {
+      "passed": false,
+      "messages": [
+        {
+          "type": "error",
+          "module": "script_x-ai_grok-code-fast-1_2104_3",
+          "obj": "",
+          "line": 65,
+          "column": 0,
+          "endLine": 65,
+          "endColumn": 56,
+          "path": "outputs\\01-05(2)\\FOURTOPS\\Q2\\script_x-ai_grok-code-fast-1_2104_3.py",
+          "symbol": "no-name-in-module",
+          "message": "No name 'GNNConv' in module 'torch_geometric.nn'",
+          "message-id": "E0611"
+        },
+        {
+          "type": "error",
+          "module": "script_x-ai_grok-code-fast-1_2104_3",
+          "obj": "CustomDataset.__getitem__",
+          "line": 115,
+          "column": 31,
+          "endLine": 115,
+          "endColumn": 35,
+          "path": "outputs\\01-05(2)\\FOURTOPS\\Q2\\script_x-ai_grok-code-fast-1_2104_3.py",
+          "symbol": "undefined-variable",
+          "message": "Undefined variable 'math'",
+          "message-id": "E0602"
+        },
+        {
+          "type": "error",
+          "module": "script_x-ai_grok-code-fast-1_2104_3",
+          "obj": "CustomDataset.__getitem__",
+          "line": 115,
+          "column": 47,
+          "endLine": 115,
+          "endColumn": 51,
+          "path": "outputs\\01-05(2)\\FOURTOPS\\Q2\\script_x-ai_grok-code-fast-1_2104_3.py",
+          "symbol": "undefined-variable",
+          "message": "Undefined variable 'math'",
+          "message-id": "E0602"
+        },
+        {
+          "type": "error",
+          "module": "script_x-ai_grok-code-fast-1_2104_3",
+          "obj": "CustomDataset.__getitem__",
+          "line": 115,
+          "column": 58,
+          "endLine": 115,
+          "endColumn": 62,
+          "path": "outputs\\01-05(2)\\FOURTOPS\\Q2\\script_x-ai_grok-code-fast-1_2104_3.py",
+          "symbol": "undefined-variable",
+          "message": "Undefined variable 'math'",
+          "message-id": "E0602"
+        }
+      ]
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2026-01-05T20:04:52Z",
+        "metrics": {
+          ".\\outputs\\01-05(2)\\FOURTOPS\\Q2\\script_x-ai_grok-code-fast-1_2104_3.py": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 262,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 262,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  }
+}

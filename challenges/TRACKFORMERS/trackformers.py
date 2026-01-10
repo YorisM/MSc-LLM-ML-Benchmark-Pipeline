@@ -5,7 +5,7 @@ from challenges.challenges import Challenge, Question
 trackformers_challenge = Challenge(
     name = "TRACKFORMERS",
 
-    version = "v2.4.1",
+    version = "v2.6.2",
 
     dataset = { 
         "REDVID_10-50_linear" : {
@@ -22,7 +22,7 @@ trackformers_challenge = Challenge(
         },
 
     problem_description = r"""** Problem Description **
-Efficiently reconstructing particle trajectories from detector hits is crucial for the performance of particle  physics experiments at colliders like the Large Hadron Collider (LHC). With the significant increase in data volumes expected in the High-Luminosity LHC era . So far, traditional algorithms have generally been used yet traditional tracking methods become computationally expensive and increasingly inefficient. Deep Learning is likely to take over trajectory reconstruction in the future. Compared with classical combinatorial tracking the learned approach scales sub-quadratically, copes gracefully with dense environments, and is far better suited for the extreme occupancies anticipated in the High-Luminosity era. In this challenge we thus cast tracking as a supervised classification problem: for every hit the model must predict the track-ID it belongs to.  
+Efficiently reconstructing particle trajectories from detector hits is crucial for the performance of particle physics experiments at colliders like the Large Hadron Collider (LHC). With the significant increase in data volumes expected in the High-Luminosity LHC era . So far, traditional algorithms have generally been used yet traditional tracking methods become computationally expensive and increasingly inefficient. Deep Learning is likely to take over trajectory reconstruction in the future. Compared with classical combinatorial tracking the learned approach scales sub-quadratically, copes gracefully with dense environments, and is far better suited for the extreme occupancies anticipated in the High-Luminosity era. In this challenge we thus cast tracking as a supervised clustering problem: for every hit the model must predict the track-ID it belongs to. **Important:** Track IDs are event-local and permutation-invariant. 
 """,
 
     dataset_description = r"""** Dataset Description **
@@ -63,9 +63,9 @@ import os, sys, gzip, json, pickle, torch, torch_geometric
 import pandas as pd, numpy as np
 from torch import nn
 from torch.utils.data import Dataset
-from utils.llm_io import normalise_batch, assert_label_output, build_dataset, build_dataloader
+from utils.llm_io import detect_and_assert_lane, assert_label_output_by_lane, build_dataset, build_dataloader
 from utils.loaderspec import build_spec_from_preproc, enforce_pyg_policy
-from utils.suffix_utils import base_from_argv0, plot_train_val, persist_artefacts
+from utils.suffix_utils import base_from_argv0, plot_train_val, persist_artefacts, build_trackformers_model, to_python
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 if device.type == "cuda":
@@ -157,8 +157,7 @@ class MyPreprocessor:
             "pin_memory": False,
 
             # NO custom collate callables allowed. Choose one: 
-            "collate": "ragged_xy",  # or "identity" or None (If loader_class is torch_geometric.loader:DataLoader, set "collate": None)
-
+            "collate": "ragged_xy",  # or "identity" or "None"
             "extra_loader_kwargs": {},
 
             # evaluation overrides (optional):
@@ -181,38 +180,52 @@ def make_preprocessor():
     return MyPreprocessor()
 
 # ---------- MODEL ARCHITECTURE ----------
-# Model batch contract:
-#   Your DataLoader batch is NOT guaranteed to be a single Tensor.
-#   Depending your dataset/loader choice, a batch can be:
-#      - (X, y) tuple OR [X, y] list  (common for default PyTorch/PyG collation)
-#      - ragged: X is list[Tensor] and y is list[Tensor] (one Tensor per event)
-#      - multi-input: (X1, X2, ..., y) OR [X1, X2, ..., y]
-#      - dict-like: {"x": X, "y": y} (or inputs/labels variants)
-#      - PyG: torch_geometric.data.Data or torch_geometric.data.Batch
+# MODEL I/O BATCH CONTRACT (CHOOSE ONE LANE)
+# You MUST choose exactly one of the two supported input lanes and keep it consistent:
 #
-# ALWAYS adapt the raw batch using:
-#     view = normalise_batch(batch, device=device)
+# --- LANE A: Torch ragged tensors (default) ---
+# Loader:
+#   - loader_class: "torch.utils.data:DataLoader"
+#   - collate: "ragged_xy"
+# Batch from DataLoader:
+#   (Xs, ys) where
+#     Xs: list[FloatTensor], length B, each Xs[i] shape [N_i, F]
+#     ys: list[LongTensor],  length B, each ys[i] shape [N_i]
+# Model output:
+#   out = model.predict_labels(Xs)
+#   out must be list[IntegerTensor], length B, each out[i] shape [N_i]
+# Noise label:
+#   Use -1 for noise/unassigned labels in the OUTPUT.
 #
-# normalise_batch returns a BatchView with:
-#   view.batch_x : the model inputs (Tensor / list[Tensor] / tuple / dict / PyG Batch)
-#   view.batch_y : labels if present, else None
+# --- LANE B: PyTorch Geometric (PyG) graphs ---
+# Loader:
+#   - loader_class: "torch_geometric.loader:DataLoader"
+#   - collate: None
+# Dataset samples MUST be torch_geometric.data.Data with at least:
+#   data.x : FloatTensor [N_i, F]
+#   data.y : LongTensor  [N_i]
+# Batch from DataLoader:
+#   G : torch_geometric.data.Batch (has G.x, G.y, and G.batch)
+# Model forward:
+#   out = model.predict_labels(G)
+#   out must be an IntegerTensor of shape [G.x.shape[0]] (one label per node/hit)
 #
-# IMPORTANT: normalise_batch(..., device=device) moves ALL contained tensors to device (recursively). Do NOT call .to(device) on the raw batch object.
+# --- BOTH LANES ---
+# Noise label: Use -1 for noise/unassigned labels in the OUTPUT.
+# Any other batch shapes are NOT supported.
 
 class HitClassifier(nn.Module):
     def __init__(self, example_batch_x):
         super().__init__()
-        # IMPORTANT: Default harness input:
-        #   - batch_x is ragged list[Tensor], one per event, each shaped [N_hits, F].
-
         # <LLM: Define and initialize any stateful components here>
 
     def forward(self, batch_x):
-        # IMPORTANT Output contract:
-        # forward(batch_x) must return predicted integer labels (dtype long/int64) with one label per hit (>0); predicted noise may be -1.
-
         # <LLM: Define your model's forward pass here>
         pass
+        
+    def predict_labels(self, batch_x):
+        # <LLM: Define your model's prediction logic here>
+        return labels # must return integer labels per hit
 
 def make_model(example_batch_x):
     return HitClassifier(example_batch_x)
@@ -222,17 +235,14 @@ EPOCHS = 10   # <LLM: adjust if you wish>
 def train_model(model: nn.Module, train_loader, val_loader, epochs: int):
     # REQUIREMENTS
     #   - Must return: trained_model, train_loss, val_loss, train_acc, val_acc
-    #   - Do NOT:
-    #       - pass "verbose=" to any PyTorch scheduler (not supported in this image).
-    #       - batch = batch.to(device)
-    #       - xb, yb = batch
-    #       - for xb, yb in loader: ...
+    #   - Do NOT pass "verbose=" to any PyTorch scheduler (not supported in this image).
 
-    # Canonical batch handling (use this inside every loop):
-    # for batch in train_loader:
-    #     view = normalise_batch(batch, device=device)
-    #     xb, yb = view.batch_x, view.batch_y
-    #     out = model(xb)
+    # Canonical default batch handling:
+    # for xs, ys in train_loader:
+    #     Xs = [x.to(device) for x in Xs]
+    #     ys = [y.to(device) for y in ys]
+    #     scores_or_emb = model(Xs)               # Differentiable forward output for loss
+    #     pred_labels = model.predict_labels(Xs)  # Integer labels ONLY for evaluation/monitoring
     
     # <LLM: Write code to define training loop, use the code above>
     # <LLM: Implement early stopping if possible>
@@ -266,10 +276,12 @@ def _run(dryrun=False):
     train_loader = build_dataloader(spec, train_ds, is_eval=False)
     val_loader   = build_dataloader(spec, val_ds,   is_eval=True)
 
-    # Build model
+    # Build batch and check
     first_batch = next(iter(train_loader))
-    view        = normalise_batch(first_batch, device=device)
-    model       = make_model(view.batch_x).to(device)
+    mode = detect_and_assert_lane(spec, first_batch)
+
+    # Build model
+    model = build_trackformers_model(mode, first_batch, make_model, device)
 
     # Train model
     n_epochs = 1 if dryrun else globals().get("EPOCHS", 10)
@@ -282,16 +294,32 @@ def _run(dryrun=False):
 
     # Dry-run safety check
     if dryrun:
+        if not hasattr(trained_model, "predict_labels") or not callable(getattr(trained_model, "predict_labels")):
+            raise TypeError("Contract error: trained model must implement predict_labels(batch_x).")
+
+        trained_model.eval()
         try:
             with torch.no_grad():
+                mode = None
                 for i, batch in enumerate(val_loader):
-                    view = normalise_batch(batch, device=device)
-                    out  = model(view.batch_x)
-                    assert_label_output(view.batch_x, out, allow_noise_label=True)
-                    if i >= 4: # loop over 4 batches
+                    if mode is None:
+                        mode = detect_and_assert_lane(spec, batch)
+
+                    if mode == "torch_ragged_xy":
+                        Xs, _ys = batch
+                        Xs = [x.to(device) for x in Xs]
+                        out = trained_model.predict_labels(Xs)
+                    elif mode == "pyg_batch":
+                        G = batch.to(device)
+                        out = trained_model.predict_labels(G)
+                    else:
+                        raise RuntimeError(f"Unknown lane mode: {mode}")
+
+                    assert_label_output_by_lane(mode, batch, out, allow_noise_label=True)
+                    if i >= 3:  # 4 batches
                         break
         except Exception as e:
-            raise RuntimeError("Sanity-check forward pass failed") from e
+            raise RuntimeError("Sanity-check predict_labels() failed") from e
         return
 
     if not dryrun:
@@ -311,6 +339,7 @@ def _run(dryrun=False):
             "train_acc":  tr_acc    if tr_acc else None,
             "val_acc":    va_acc    if va_acc else None,
         }
+        summary = to_python(summary)
         print("#TRAIN_METRICS#" + json.dumps(summary))
 
 if "__main__" not in sys.modules:
@@ -324,7 +353,7 @@ if __name__ == "__main__":
 
     questions = [
         Question("Q1", r""" ** IMPORTANT: Your Challenge **
-Write Python code for a model that classifies events into tracks: per-hit labeling. The model must output one integer label per hit (cluster id), per event. Labels may be arbitrary up to permutation. Focus on maximising the FitAccuracy using the code template above. You may freely choose any pre-processing methods and techniques as well as model architecture and training conventions as long as it respects the template and harness. Do absolutely everything in your power to achieve the highest possible FitAccuracy.                        
+Write Python code for a model that classifies or clusters events into tracks: per-hit labeling. The model must output one integer label per hit (cluster id), per event. Labels may be arbitrary up to permutation. Focus on maximising the FitAccuracy using the code template above. You may freely choose any pre-processing methods and techniques as well as model architecture and training conventions as long as it respects the template and harness. Do absolutely everything in your power to achieve the highest possible FitAccuracy.                        
 """)
 ]
 )

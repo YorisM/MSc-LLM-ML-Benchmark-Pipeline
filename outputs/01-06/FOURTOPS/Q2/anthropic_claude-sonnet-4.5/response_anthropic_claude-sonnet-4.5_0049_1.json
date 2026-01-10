@@ -1,0 +1,142 @@
+{
+  "LLMGeneration": {
+    "model": "anthropic/claude-sonnet-4.5",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 4924,
+    "prompt_chars": 16219,
+    "response_tokens": 13651,
+    "response_chars": 9054,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.219537,
+    "generation_ms": 140405,
+    "code": "# ---------- IMPORTS ----------\nimport torch\nimport torch.nn.functional as F\nfrom sklearn.metrics import roc_auc_score\nimport copy\n\n# ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.global_mean = None\n        self.global_std = None\n        self.obj_mean = None\n        self.obj_std = None\n\n    def make_loader_cfg(self) -> dict:\n        return {\n            \"dataset_builder\": \"llm_script:FourTopsDataset\",\n            \"dataset_kwargs\": {},\n            \"loader_class\": \"torch.utils.data:DataLoader\",\n            \"batch_size\": 512,\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": False,\n            \"collate\": None,\n            \"extra_loader_kwargs\": {},\n            \"eval_overrides\": {\"shuffle\": False, \"batch_size\": 512}\n        }\n\n    def fit(self, X, y=None):\n        # X: [N, 92] = [E_T_miss, phi_ET_miss, obj1_features(5), ..., obj18_features(5)]\n\n        # Global features (indices 0-1)\n        global_feats = X[:, :2]  # [N, 2]\n        self.global_mean = global_feats.mean(dim=0)\n        self.global_std = global_feats.std(dim=0).clamp(min=1e-8)\n\n        # Object features (indices 2-91, reshape to [N, 18, 5])\n        obj_feats = X[:, 2:].reshape(-1, 18, 5)  # [N, 18, 5]\n\n        # Collect statistics only from valid objects (obj_id != 0)\n        valid_mask = (obj_feats[:, :, 0] != 0)  # [N, 18]\n\n        # Gather valid kinematic features (E, pT, eta, phi at indices 1-4)\n        valid_kinematics = []\n        for i in range(obj_feats.shape[0]):\n            for j in range(18):\n                if valid_mask[i, j]:\n                    valid_kinematics.append(obj_feats[i, j, 1:5])\n\n        if len(valid_kinematics) > 0:\n            valid_kinematics = torch.stack(valid_kinematics)  # [M, 4]\n            self.obj_mean = valid_kinematics.mean(dim=0)  # [4]\n            self.obj_std = valid_kinematics.std(dim=0).clamp(min=1e-8)  # [4]\n        else:\n            self.obj_mean = torch.zeros(4)\n            self.obj_std = torch.ones(4)\n\n        return self\n\n    def transform(self, X):\n        # X: [N, 92]\n        X_norm = X.clone()\n\n        # Normalize global features\n        X_norm[:, :2] = (X[:, :2] - self.global_mean) / self.global_std\n\n        # Normalize object features\n        obj_feats = X_norm[:, 2:].reshape(-1, 18, 5)  # [N, 18, 5]\n        valid_mask = (obj_feats[:, :, 0] != 0)  # [N, 18]\n\n        # Normalize kinematic features (indices 1-4: E, pT, eta, phi)\n        for k in range(1, 5):\n            normalized = (obj_feats[:, :, k] - self.obj_mean[k-1]) / self.obj_std[k-1]\n            obj_feats[:, :, k] = torch.where(valid_mask, normalized, obj_feats[:, :, k])\n\n        X_norm[:, 2:] = obj_feats.reshape(-1, 90)\n\n        return X_norm\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# ---------- MODEL ARCHITECTURE ----------\nclass BinaryClassifier(nn.Module):\n    def __init__(self, sample_object):\n        super().__init__()\n\n        # Model dimensions\n        self.d_model = 128\n        self.nhead = 4\n        self.num_layers = 3\n        self.dim_ff = 256\n        self.dropout = 0.1\n\n        # Embedding layers\n        self.obj_embed = nn.Linear(5, self.d_model)\n        self.global_embed = nn.Linear(2, self.d_model)\n\n        # Positional encoding (learnable)\n        self.pos_embed = nn.Parameter(torch.randn(1, 18, self.d_model) * 0.02)\n\n        # Transformer encoder\n        enc_layer = nn.TransformerEncoderLayer(\n            d_model=self.d_model,\n            nhead=self.nhead,\n            dim_feedforward=self.dim_ff,\n            dropout=self.dropout,\n            batch_first=True\n        )\n        self.transformer = nn.TransformerEncoder(enc_layer, num_layers=self.num_layers)\n\n        # Classification head\n        self.classifier = nn.Sequential(\n            nn.Linear(self.d_model * 2, 256),\n            nn.ReLU(),\n            nn.Dropout(0.2),\n            nn.Linear(256, 128),\n            nn.ReLU(),\n            nn.Dropout(0.2),\n            nn.Linear(128, 1)\n        )\n\n    def forward(self, batch_x):\n        # batch_x: [B, 92]\n        B = batch_x.shape[0]\n\n        # Split into global and object features\n        global_feats = batch_x[:, :2]  # [B, 2]\n        obj_feats = batch_x[:, 2:].reshape(B, 18, 5)  # [B, 18, 5]\n\n        # Padding mask (True = padding, should be ignored)\n        pad_mask = (obj_feats[:, :, 0] == 0)  # [B, 18]\n\n        # Embed objects\n        obj_h = self.obj_embed(obj_feats) + self.pos_embed  # [B, 18, d_model]\n\n        # Transform\n        obj_h = self.transformer(obj_h, src_key_padding_mask=pad_mask)  # [B, 18, d_model]\n\n        # Pool (mean over non-padded positions)\n        mask_pool = (~pad_mask).unsqueeze(-1).float()  # [B, 18, 1]\n        obj_pooled = (obj_h * mask_pool).sum(dim=1) / (mask_pool.sum(dim=1) + 1e-9)  # [B, d_model]\n\n        # Embed global\n        global_h = self.global_embed(global_feats)  # [B, d_model]\n\n        # Combine and classify\n        combined = torch.cat([obj_pooled, global_h], dim=1)  # [B, 2*d_model]\n        logits = self.classifier(combined).squeeze(-1)  # [B]\n\n        return logits\n\ndef make_model(example_object):\n    return BinaryClassifier(example_object)\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 25\n\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    device = next(model.parameters()).device\n\n    # Setup training\n    criterion = nn.BCEWithLogitsLoss()\n    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)\n    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(\n        optimizer, mode='max', factor=0.5, patience=3, min_lr=1e-6\n    )\n\n    # History\n    train_loss_hist = []\n    val_loss_hist = []\n    train_acc_hist = []\n    val_acc_hist = []\n\n    # Early stopping\n    best_val_auc = 0.0\n    best_model = None\n    patience = 0\n    max_patience = 7\n\n    for epoch in range(epochs):\n        # Training\n        model.train()\n        train_loss_sum = 0.0\n        train_correct = 0\n        train_total = 0\n        train_preds = []\n        train_labels = []\n\n        for X, y in train_loader:\n            X, y = X.to(device), y.to(device).float()\n\n            optimizer.zero_grad()\n            logits = model(X)\n            loss = criterion(logits, y)\n            loss.backward()\n            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)\n            optimizer.step()\n\n            train_loss_sum += loss.item() * X.size(0)\n            probs = torch.sigmoid(logits)\n            train_correct += ((probs > 0.5).float() == y).sum().item()\n            train_total += y.size(0)\n\n            train_preds.extend(probs.detach().cpu().numpy())\n            train_labels.extend(y.cpu().numpy())\n\n        train_loss = train_loss_sum / train_total\n        train_acc = train_correct / train_total\n        train_auc = roc_auc_score(train_labels, train_preds)\n\n        # Validation\n        model.eval()\n        val_loss_sum = 0.0\n        val_correct = 0\n        val_total = 0\n        val_preds = []\n        val_labels = []\n\n        with torch.no_grad():\n            for X, y in val_loader:\n                X, y = X.to(device), y.to(device).float()\n\n                logits = model(X)\n                loss = criterion(logits, y)\n\n                val_loss_sum += loss.item() * X.size(0)\n                probs = torch.sigmoid(logits)\n                val_correct += ((probs > 0.5).float() == y).sum().item()\n                val_total += y.size(0)\n\n                val_preds.extend(probs.cpu().numpy())\n                val_labels.extend(y.cpu().numpy())\n\n        val_loss = val_loss_sum / val_total\n        val_acc = val_correct / val_total\n        val_auc = roc_auc_score(val_labels, val_preds)\n\n        # Record history\n        train_loss_hist.append(train_loss)\n        val_loss_hist.append(val_loss)\n        train_acc_hist.append(train_acc)\n        val_acc_hist.append(val_acc)\n\n        # Update scheduler\n        scheduler.step(val_auc)\n\n        # Early stopping check\n        if val_auc > best_val_auc:\n            best_val_auc = val_auc\n            best_model = copy.deepcopy(model.state_dict())\n            patience = 0\n        else:\n            patience += 1\n\n        print(f\"Epoch {epoch+1}/{epochs}: \"\n              f\"TrLoss={train_loss:.4f} TrAcc={train_acc:.4f} TrAUC={train_auc:.4f} | \"\n              f\"ValLoss={val_loss:.4f} ValAcc={val_acc:.4f} ValAUC={val_auc:.4f}\")\n\n        if patience >= max_patience:\n            print(f\"Early stopping at epoch {epoch+1}\")\n            break\n\n    # Load best model\n    if best_model is not None:\n        model.load_state_dict(best_model)\n\n    return model, train_loss_hist, val_loss_hist, train_acc_hist, val_acc_hist",
+    "reasoning": "",
+    "Outer_attempt": 1
+  },
+  "StaticChecks": {
+    "__timestamp": "2026-01-06T23:50:02Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2026-01-06T23:50:02Z",
+        "metrics": {
+          ".\\outputs\\01-06\\FOURTOPS\\Q2\\script_anthropic_claude-sonnet-4.5_0049_1.py": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 271,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 271,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2026-01-06T23:50:25Z",
+    "passed": true,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/01-06/FOURTOPS/Q2/script_anthropic_claude-sonnet-4.5_0049_1.py\nargv2=--dryrun\nEpoch 1/1: TrLoss=0.6972 TrAcc=0.4725 TrAUC=0.4656 | ValLoss=0.7013 ValAcc=0.4000 ValAUC=0.5051\nDry-run: skipping artefact manifest\n",
+      "stderr": "/opt/venv/lib/python3.12/site-packages/torch/nn/modules/transformer.py:508: UserWarning: The PyTorch API of nested tensors is in prototype stage and will change in the near future. We recommend specifying layout=torch.jagged when constructing a nested tensor, as this layout receives active development, has better operator coverage, and works with torch.compile. (Triggered internally at /pytorch/aten/src/ATen/NestedTensorImpl.cpp:178.)\n  output = torch._nested_tensor_from_mask(\n"
+    },
+    "return_code": 0
+  },
+  "Training": {
+    "__timestamp": "2026-01-07T11:39:05.540124+00:00",
+    "passed": true,
+    "resources": {
+      "cpu_seconds_user": 1.25,
+      "cpu_seconds_sys": 1.06,
+      "disk_read_mb": 46.8,
+      "disk_write_mb": 0.4,
+      "max_rss_kb": 192,
+      "training_time_s": 314.29,
+      "gpu_name": null,
+      "gpu_total_mb": null,
+      "gpu_peak_alloc_mb": null,
+      "cuda_available": null
+    },
+    "metrics": {
+      "epochs": 25,
+      "train_loss": [
+        0.6914351112802395,
+        0.6909748345327735,
+        0.6909629206131118,
+        0.6904977941936116,
+        0.69074834618601,
+        0.6907135913092802,
+        0.6906032163240652,
+        0.6907460024752005,
+        0.6906035491244141,
+        0.6899927605885392
+      ],
+      "val_loss": [
+        0.6913180127989024,
+        0.6908967167511003,
+        0.6909084937070259,
+        0.6924244832778658,
+        0.6908807531287765,
+        0.690884523831433,
+        0.6909477498781781,
+        0.6908586424240097,
+        0.6921295449016829,
+        0.6934824335790972
+      ],
+      "train_acc": [
+        0.5265686489528547,
+        0.5302391406001068,
+        0.5299163690685559,
+        0.5312778028362514,
+        0.5302350025035484,
+        0.5303963882693239,
+        0.5308101979251584,
+        0.5303425930140654,
+        0.5310295170427507,
+        0.5336158273917163
+      ],
+      "val_acc": [
+        0.5258052769225676,
+        0.5295130267818717,
+        0.5293143973251233,
+        0.5228258350713411,
+        0.5279239911278842,
+        0.528718508954878,
+        0.5295461316913298,
+        0.528718508954878,
+        0.5224285761578442,
+        0.5076637865395438
+      ]
+    },
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/01-06/FOURTOPS/Q2/anthropic_claude-sonnet-4.5/script_anthropic_claude-sonnet-4.5_0049_1.py\nargv2=\nEpoch 1/25: TrLoss=0.6914 TrAcc=0.5266 TrAUC=0.5345 | ValLoss=0.6913 ValAcc=0.5258 ValAUC=0.5379\nEpoch 2/25: TrLoss=0.6910 TrAcc=0.5302 TrAUC=0.5378 | ValLoss=0.6909 ValAcc=0.5295 ValAUC=0.5381\nEpoch 3/25: TrLoss=0.6910 TrAcc=0.5299 TrAUC=0.5384 | ValLoss=0.6909 ValAcc=0.5293 ValAUC=0.5388\nEpoch 4/25: TrLoss=0.6905 TrAcc=0.5313 TrAUC=0.5417 | ValLoss=0.6924 ValAcc=0.5228 ValAUC=0.5375\nEpoch 5/25: TrLoss=0.6907 TrAcc=0.5302 TrAUC=0.5403 | ValLoss=0.6909 ValAcc=0.5279 ValAUC=0.5379\nEpoch 6/25: TrLoss=0.6907 TrAcc=0.5304 TrAUC=0.5403 | ValLoss=0.6909 ValAcc=0.5287 ValAUC=0.5377\nEpoch 7/25: TrLoss=0.6906 TrAcc=0.5308 TrAUC=0.5409 | ValLoss=0.6909 ValAcc=0.5295 ValAUC=0.5376\nEpoch 8/25: TrLoss=0.6907 TrAcc=0.5303 TrAUC=0.5397 | ValLoss=0.6909 ValAcc=0.5287 ValAUC=0.5378\nEpoch 9/25: TrLoss=0.6906 TrAcc=0.5310 TrAUC=0.5410 | ValLoss=0.6921 ValAcc=0.5224 ValAUC=0.5382\nEpoch 10/25: TrLoss=0.6900 TrAcc=0.5336 TrAUC=0.5454 | ValLoss=0.6935 ValAcc=0.5077 ValAUC=0.5379\nEarly stopping at epoch 10\n#TRAIN_METRICS#{\"epochs\": 25, \"train_loss\": [0.6914351112802395, 0.6909748345327735, 0.6909629206131118, 0.6904977941936116, 0.69074834618601, 0.6907135913092802, 0.6906032163240652, 0.6907460024752005, 0.6906035491244141, 0.6899927605885392], \"val_loss\": [0.6913180127989024, 0.6908967167511003, 0.6909084937070259, 0.6924244832778658, 0.6908807531287765, 0.690884523831433, 0.6909477498781781, 0.6908586424240097, 0.6921295449016829, 0.6934824335790972], \"train_acc\": [0.5265686489528547, 0.5302391406001068, 0.5299163690685559, 0.5312778028362514, 0.5302350025035484, 0.5303963882693239, 0.5308101979251584, 0.5303425930140654, 0.5310295170427507, 0.5336158273917163], \"val_acc\": [0.5258052769225676, 0.5295130267818717, 0.5293143973251233, 0.5228258350713411, 0.5279239911278842, 0.528718508954878, 0.5295461316913298, 0.528718508954878, 0.5224285761578442, 0.5076637865395438]}\nHash manifest written â†’ anthropic_claude-sonnet-4.5_0049_1_manifest.sha256\n",
+      "stderr": "/opt/venv/lib/python3.12/site-packages/torch/nn/modules/transformer.py:508: UserWarning: The PyTorch API of nested tensors is in prototype stage and will change in the near future. We recommend specifying layout=torch.jagged when constructing a nested tensor, as this layout receives active development, has better operator coverage, and works with torch.compile. (Triggered internally at /pytorch/aten/src/ATen/NestedTensorImpl.cpp:178.)\n  output = torch._nested_tensor_from_mask(\nWARNING:matplotlib:mkdir -p failed for path /home/sandbox/.config/matplotlib: [Errno 30] Read-only file system: '/home/sandbox/.config'\nWARNING:matplotlib:Matplotlib created a temporary cache directory at /tmp/matplotlib-p49fomox because there was an issue with the default path (/home/sandbox/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.\n"
+    }
+  }
+}

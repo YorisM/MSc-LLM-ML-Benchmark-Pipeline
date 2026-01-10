@@ -1,0 +1,71 @@
+{
+  "LLMGeneration": {
+    "model": "mistralai/mistral-large-2512",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 4260,
+    "prompt_chars": 16219,
+    "response_tokens": 2512,
+    "response_chars": 9632,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.005898,
+    "generation_ms": 38065,
+    "code": "# ---------- IMPORTS ----------\nfrom sklearn.preprocessing import RobustScaler\nfrom torch.optim import AdamW\nfrom torch.optim.lr_scheduler import ReduceLROnPlateau\nfrom sklearn.metrics import roc_auc_score\nimport torch.nn.functional as F\n\n# ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.scaler = RobustScaler()\n        self.obj_ids = [0, 1, 2, 3, 4, 5, 6, 21, 22]  # Common object IDs in particle physics\n        self.max_objects = 18\n        self.global_features = 2\n        self.per_object_features = 5\n\n    def make_loader_cfg(self) -> dict:\n        return {\n            \"dataset_builder\": \"llm_script:FourTopsDataset\",\n            \"dataset_kwargs\": {},\n            \"loader_class\": \"torch.utils.data:DataLoader\",\n            \"batch_size\": 512,\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": False,\n            \"collate\": None,\n            \"extra_loader_kwargs\": {},\n            \"eval_overrides\": {\"shuffle\": False, \"batch_size\": 512}\n        }\n\n    def fit(self, X, y=None):\n        # Extract global features (E_T_miss, phi_Et_miss)\n        global_features = X[:, :2].numpy()\n        self.scaler.fit(global_features)\n        return self\n\n    def transform(self, X):\n        # Convert to numpy for sklearn processing\n        X_np = X.numpy()\n\n        # Scale global features\n        global_features = X_np[:, :2]\n        global_features_scaled = self.scaler.transform(global_features)\n\n        # Process object features\n        processed_objects = []\n        for i in range(self.max_objects):\n            start_idx = 2 + i * self.per_object_features\n            end_idx = start_idx + self.per_object_features\n            obj_slice = X_np[:, start_idx:end_idx]\n\n            # Extract kinematic features (E, pT, eta, phi)\n            obj_id = obj_slice[:, 0]\n            kinematics = obj_slice[:, 1:]\n\n            # Create mask for valid objects (non-zero energy)\n            valid_mask = (kinematics[:, 0] > 0)\n\n            # Create features for this object\n            obj_features = np.zeros((X_np.shape[0], 5))\n            obj_features[valid_mask] = kinematics[valid_mask]\n\n            # One-hot encode object ID (9 possible IDs)\n            obj_id_onehot = np.zeros((X_np.shape[0], len(self.obj_ids)))\n            for j, obj_type in enumerate(self.obj_ids):\n                obj_id_onehot[:, j] = (obj_id == obj_type)\n\n            # Combine features: [kinematics (4) + one-hot ID (9)]\n            obj_features = np.concatenate([\n                obj_features[:, 1:],  # kinematics (pT, eta, phi, E)\n                obj_id_onehot\n            ], axis=1)\n\n            processed_objects.append(obj_features)\n\n        # Stack all object features\n        object_features = np.stack(processed_objects, axis=1)  # [N, 18, 13]\n\n        # Compute pairwise features for valid objects\n        pairwise_features = []\n        for i in range(X_np.shape[0]):\n            event_objects = object_features[i]\n            valid_objs = event_objects[event_objects[:, 0] > 0]  # pT > 0 means valid\n\n            n_valid = valid_objs.shape[0]\n            if n_valid < 2:\n                # Not enough objects for pairwise features\n                pairwise = np.zeros((self.max_objects, self.max_objects, 2))\n            else:\n                # Compute pairwise features\n                pairwise = np.zeros((n_valid, n_valid, 2))\n                for j in range(n_valid):\n                    for k in range(j+1, n_valid):\n                        p1 = valid_objs[j, :4]  # pT, eta, phi, E\n                        p2 = valid_objs[k, :4]\n\n                        # Delta R\n                        delta_eta = p1[1] - p2[1]\n                        delta_phi = np.abs(p1[2] - p2[2])\n                        delta_phi = np.minimum(delta_phi, 2*np.pi - delta_phi)\n                        delta_R = np.sqrt(delta_eta**2 + delta_phi**2)\n\n                        # Invariant mass (approximate)\n                        E1, E2 = p1[3], p2[3]\n                        pT1, pT2 = p1[0], p2[0]\n                        m_squared = (E1 + E2)**2 - (pT1**2 + pT2**2) - 2*pT1*pT2*np.cos(delta_phi)\n                        m_inv = np.sqrt(np.maximum(m_squared, 0))\n\n                        pairwise[j, k] = [delta_R, m_inv]\n                        pairwise[k, j] = [delta_R, m_inv]\n\n                # Pad to max_objects\n                padded_pairwise = np.zeros((self.max_objects, self.max_objects, 2))\n                padded_pairwise[:n_valid, :n_valid] = pairwise\n\n            pairwise_features.append(padded_pairwise)\n\n        pairwise_features = np.stack(pairwise_features)  # [N, 18, 18, 2]\n\n        # Combine all features\n        # Global features: [N, 2]\n        # Object features: [N, 18, 13]\n        # Pairwise features: [N, 18, 18, 2]\n\n        # Flatten object and pairwise features\n        object_features_flat = object_features.reshape(X_np.shape[0], -1)  # [N, 18*13]\n        pairwise_features_flat = pairwise_features.reshape(X_np.shape[0], -1)  # [N, 18*18*2]\n\n        # Combine all features\n        combined_features = np.concatenate([\n            global_features_scaled,\n            object_features_flat,\n            pairwise_features_flat\n        ], axis=1)\n\n        return torch.from_numpy(combined_features).float()\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# ---------- MODEL ARCHITECTURE ----------\nclass BinaryClassifier(nn.Module):\n    def __init__(self, sample_object):\n        super().__init__()\n\n        # Determine input size from sample\n        input_size = sample_object.shape[1]\n\n        # Feature extraction layers\n        self.feature_extractor = nn.Sequential(\n            nn.Linear(input_size, 512),\n            nn.BatchNorm1d(512),\n            nn.ReLU(),\n            nn.Dropout(0.3),\n\n            nn.Linear(512, 256),\n            nn.BatchNorm1d(256),\n            nn.ReLU(),\n            nn.Dropout(0.3),\n\n            nn.Linear(256, 128),\n            nn.BatchNorm1d(128),\n            nn.ReLU(),\n        )\n\n        # Classification head\n        self.classifier = nn.Sequential(\n            nn.Linear(128, 64),\n            nn.BatchNorm1d(64),\n            nn.ReLU(),\n            nn.Dropout(0.2),\n\n            nn.Linear(64, 1)\n        )\n\n    def forward(self, batch_x):\n        # batch_x: [B, F] where F is the flattened feature size\n        features = self.feature_extractor(batch_x)  # [B, 128]\n        logits = self.classifier(features)  # [B, 1]\n        return logits.squeeze(-1)  # [B]\n\ndef make_model(example_object):\n    return BinaryClassifier(example_object)\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 20\n\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    device = torch.device(\"cuda\" if torch.cuda.is_available() else \"cpu\")\n    model = model.to(device)\n\n    optimizer = AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)\n    scheduler = ReduceLROnPlateau(optimizer, 'max', patience=3, factor=0.5, verbose=True)\n\n    best_auc = 0.0\n    best_model = None\n    train_losses = []\n    val_losses = []\n    train_accs = []\n    val_accs = []\n\n    for epoch in range(epochs):\n        # Training\n        model.train()\n        train_loss = 0.0\n        train_preds = []\n        train_targets = []\n\n        for batch_x, batch_y in train_loader:\n            batch_x, batch_y = batch_x.to(device), batch_y.to(device)\n\n            optimizer.zero_grad()\n            logits = model(batch_x)\n            loss = F.binary_cross_entropy_with_logits(logits, batch_y.float())\n            loss.backward()\n            optimizer.step()\n\n            train_loss += loss.item()\n            train_preds.append(torch.sigmoid(logits).detach().cpu().numpy())\n            train_targets.append(batch_y.detach().cpu().numpy())\n\n        train_loss /= len(train_loader)\n        train_preds = np.concatenate(train_preds)\n        train_targets = np.concatenate(train_targets)\n        train_auc = roc_auc_score(train_targets, train_preds)\n        train_acc = ((train_preds > 0.5) == train_targets).mean()\n\n        # Validation\n        model.eval()\n        val_loss = 0.0\n        val_preds = []\n        val_targets = []\n\n        with torch.no_grad():\n            for batch_x, batch_y in val_loader:\n                batch_x, batch_y = batch_x.to(device), batch_y.to(device)\n                logits = model(batch_x)\n                loss = F.binary_cross_entropy_with_logits(logits, batch_y.float())\n\n                val_loss += loss.item()\n                val_preds.append(torch.sigmoid(logits).detach().cpu().numpy())\n                val_targets.append(batch_y.detach().cpu().numpy())\n\n        val_loss /= len(val_loader)\n        val_preds = np.concatenate(val_preds)\n        val_targets = np.concatenate(val_targets)\n        val_auc = roc_auc_score(val_targets, val_preds)\n        val_acc = ((val_preds > 0.5) == val_targets).mean()\n\n        # Update learning rate\n        scheduler.step(val_auc)\n\n        # Store metrics\n        train_losses.append(train_loss)\n        val_losses.append(val_loss)\n        train_accs.append(train_acc)\n        val_accs.append(val_acc)\n\n        print(f\"Epoch {epoch+1}/{epochs} - Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}\")\n        print(f\"Train AUC: {train_auc:.4f}, Val AUC: {val_auc:.4f}\")\n        print(f\"Train Acc: {train_acc:.4f}, Val Acc: {val_acc:.4f}\")\n\n        # Early stopping and model saving\n        if val_auc > best_auc:\n            best_auc = val_auc\n            best_model = model.state_dict()\n\n    # Load best model\n    if best_model is not None:\n        model.load_state_dict(best_model)\n\n    return model, train_losses, val_losses, train_accs, val_accs",
+    "reasoning": "",
+    "Outer_attempt": 5
+  },
+  "StaticChecks": {
+    "__timestamp": "2026-01-06T22:49:46Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2026-01-06T22:49:46Z",
+        "metrics": {
+          ".\\outputs\\01-06\\FOURTOPS\\Q2\\script_mistralai_mistral-large-2512_2349_5.py": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 276,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 276,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2026-01-06T22:50:08Z",
+    "passed": false,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/01-06/FOURTOPS/Q2/script_mistralai_mistral-large-2512_2349_5.py\nargv2=--dryrun\n",
+      "stderr": "Traceback (most recent call last):\n  File \"/workspace/outputs/01-06/FOURTOPS/Q2/script_mistralai_mistral-large-2512_2349_5.py\", line 405, in <module>\n    _run(dryrun=\"--dryrun\" in sys.argv)\n  File \"/workspace/outputs/01-06/FOURTOPS/Q2/script_mistralai_mistral-large-2512_2349_5.py\", line 349, in _run\n    train_ds     = build_dataset(spec, (X_train, Y_train), pre, train=True)\n                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/utils/llm_io.py\", line 149, in build_dataset\n    return builder(events, preproc, train=train, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/outputs/01-06/FOURTOPS/Q2/script_mistralai_mistral-large-2512_2349_5.py\", line 43, in __init__\n    X2 = pre.transform(X) if pre is not None else X\n         ^^^^^^^^^^^^^^^^\n  File \"/workspace/outputs/01-06/FOURTOPS/Q2/script_mistralai_mistral-large-2512_2349_5.py\", line 117, in transform\n    obj_features[valid_mask] = kinematics[valid_mask]\n    ~~~~~~~~~~~~^^^^^^^^^^^^\nValueError: shape mismatch: value array of shape (400,4) could not be broadcast to indexing result of shape (400,5)\n"
+    },
+    "return_code": 1
+  }
+}

@@ -1,0 +1,76 @@
+{
+  "LLMGeneration": {
+    "model": "x-ai/grok-code-fast-1",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 4154,
+    "prompt_chars": 16219,
+    "response_tokens": 6139,
+    "response_chars": 8219,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.01000474,
+    "generation_ms": 55714,
+    "code": "# <start code template>\n# ---------- IMPORTS ----------\n# NOTE: Some imports (torch, nn, numpy, DataLoader) are already available (see prefix).\n# Only import extra std-lib modules or modules available in the environment, i.e: torch, scipy, sklearn (sub-)modules you actually use.\nfrom torch_geometric.data import Data\nfrom torch_geometric import nn as pyg_nn\nfrom sklearn.metrics import roc_auc_score\nimport math\n\n#  -------- (OPTIONAL) CUSTOM DATASET  --------\nclass CustomDataset(Dataset):\n    def __init__(self, events, pre, train: bool = True, **kwargs):\n        self.data_list, self.labels = events\n        self.labels = torch.as_tensor(self.labels) if not torch.is_tensor(self.labels) else self.labels\n        for i, data in enumerate(self.data_list):\n            data.y = self.labels[i]\n    def __len__(self):\n        return len(self.data_list)\n    def __getitem__(self, idx):\n        return self.data_list[idx]\n\n# ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        pass\n\n    def make_loader_cfg(self) -> dict:\n        return {\n            \"dataset_builder\": \"llm_script:CustomDataset\",   \n            \"dataset_kwargs\": {},\n            \"loader_class\": \"torch_geometric.loader:DataLoader\",\n            \"batch_size\": 128,\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": False,\n            \"collate\": None,\n            \"extra_loader_kwargs\": {},\n            \"eval_overrides\": {\"shuffle\": False, \n                                \"batch_size\": 128}\n        }\n\n    def fit(self, X, y=None):\n        return self\n\n    def transform(self, X):\n        data_list = []\n        for i in range(X.shape[0]):\n            x = X[i]\n            et_miss = x[0]\n            phi_et = x[1]\n            objects = []\n            for j in range(18):\n                start = 2 + 5 * j\n                obj_id = x[start]\n                if obj_id == 0.0: continue\n                E = x[start + 1]\n                pT = x[start + 2]\n                eta = x[start + 3]\n                phi = x[start + 4]\n                objects.append((obj_id, E, pT, eta, phi))\n            num_nodes = len(objects)\n            node_features = torch.tensor([[obj_id, E, pT, eta, phi] for obj_id, E, pT, eta, phi in objects], dtype=torch.float32)\n            if num_nodes < 2:\n                edge_index = torch.empty(2, 0, dtype=torch.long)\n                edge_attr = torch.empty(0, 2, dtype=torch.float32)\n            else:\n                idx = torch.arange(num_nodes)\n                edge_index_u = torch.combinations(idx, r=2, with_replacement=False).t()\n                edge_index = torch.cat([edge_index_u, edge_index_u[[1, 0]]], dim=1)\n                edge_attr_list = []\n                for pair_idx in range(edge_index_u.shape[1]):\n                    i, j = edge_index_u[0, pair_idx].item(), edge_index_u[1, pair_idx].item()\n                    _, Ei, pTi, etai, phii = objects[i]\n                    _, Ej, pTj, etaj, phij = objects[j]\n                    pxi = pTi * math.cos(phii)\n                    pyi = pTi * math.sin(phii)\n                    pzi = pTi * math.sinh(etai)\n                    pxj = pTj * math.cos(phij)\n                    pyj = pTj * math.sin(phij)\n                    pzj = pTj * math.sinh(etaj)\n                    p_tot_x = pxi + pxj\n                    p_tot_y = pyi + pyj\n                    p_tot_z = pzi + pzj\n                    E_tot = Ei + Ej\n                    m2 = E_tot**2 - p_tot_x**2 - p_tot_y**2 - p_tot_z**2\n                    m_ij = math.sqrt(max(0.0, m2.item()))\n                    deta = etai - etaj\n                    dphi = phii - phij\n                    dphi_wrapped = math.atan2(math.sin(dphi), math.cos(dphi))\n                    dr = math.sqrt(deta**2 + dphi_wrapped**2)\n                    edge_attr_list.append([m_ij, dr])\n                edge_attr = torch.tensor(edge_attr_list, dtype=torch.float32)\n            data_list.append(Data(x=node_features, edge_index=edge_index, edge_attr=edge_attr))\n        return data_list\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# ---------- MODEL ARCHITECTURE ----------\nclass BinaryClassifier(nn.Module):\n    def __init__(self, sample_object):\n        super().__init__()\n        self.node_input_dim = sample_object.x.shape[1]\n        self.edge_dim = sample_object.edge_attr.shape[1]\n        self.conv1 = pyg_nn.TransformerConv(in_channels=self.node_input_dim, out_channels=128, edge_dim=self.edge_dim, heads=8)\n        self.conv2 = pyg_nn.TransformerConv(128, 128, edge_dim=self.edge_dim, heads=8)\n        self.conv3 = pyg_nn.TransformerConv(128, 128, edge_dim=self.edge_dim, heads=8)\n        self.pool = pyg_nn.global_mean_pool\n        self.dropout = nn.Dropout(0.3)\n        self.fc1 = nn.Linear(128, 64)\n        self.fc2 = nn.Linear(64, 1)\n\n    def forward(self, batch):\n        x = batch.x\n        x = self.conv1(x, batch.edge_index, batch.edge_attr)\n        x = torch.relu(x)\n        x = self.dropout(x)\n        x = self.conv2(x, batch.edge_index, batch.edge_attr)\n        x = torch.relu(x)\n        x = self.dropout(x)\n        x = self.conv3(x, batch.edge_index, batch.edge_attr)\n        x = torch.relu(x)\n        x = self.pool(x, batch.batch)\n        x = torch.relu(self.fc1(x))\n        out = self.fc2(x).squeeze(-1)\n        return out\n\ndef make_model(example_object):\n    return BinaryClassifier(example_object)\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 50\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-5)\n    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.5)\n    criterion = nn.BCEWithLogitsLoss()\n    best_auc = 0.0\n    patience = 15\n    wait = 0\n    best_model = None\n    train_loss_list = []\n    val_loss_list = []\n    train_acc_list = []\n    val_acc_list = []\n    for epoch in range(epochs):\n        model.train()\n        total_loss = 0.0\n        correct = 0\n        total = 0\n        all_preds = []\n        all_labels = []\n        for batch in train_loader:\n            batch = batch.to(device)\n            optimizer.zero_grad()\n            out = model(batch)\n            loss = criterion(out, batch.y.float())\n            loss.backward()\n            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)\n            optimizer.step()\n            total_loss += loss.item()\n            probs = torch.sigmoid(out)\n            preds = probs > 0.5\n            correct += (preds == batch.y).sum().item()\n            total += batch.y.size(0)\n            all_preds.extend(probs.detach().cpu().numpy())\n            all_labels.extend(batch.y.cpu().numpy())\n        acc = correct / total if total > 0 else 0.0\n        auc = roc_auc_score(all_labels, all_preds)\n        train_loss_list.append(total_loss / len(train_loader))\n        train_acc_list.append(acc)\n        model.eval()\n        val_loss = 0.0\n        val_correct = 0\n        val_total = 0\n        val_preds = []\n        val_labels = []\n        with torch.no_grad():\n            for batch in val_loader:\n                batch = batch.to(device)\n                out = model(batch)\n                loss = criterion(out, batch.y.float())\n                val_loss += loss.item()\n                probs = torch.sigmoid(out)\n                preds = probs > 0.5\n                val_correct += (preds == batch.y).sum().item()\n                val_total += batch.y.size(0)\n                val_preds.extend(probs.cpu().numpy())\n                val_labels.extend(batch.y.cpu().numpy())\n        val_acc = val_correct / val_total if val_total > 0 else 0.0\n        val_auc = roc_auc_score(val_labels, val_preds) if len(val_labels) > 1 and len(set(val_labels)) > 1 else 0.5\n        val_loss_list.append(val_loss / len(val_loader))\n        val_acc_list.append(val_acc)\n        scheduler.step()\n        if val_auc > best_auc:\n            best_auc = val_auc\n            best_model = model.state_dict().copy()\n            wait = 0\n        else:\n            wait += 1\n            if wait >= patience:\n                break\n    model.load_state_dict(best_model)\n    return model, train_loss_list, val_loss_list, train_acc_list, val_acc_listoprene.deserialize",
+    "reasoning": "",
+    "Outer_attempt": 1
+  },
+  "StaticChecks": {
+    "__timestamp": "2026-01-06T22:51:14Z",
+    "PyLint": {
+      "passed": false,
+      "messages": [
+        {
+          "type": "error",
+          "module": "script_x-ai_grok-code-fast-1_2351_1",
+          "obj": "train_model",
+          "line": 259,
+          "column": 66,
+          "endLine": 259,
+          "endColumn": 84,
+          "path": "outputs\\01-06\\FOURTOPS\\Q2\\script_x-ai_grok-code-fast-1_2351_1.py",
+          "symbol": "undefined-variable",
+          "message": "Undefined variable 'val_acc_listoprene'",
+          "message-id": "E0602"
+        }
+      ]
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2026-01-06T22:51:14Z",
+        "metrics": {
+          ".\\outputs\\01-06\\FOURTOPS\\Q2\\script_x-ai_grok-code-fast-1_2351_1.py": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 279,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 279,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  }
+}

@@ -5,7 +5,7 @@ from challenges.challenges import Challenge, Question
 fourtop_challenge = Challenge(
     name = "FOURTOPS",
 
-    version = "v2.3.0",
+    version = "v2.4.1",
 
     dataset = {
     "X_train": "./challenges/FOURTOPS/data/train/X_train.csv",
@@ -53,9 +53,10 @@ import os, sys, torch, torch_geometric, gc, json
 import pandas as pd, numpy as np
 from torch import nn
 from torch.utils.data import Dataset
-from utils.llm_io import normalise_batch, assert_binary_output, build_dataset, build_dataloader
+from utils.llm_io import assert_binary_output, build_dataset, build_dataloader
 from utils.loaderspec import build_spec_from_preproc, enforce_pyg_policy
-from utils.suffix_utils import base_from_argv0, plot_train_val, persist_artefacts
+from utils.suffix_utils import base_from_argv0, plot_train_val, persist_artefacts, to_python
+from challenges.FOURTOPS.utils_fourtops import detect_and_assert_lane_fourtops, make_view_by_lane_fourtops, dryrun_finite_check_fourtops
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 if device.type == "cuda":
@@ -81,8 +82,13 @@ def load_data():
 class FourTopsDataset(Dataset):
     def __init__(self, events, pre, train: bool = True, **kwargs):
         X, y = events
-        self.X = pre.transform(X) if pre is not None else X
-        self.y = y
+        X2 = pre.transform(X) if pre is not None else X
+        if not torch.is_tensor(X2):
+            X2 = torch.as_tensor(X2)
+        self.X = X2.float()
+        if not torch.is_tensor(y):
+            y = torch.as_tensor(y)
+        self.y = y.long()
     def __len__(self):
         return int(self.y.shape[0])
     def __getitem__(self, idx):
@@ -141,7 +147,7 @@ class MyPreprocessor:
         pass
 
     def make_loader_cfg(self) -> dict:
-        # LoaderSpec-first: evaluator rebuilds loaders from this.
+        # LoaderSpec-first: evaluator rebuilds loaders from this. Configure as you please.
         return {
             "dataset_builder": "llm_script:FourTopsDataset",   # default harness dataset
             "dataset_kwargs": {},
@@ -152,13 +158,14 @@ class MyPreprocessor:
             "num_workers": 0,
             "pin_memory": False,
 
-            # NO custom collate callables allowed. Choose one: 
-            "collate": None, # (or "ragged_xy" or "identity" - If loader_class is torch_geometric.loader:DataLoader, set "collate": None.)
+            # NO custom collate callables allowed.
+            "collate": None,
 
             "extra_loader_kwargs": {},
 
             # evaluation overrides (optional):
-            "eval_overrides": {"shuffle": False},
+            "eval_overrides": {"shuffle": False, 
+                                "batch_size": 512} # Or whatever you want
         }
 
     def fit(self, X, y=None):
@@ -172,24 +179,37 @@ class MyPreprocessor:
 def make_preprocessor():
     return MyPreprocessor()
 
-# ---------- MODEL DEFINITION ----------
-# Model batch contract:
-#   Your DataLoader batch is NOT guaranteed to be a single Tensor.
-#   Depending your dataset/loader choice, a batch can be:
-#      - (X, y) tuple OR [X, y] list  (common for default PyTorch/PyG collation)
-#      - ragged: X is list[Tensor] and y is list[Tensor] (one Tensor per event)
-#      - multi-input: (X1, X2, ..., y) OR [X1, X2, ..., y]
-#      - dict-like: {"x": X, "y": y} (or inputs/labels variants)
-#      - PyG: torch_geometric.data.Data or torch_geometric.data.Batch
+# ---------- MODEL ARCHITECTURE ----------
+# MODEL I/O BATCH CONTRACT (CHOOSE ONE LANE)
+# You MUST choose exactly one of the two supported input lanes and keep it consistent:
 #
-# ALWAYS adapt the raw batch using:
-#     view = normalise_batch(batch, device=device)
+# --- LANE A: Torch dense batch (default) ---
+# Loader:
+#   - loader_class: "torch.utils.data:DataLoader"
+#   - collate: None
+# Batch from DataLoader:
+#   (Xb, yb) where
+#     Xb: FloatTensor[B, F]
+#     yb: LongTensor[B] (or [B,1])
+# Model forward:
+#   out = model(Xb)
+#   out must be FloatTensor[B] or FloatTensor[B,1] (logits or probabilities)
 #
-# normalise_batch returns a BatchView with:
-#   view.batch_x : the model inputs (Tensor / list[Tensor] / tuple / dict / PyG Batch)
-#   view.batch_y : labels if present, else None
+# --- LANE B: PyTorch Geometric (PyG) graphs ---
+# Loader:
+#   - loader_class: "torch_geometric.loader:DataLoader"
+#   - collate: None
+# Dataset samples MUST be torch_geometric.data.Data with at least:
+#   data.x : FloatTensor[N_i, F]
+#   data.edge_index : LongTensor[2, E_i]   (or equivalent; your model can build edges too)
+#   data.y : LongTensor[1]                (GRAPH-LEVEL label for the event!)
+# Batch from DataLoader:
+#   G : torch_geometric.data.Batch (has G.x, G.edge_index, G.batch, and G.y)
+# Model forward:
+#   out = model(G)
+#   out must be FloatTensor[num_graphs] or FloatTensor[num_graphs,1] (logits or probabilities)
 #
-# IMPORTANT: normalise_batch(..., device=device) moves ALL contained tensors to device (recursively). Do NOT call .to(device) on the raw batch object.
+# Any other batch shapes are NOT supported.
 
 class BinaryClassifier(nn.Module):
     def __init__(self, sample_object):
@@ -211,17 +231,7 @@ EPOCHS = 10   # <LLM: adjust if you wish>
 def train_model(model: nn.Module, train_loader, val_loader, epochs: int):
     # REQUIREMENTS
     #   - Must return: trained_model, train_loss, val_loss, train_acc, val_acc
-    #   - Do NOT:
-    #       - pass "verbose=" to any PyTorch scheduler (not supported in this image).
-    #       - batch = batch.to(device)
-    #       - xb, yb = batch
-    #       - for xb, yb in loader: ...
-
-    # Canonical batch handling (use this inside every loop):
-    # for batch in train_loader:
-    #     view = normalise_batch(batch, device=device)
-    #     xb, yb = view.batch_x, view.batch_y
-    #     out = model(xb)
+    #   - Do NOT pass "verbose=" to any PyTorch scheduler (not supported in this image).
     
     # <LLM: Write code to define training loop, use the code above>
     # <LLM: Implement early stopping if possible>
@@ -240,12 +250,13 @@ def _run(dryrun=False):
 
     # Load & preprocess
     X_train, Y_train, X_val, Y_val = load_data()
+    X_fit, Y_fit = X_train, Y_train
     if dryrun:
         idx = torch.randperm(X_train.shape[0])[:400]
         X_train, Y_train = X_train[idx], Y_train[idx]
-        idx = torch.randperm(X_val.shape[0])[:20]
+        idx = torch.randperm(X_val.shape[0])[:200]
         X_val, Y_val = X_val[idx], Y_val[idx]
-    pre     = make_preprocessor().fit(X_train, Y_train)
+    pre = make_preprocessor().fit(X_fit, Y_fit)
     
     # Build LoaderSpec
     spec = build_spec_from_preproc(pre, script_module="llm_script")
@@ -257,13 +268,16 @@ def _run(dryrun=False):
     train_loader = build_dataloader(spec, train_ds, is_eval=False)
     val_loader   = build_dataloader(spec, val_ds,   is_eval=True)
 
-    # Build model
+    # Build batch and check
     first_batch = next(iter(train_loader))
-    view        = normalise_batch(first_batch, device=device)
-    model       = make_model(view.batch_x).to(device)
+    mode = detect_and_assert_lane_fourtops(spec, first_batch)
+    view = make_view_by_lane_fourtops(mode, first_batch, device)
+
+    # Build model
+    model = make_model(view.batch_x).to(device)
 
     # Train model
-    n_epochs = 1 if dryrun else globals().get("EPOCHS", 10)
+    n_epochs = 10 if dryrun else globals().get("EPOCHS", 10)
     try:
         trained_model, tr_loss, va_loss, tr_acc, va_acc = train_model(
             model, train_loader, val_loader, epochs=n_epochs)
@@ -274,8 +288,10 @@ def _run(dryrun=False):
     # Dry-run safety check
     if dryrun:
         try:
+            dryrun_finite_check_fourtops(trained_model, spec, val_loader, device, batches=10)
             with torch.no_grad():
-                view = normalise_batch(first_batch, device=device)
+                mode = detect_and_assert_lane_fourtops(spec, first_batch)
+                view = make_view_by_lane_fourtops(mode, first_batch, device)
                 out  = trained_model(view.batch_x)
                 scores, kind = assert_binary_output(view, out)
         except Exception as e:
@@ -298,6 +314,7 @@ def _run(dryrun=False):
             "train_acc":  tr_acc    if tr_acc else None,
             "val_acc":    va_acc    if va_acc else None,
         }
+        summary = to_python(summary)
         print("#TRAIN_METRICS#" + json.dumps(summary))
 
 if "__main__" not in sys.modules:
@@ -310,21 +327,21 @@ if __name__ == "__main__":
 """,
 
     questions = [
-#        Question("Q1", r""" ** IMPORTANT: Your Challenge **
-#Write Python code for a binary classification model focusing on maximising the AUC using the code template above. You may freely choose any pre-processing methods and techniques as well as model architecture and training conventions. Do absolutely everything in your power to achieve the highest possible AUC.                 
-#""")
-#,
-
-       Question("Q2", r"""** IMPORTANT: Your Challenge **
-Write Python code for a binary classification model focusing on maximising the AUC using the code template above. You may freely choose any pre-processing methods and techniques as well as model architecture and training conventions.
-                
-You may optionally leverage the following particle-physics insights (strongly recommended if possible):
-
-Pairwise Particle Features: It has been shown that explicitly computing pairwise particle features, particularly the invariant mass $m_{ij} = $ and the angular distance $\delta R_{ij} = \sqrt{(\eta_i - \eta_j)^2 + (\phi_i - \phi_j)^2}$ can significantly enhance the discriminative power of your model.
-                
-Model Architecture: It has been shown that Transformer models and Graph Neural Networks are particularly well-suited for this task.
-
-Do absolutely everything in your power to achieve the highest possible AUC.
+        Question("Q1", r""" ** IMPORTANT: Your Challenge **
+Write Python code for a binary classification model focusing on maximising the AUC using the code template above. You may freely choose any pre-processing methods and techniques as well as model architecture and training conventions. Do absolutely everything in your power to achieve the highest possible AUC.                 
 """)
+#,
+#
+#       Question("Q2", r"""** IMPORTANT: Your Challenge **
+#Write Python code for a binary classification model focusing on maximising the AUC using the code template above. You may freely choose any pre-processing methods and techniques as well as model architecture and training conventions.
+#                
+#You may optionally leverage the following particle-physics insights (strongly recommended if possible):
+#
+#Pairwise Particle Features: It has been shown that explicitly computing pairwise particle features, particularly the invariant mass $m_{ij} = \sqrt{(p_i + p_j)^2} = \sqrt{(E_i + E_j)^2 - \abs((p_i^2 + p_j^2))}$ and the angular distance $\delta R_{ij} = \sqrt{(\eta_i - \eta_j)^2 + (\phi_i - \phi_j)^2}$ can significantly enhance the discriminative power of your model.
+#                
+#Model Architecture: It has been shown that Transformer models and Graph Neural Networks are particularly well-suited for this task.
+#
+#Do absolutely everything in your power to achieve the highest possible AUC.
+#""")
 ]
 )

@@ -1,0 +1,85 @@
+{
+  "LLMGeneration": {
+    "model": "deepseek/deepseek-v3.2",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 4449,
+    "prompt_chars": 17785,
+    "response_tokens": 5472,
+    "response_chars": 13877,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.00349947,
+    "generation_ms": 114999,
+    "code": "# ---------- IMPORTS ----------\nimport torch\nimport torch.nn as nn\nimport torch.nn.functional as F\nimport numpy as np\nfrom torch.utils.data import Dataset\nimport torch_geometric\nfrom torch_geometric.data import Data, Batch\nfrom torch_geometric.nn import GCNConv, global_mean_pool, EdgeConv\nfrom torch_geometric.loader import DataLoader as PyGDataLoader\nfrom sklearn.preprocessing import StandardScaler\nfrom sklearn.neighbors import kneighbors_graph\nimport warnings\nwarnings.filterwarnings('ignore')\n\n# ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.scaler = StandardScaler()\n        self.knn_k = 16\n\n    def make_loader_cfg(self) -> dict:\n        return {\n            \"dataset_builder\": \"llm_script:CustomPyGDataset\",\n            \"dataset_kwargs\": {\"preprocessor\": self},\n            \"loader_class\": \"torch_geometric.loader:DataLoader\",\n            \"batch_size\": 32,\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": True,\n            \"collate\": None,\n            \"extra_loader_kwargs\": {},\n            \"eval_overrides\": {\"shuffle\": False, \"batch_size\": 32}\n        }\n\n    def fit(self, Xs):\n        all_features = []\n        for X in Xs[:1000]:  # Use subset for fitting\n            xyz = self._cylindrical_to_cartesian(X)  # [N, 3]\n            features = self._extract_features(X, xyz)  # [N, 9]\n            all_features.append(features)\n        self.scaler.fit(np.vstack(all_features))\n        return self\n\n    def transform(self, X):\n        xyz = self._cylindrical_to_cartesian(X)  # [N, 3]\n        features = self._extract_features(X, xyz)  # [N, 9]\n        scaled = self.scaler.transform(features)  # [N, 9]\n        return torch.FloatTensor(scaled)\n\n    def _cylindrical_to_cartesian(self, X):\n        r, theta, z = X[:, 0], X[:, 1], X[:, 2]\n        x = r * torch.cos(theta)\n        y = r * torch.sin(theta)\n        return torch.stack([x, y, z], dim=1)  # [N, 3]\n\n    def _extract_features(self, X, xyz):\n        r, theta, z, layer = X[:, 0], X[:, 1], X[:, 2], X[:, 3]\n        features = torch.cat([\n            xyz,  # x, y, z [N, 3]\n            X,    # r, theta, z, layer [N, 4]\n            r.unsqueeze(1) * torch.cos(theta).unsqueeze(1),  # x alternative\n            r.unsqueeze(1) * torch.sin(theta).unsqueeze(1),  # y alternative\n            torch.sqrt(r**2 + z**2).unsqueeze(1)  # radius_3d [N, 1]\n        ], dim=1)  # [N, 9]\n        return features.numpy()\n\n    def build_graph(self, X_scaled, xyz):\n        X_np = X_scaled.numpy()\n        xyz_np = xyz.numpy()\n\n        # KNN graph in 3D space\n        adj = kneighbors_graph(xyz_np, self.knn_k, mode='connectivity', include_self=True)\n        edge_index = torch.LongTensor(np.array(adj.nonzero()))  # [2, E]\n\n        # Add reverse edges for undirected graph\n        edge_index = torch.cat([edge_index, edge_index.flip(0)], dim=1)\n        return edge_index\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# Custom PyG Dataset\nclass CustomPyGDataset(Dataset):\n    def __init__(self, events, preprocessor, train=True):\n        self.events = events\n        self.pre = preprocessor\n        self.train = train\n\n    def __len__(self):\n        return len(self.events)\n\n    def __getitem__(self, idx):\n        X_raw, y = self.events[idx]  # X_raw: [N, 4], y: [N]\n        xyz = self.pre._cylindrical_to_cartesian(X_raw)  # [N, 3]\n        X_scaled = self.pre.transform(X_raw)  # [N, 9]\n        edge_index = self.pre.build_graph(X_scaled, xyz)  # [2, E]\n\n        # Create PyG Data object\n        return Data(\n            x=X_scaled,  # [N, 9]\n            edge_index=edge_index,  # [2, E]\n            y=y,  # [N]\n            pos=xyz  # [N, 3]\n        )\n\n# ---------- MODEL ARCHITECTURE ----------\nclass EdgeConvBlock(nn.Module):\n    def __init__(self, in_channels, out_channels):\n        super().__init__()\n        self.conv = EdgeConv(\n            nn.Sequential(\n                nn.Linear(2*in_channels, out_channels),\n                nn.BatchNorm1d(out_channels),\n                nn.ReLU(),\n                nn.Linear(out_channels, out_channels),\n                nn.BatchNorm1d(out_channels),\n                nn.ReLU()\n            ), aggr='max')\n\n    def forward(self, x, edge_index):\n        return self.conv(x, edge_index)\n\nclass HitClassifier(nn.Module):\n    def __init__(self, example_batch_x):\n        super().__init__()\n        # Extract feature dimension from example batch\n        if isinstance(example_batch_x, Batch):\n            in_channels = example_batch_x.x.shape[1]\n        else:\n            in_channels = 9  # From preprocessor\n\n        # Graph convolution layers\n        self.conv1 = EdgeConvBlock(in_channels, 128)\n        self.conv2 = EdgeConvBlock(128, 256)\n        self.conv3 = EdgeConvBlock(256, 512)\n\n        # Global pooling\n        self.pool = global_mean_pool\n\n        # Per-node classifiers\n        self.node_mlp = nn.Sequential(\n            nn.Linear(512 + 128, 256),  # Combine local and global\n            nn.BatchNorm1d(256),\n            nn.ReLU(),\n            nn.Dropout(0.3),\n            nn.Linear(256, 128),\n            nn.BatchNorm1d(128),\n            nn.ReLU(),\n            nn.Linear(128, 64)\n        )\n\n        # Prototype-based classification\n        self.prototype_layer = nn.Linear(64, 32, bias=False)\n        self.temperature = nn.Parameter(torch.tensor(1.0))\n\n    def forward(self, data):\n        x, edge_index, batch = data.x, data.edge_index, data.batch\n\n        # Local features\n        x1 = self.conv1(x, edge_index)  # [N, 128]\n        x2 = self.conv2(x1, edge_index)  # [N, 256]\n        x3 = self.conv3(x2, edge_index)  # [N, 512]\n\n        # Global context\n        global_feat = self.pool(x3, batch)  # [B, 512]\n        global_expanded = global_feat[batch]  # [N, 512]\n\n        # Combine\n        combined = torch.cat([x3, global_expanded], dim=1)  # [N, 512+512]\n        node_features = self.node_mlp(combined)  # [N, 64]\n\n        # Prototype similarity\n        prototypes = self.prototype_layer.weight  # [32, 64]\n        similarities = F.cosine_similarity(\n            node_features.unsqueeze(1),  # [N, 1, 64]\n            prototypes.unsqueeze(0),     # [1, 32, 64]\n            dim=2\n        )  # [N, 32]\n\n        logits = similarities / (self.temperature + 1e-8)\n        return logits, node_features\n\n    def predict_labels(self, batch_x):\n        self.eval()\n        with torch.no_grad():\n            if isinstance(batch_x, list):\n                # Handle ragged batch case (should not happen in PyG lane)\n                batch_x = Batch.from_data_list(batch_x)\n\n            logits, embeddings = self.forward(batch_x)\n\n            # DBSCAN clustering on embeddings\n            from sklearn.cluster import DBSCAN\n            eps = 0.5\n            min_samples = 4\n\n            emb_np = embeddings.cpu().numpy()\n            batch_indices = batch_x.batch.cpu().numpy()\n\n            all_labels = []\n            for batch_idx in range(batch_x.num_graphs):\n                mask = batch_indices == batch_idx\n                emb_batch = emb_np[mask]\n\n                if len(emb_batch) < min_samples:\n                    labels = -np.ones(len(emb_batch), dtype=int)\n                else:\n                    clustering = DBSCAN(eps=eps, min_samples=min_samples, metric='cosine')\n                    labels = clustering.fit_predict(emb_batch)\n                    # Ensure noise is -1\n                    labels[labels == -1] = -1\n\n                all_labels.append(labels)\n\n            # Flatten and return as tensor\n            flat_labels = np.concatenate(all_labels)\n            return torch.from_numpy(flat_labels).to(batch_x.x.device)\n\ndef make_model(example_batch_x):\n    return HitClassifier(example_batch_x)\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 50\n\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    device = next(model.parameters()).device\n    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)\n    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', patience=5, factor=0.5)\n\n    # Loss functions\n    def contrastive_loss(embeddings, batch_idx, margin=1.0):\n        \"\"\"Pull same-track hits together, push different-track apart\"\"\"\n        batch_size = embeddings.shape[0]\n        similarities = torch.cdist(embeddings, embeddings, p=2)  # [N, N]\n\n        # Create mask for same track (excluding noise)\n        same_track = (batch_idx.unsqueeze(1) == batch_idx.unsqueeze(0)) & \\\n                    (batch_idx.unsqueeze(1) > 0) & (batch_idx.unsqueeze(0) > 0)\n\n        # Create mask for different tracks\n        diff_track = (batch_idx.unsqueeze(1) != batch_idx.unsqueeze(0)) & \\\n                    (batch_idx.unsqueeze(1) > 0) & (batch_idx.unsqueeze(0) > 0)\n\n        pos_loss = (similarities * same_track.float()).sum() / (same_track.sum() + 1e-8)\n        neg_loss = F.relu(margin - similarities * diff_track.float()).sum() / (diff_track.sum() + 1e-8)\n\n        return pos_loss + 0.5 * neg_loss\n\n    def classification_loss(logits, y, valid_mask):\n        \"\"\"Cross-entropy for non-noise hits\"\"\"\n        if valid_mask.sum() == 0:\n            return torch.tensor(0.0, device=device)\n\n        # Dynamic class assignment: assign each track unique label within batch\n        unique_tracks = torch.unique(y[valid_mask])\n        track_to_class = {track.item(): i for i, track in enumerate(unique_tracks)}\n\n        class_labels = torch.zeros_like(y)\n        for track, cls in track_to_class.items():\n            class_labels[y == track] = cls\n\n        valid_logits = logits[valid_mask]\n        valid_labels = class_labels[valid_mask]\n\n        return F.cross_entropy(valid_logits, valid_labels.long())\n\n    best_val_acc = 0\n    patience_counter = 0\n    patience = 10\n\n    train_losses, val_losses = [], []\n    train_accs, val_accs = [], []\n\n    for epoch in range(epochs):\n        # Training\n        model.train()\n        epoch_train_loss = 0\n        correct_train = 0\n        total_train = 0\n\n        for batch in train_loader:\n            batch = batch.to(device)\n            optimizer.zero_grad()\n\n            logits, embeddings = model(batch)\n\n            # Valid hits (non-noise)\n            valid_mask = batch.y > 0\n\n            # Combined loss\n            loss_cls = classification_loss(logits, batch.y, valid_mask)\n            loss_cont = contrastive_loss(embeddings, batch.y)\n            loss = loss_cls + 0.1 * loss_cont\n\n            loss.backward()\n            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)\n            optimizer.step()\n\n            epoch_train_loss += loss.item()\n\n            # Training accuracy (track matching)\n            with torch.no_grad():\n                preds = model.predict_labels(batch)\n                for i in range(batch.num_graphs):\n                    mask = batch.batch == i\n                    y_batch = batch.y[mask]\n                    p_batch = preds[mask]\n\n                    # Simple accuracy: require same number of unique tracks\n                    if torch.unique(y_batch[y_batch > 0]).shape[0] == torch.unique(p_batch[p_batch >= 0]).shape[0]:\n                        correct_train += 1\n                    total_train += 1\n\n        # Validation\n        model.eval()\n        epoch_val_loss = 0\n        correct_val = 0\n        total_val = 0\n\n        with torch.no_grad():\n            for batch in val_loader:\n                batch = batch.to(device)\n                logits, embeddings = model(batch)\n\n                valid_mask = batch.y > 0\n                loss_cls = classification_loss(logits, batch.y, valid_mask)\n                loss_cont = contrastive_loss(embeddings, batch.y)\n                loss = loss_cls + 0.1 * loss_cont\n\n                epoch_val_loss += loss.item()\n\n                # Validation accuracy\n                preds = model.predict_labels(batch)\n                for i in range(batch.num_graphs):\n                    mask = batch.batch == i\n                    y_batch = batch.y[mask]\n                    p_batch = preds[mask]\n\n                    if torch.unique(y_batch[y_batch > 0]).shape[0] == torch.unique(p_batch[p_batch >= 0]).shape[0]:\n                        correct_val += 1\n                    total_val += 1\n\n        # Metrics\n        train_loss = epoch_train_loss / len(train_loader)\n        val_loss = epoch_val_loss / len(val_loader)\n        train_acc = correct_train / total_train if total_train > 0 else 0\n        val_acc = correct_val / total_val if total_val > 0 else 0\n\n        train_losses.append(train_loss)\n        val_losses.append(val_loss)\n        train_accs.append(train_acc)\n        val_accs.append(val_acc)\n\n        print(f\"Epoch {epoch+1}/{epochs}: \"\n              f\"Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}, \"\n              f\"Train Acc: {train_acc:.4f}, Val Acc: {val_acc:.4f}\")\n\n        # Early stopping\n        scheduler.step(val_acc)\n        if val_acc > best_val_acc:\n            best_val_acc = val_acc\n            patience_counter = 0\n            best_model_state = model.state_dict().copy()\n        else:\n            patience_counter += 1\n            if patience_counter >= patience:\n                print(f\"Early stopping at epoch {epoch+1}\")\n                model.load_state_dict(best_model_state)\n                break\n\n    return model, train_losses, val_losses, train_accs, val_accs",
+    "reasoning": "",
+    "Outer_attempt": 4
+  },
+  "StaticChecks": {
+    "__timestamp": "2026-01-05T11:48:55Z",
+    "PyLint": {
+      "passed": true,
+      "messages": [
+        {
+          "type": "error",
+          "module": "script_deepseek_deepseek-v3.2_1248_4",
+          "obj": "HitClassifier.forward",
+          "line": 226,
+          "column": 23,
+          "endLine": 230,
+          "endColumn": 9,
+          "path": "outputs\\01-05(2)\\TRACKFORMERS\\Q1\\script_deepseek_deepseek-v3.2_1248_4.py",
+          "symbol": "not-callable",
+          "message": "F.cosine_similarity is not callable",
+          "message-id": "E1102"
+        }
+      ]
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2026-01-05T11:48:55Z",
+        "metrics": {
+          ".\\outputs\\01-05(2)\\TRACKFORMERS\\Q1\\script_deepseek_deepseek-v3.2_1248_4.py": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 370,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 370,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2026-01-05T11:49:12Z",
+    "passed": false,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/01-05(2)/TRACKFORMERS/Q1/script_deepseek_deepseek-v3.2_1248_4.py\nargv2=--dryrun\n",
+      "stderr": "Traceback (most recent call last):\n  File \"/workspace/outputs/01-05(2)/TRACKFORMERS/Q1/script_deepseek_deepseek-v3.2_1248_4.py\", line 517, in <module>\n    _run(dryrun=\"--dryrun\" in sys.argv)\n  File \"/workspace/outputs/01-05(2)/TRACKFORMERS/Q1/script_deepseek_deepseek-v3.2_1248_4.py\", line 442, in _run\n    train_ds     = build_dataset(spec, raw_train, pre, train=True)\n                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/utils/llm_io.py\", line 921, in build_dataset\n    return builder(events, preproc, train=train, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nTypeError: CustomPyGDataset.__init__() got multiple values for argument 'preprocessor'\n"
+    },
+    "return_code": 1
+  }
+}

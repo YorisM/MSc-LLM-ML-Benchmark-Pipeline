@@ -1,0 +1,71 @@
+{
+  "LLMGeneration": {
+    "model": "x-ai/grok-code-fast-1",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 4154,
+    "prompt_chars": 16219,
+    "response_tokens": 5003,
+    "response_chars": 8795,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.00759802,
+    "generation_ms": 27730,
+    "code": "# ---------- IMPORTS ----------\nfrom torch.utils.data import Dataset\nimport torch\nimport torch.nn as nn\nfrom torch_geometric.nn import GATv2Conv, global_mean_pool\nfrom torch_geometric.data import Data\nimport numpy as np\n\n# ----------- PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.obj_id_max = 20  # assume object ids up to 20 or so\n        self.emb_dim = 8\n        self.object_id_embedding = nn.Embedding(self.obj_id_max + 1, self.emb_dim)\n\n    def make_loader_cfg(self) -> dict:\n        return {\n            \"dataset_builder\": \"llm_script:FourTopsDataset\",   # previous, but will be overridden for PyG\n            \"dataset_builder\": \"llm_script:CustomDataset\",  # use custom to return Data\n            \"dataset_kwargs\": {},\n            \"loader_class\": \"torch_geometric.loader:DataLoader\",\n            \"batch_size\": 512,\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": False,\n            \"collate\": None,\n            \"extra_loader_kwargs\": {},\n            \"eval_overrides\": {\"shuffle\": False, \"batch_size\": 512}\n        }\n\n    def fit(self, X, y=None):\n        # No fitting needed for now\n        return self\n\n    def transform(self, X):\n        # X: [N, 92]\n        data_list = []\n        for i in range(X.size(0)):\n            event = X[i]\n            et_miss = event[0]\n            phi_et_miss = event[1]\n            nodes = []\n            momenta = []\n            for j in range(18):\n                start = 2 + j * 5\n                obj_id = event[start].item()\n                if obj_id == 0:  # padding\n                    continue\n                E_ = event[start + 1].item()\n                pT = event[start + 2].item()\n                eta = event[start + 3].item()\n                phi = event[start + 4].item()\n                node_feat = torch.tensor([obj_id, E_, pT, eta, phi, et_miss.item(), phi_et_miss.item()])\n                nodes.append(node_feat)\n                momenta.append({'E': E_, 'pT': pT, 'eta': eta, 'phi': phi})\n            if not nodes:\n                # dummy node if no objects, unlikely\n                dummy = torch.zeros(7)\n                x = dummy.unsqueeze(0)  # [1,7]\n                edge_index = torch.tensor([[0], [0]], dtype=torch.long)  # self loop\n                edge_attr = torch.tensor([[0., 0., 0.]], dtype=torch.float)  # dummy\n            else:\n                num_nodes = len(nodes)\n                x = torch.stack(nodes)  # [num_nodes,7]\n                # full interconnect, skip self\n                edges = [(a, b) for a in range(num_nodes) for b in range(num_nodes) if a != b]\n                edge_index = torch.tensor(edges, dtype=torch.long).t()\n                edge_attrs = []\n                for a, b in edges:\n                    p1 = momenta[a]\n                    p2 = momenta[b]\n                    delta_eta = p1['eta'] - p2['eta']\n                    delta_phi = ((p1['phi'] - p2['phi'] + np.pi) % (2 * np.pi)) - np.pi\n                    # m_ij\n                    e1, e2 = p1['E'], p2['E']\n                    pt1, pt2 = p1['pT'], p2['pT']\n                    eta1, eta2 = p1['eta'], p2['eta']\n                    phi1, phi2 = p1['phi'], p2['phi']\n                    pz1 = pt1 * np.sinh(eta1)\n                    px1 = pt1 * np.cos(phi1)\n                    py1 = pt1 * np.sin(phi1)\n                    pz2 = pt2 * np.sinh(eta2)\n                    px2 = pt2 * np.cos(phi2)\n                    py2 = pt2 * np.sin(phi2)\n                    E_total = e1 + e2\n                    px_total = px1 + px2\n                    py_total = py1 + py2\n                    pz_total = pz1 + pz2\n                    p_total2 = px_total**2 + py_total**2 + pz_total**2\n                    m_ij = np.sqrt(max(0, E_total**2 - p_total2))\n                    edge_attrs.append([delta_eta, delta_phi, m_ij])\n                edge_attr = torch.tensor(edge_attrs, dtype=torch.float)\n            # y will be added in dataset, but here we return the Data without y\n            data = Data(x=x, edge_index=edge_index, edge_attr=edge_attr)\n            data_list.append(data)\n        return data_list  # list of Data\n\nclass CustomDataset(Dataset):\n    def __init__(self, events, pre, train: bool = True, **kwargs):\n        X, y = events  # X is now list of Data\n        self.X = X  # already preprocessed list of Data\n        self.y = torch.as_tensor(y).long()\n    def __len__(self):\n        return len(self.X)\n    def __getitem__(self, idx):\n        data = self.X[idx]\n        data.y = self.y[idx]  # set label\n        return data\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# ---------- MODEL ARCHITECTURE ----------\nclass BinaryClassifier(nn.Module):\n    def __init__(self, sample_object):\n        super().__init__()\n        self.obj_id_max = 20\n        self.emb_dim = 8\n        self.object_id_embedding = nn.Embedding(self.obj_id_max + 1, self.emb_dim)\n        hidden = 64\n        node_base_dim = 6  # E,pT,eta,phi,et_miss,phi_et_miss\n        full_node_dim = self.emb_dim + node_base_dim  # 14\n        self.edge_dim = 3  # delta_eta, delta_phi, m_ij\n        self.batch_norm1 = nn.BatchNorm1d(full_node_dim)\n        self.conv1 = GATv2Conv(full_node_dim, hidden, edge_dim=self.edge_dim, heads=4, dropout=0.2, concat=True, v2=False)\n        self.batch_norm2 = nn.BatchNorm1d(hidden * 4)\n        self.conv2 = GATv2Conv(hidden*4, hidden, edge_dim=self.edge_dim, heads=4, dropout=0.2, concat=True, v2=False)\n        self.pool = global_mean_pool\n        self.dropout = nn.Dropout(0.5)\n        self.fc = nn.Linear(hidden * 4, 1)\n\n    def forward(self, batch_x):\n        # G.x : [total_nodes, 7]\n        x = batch_x.x\n        edge_index = batch_x.edge_index\n        edge_attr = batch_x.edge_attr\n\n        obj_id = x[:, 0].long().clamp(0, self.obj_id_max)  # safety\n        emb = self.object_id_embedding(obj_id)\n        obj_features = x[:, 1:]  # [nodes,6]\n        x_emb = torch.cat([emb, obj_features], dim=1)  # [nodes,14]\n\n        x_emb = self.batch_norm1(x_emb)\n        x_emb = torch.relu(x_emb)\n        x_emb = self.conv1(x_emb, edge_index, edge_attr)\n        x_emb = self.batch_norm2(x_emb)\n        x_emb = torch.relu(x_emb)\n        x_emb = self.conv2(x_emb, edge_index, edge_attr)\n        x_emb = torch.relu(x_emb)\n\n        pooled = self.pool(x_emb, batch_x.batch)\n        pooled = self.dropout(pooled)\n        out = self.fc(pooled)\n        return out\n\ndef make_model(example_object):\n    return BinaryClassifier(example_object)\n\n# ---------- MODEL TRAINING ----------\nfrom torch.optim.lr_scheduler import ReduceLROnPlateau\nimport torch.optim as optim\n\nEPOCHS = 25\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    criterion = nn.BCEWithLogitsLoss()\n    optimizer = optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-4)\n    scheduler = ReduceLROnPlateau(optimizer, mode='max', patience=5, factor=0.5)  # for VIC AUC-ish, but we have loss\n\n    train_losses = []\n    val_losses = []\n    train_accs = []\n    val_accs = []\n\n    best_val_loss = float('inf')\n    patience = 10\n    trigger = 0\n\n    for epoch in range(epochs):\n        model.train()\n        train_loss = 0.0\n        correct = 0\n        total = 0\n        for data in train_loader:\n            data = data.to(device)\n            optimizer.zero_grad()\n            outputs = model(data)\n            loss = criterion(outputs.squeeze(), data.y.float())\n            loss.backward()\n            optimizer.step()\n            train_loss += loss.item() * data.y.size(0)\n            preds = torch.sigmoid(outputs).squeeze() > 0.5\n            correct += (preds == data.y).sum().item()\n            total += data.y.size(0)\n        train_loss /= total\n        train_acc = correct / total\n        train_losses.append(train_loss)\n        train_accs.append(train_acc)\n\n        model.eval()\n        val_loss = 0.0\n        correct = 0\n        total = 0\n        with torch.no_grad():\n            for data in val_loader:\n                data = data.to(device)\n                outputs = model(data)\n                loss = criterion(outputs.squeeze(), data.y.float())\n                val_loss += loss.item() * data.y.size(0)\n                preds = torch.sigmoid(outputs).squeeze() > 0.5\n                correct += (preds == data.y).sum().item()\n                total += data.y.size(0)\n        val_loss /= total\n        val_acc = correct / total\n        val_losses.append(val_loss)\n        val_accs.append(val_acc)\n\n        scheduler.step(val_loss)  # for loss\n\n        if val_loss < best_val_loss:\n            best_val_loss = val_loss\n            trigger = 0\n            # save best model, but since no save, keep training\n        else:\n            trigger += 1\n            if trigger >= patience:\n                break\n\n    return model, train_losses, val_losses, train_accs, val_accs",
+    "reasoning": "",
+    "Outer_attempt": 2
+  },
+  "StaticChecks": {
+    "__timestamp": "2026-01-05T20:03:42Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2026-01-05T20:03:42Z",
+        "metrics": {
+          ".\\outputs\\01-05(2)\\FOURTOPS\\Q2\\script_x-ai_grok-code-fast-1_2103_2.py": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 289,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 289,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2026-01-05T20:04:01Z",
+    "passed": false,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/01-05(2)/FOURTOPS/Q2/script_x-ai_grok-code-fast-1_2103_2.py\nargv2=--dryrun\n",
+      "stderr": "Traceback (most recent call last):\n  File \"/workspace/outputs/01-05(2)/FOURTOPS/Q2/script_x-ai_grok-code-fast-1_2103_2.py\", line 361, in <module>\n    _run(dryrun=\"--dryrun\" in sys.argv)\n  File \"/workspace/outputs/01-05(2)/FOURTOPS/Q2/script_x-ai_grok-code-fast-1_2103_2.py\", line 312, in _run\n    mode = detect_and_assert_lane_fourtops(spec, first_batch)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/challenges/FOURTOPS/utils_fourtops.py\", line 132, in detect_and_assert_lane_fourtops\n    _assert_pyg_graph_batch_fourtops(first_batch)\n  File \"/workspace/challenges/FOURTOPS/utils_fourtops.py\", line 61, in _assert_pyg_graph_batch_fourtops\n    raise TypeError(f\"FOURTOPS PyG lane requires a PyG Data/Batch object. Got {type(batch).__name__}\")\nTypeError: FOURTOPS PyG lane requires a PyG Data/Batch object. Got Tensor\n"
+    },
+    "return_code": 1
+  }
+}

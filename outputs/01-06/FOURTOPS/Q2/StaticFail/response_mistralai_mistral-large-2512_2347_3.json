@@ -1,0 +1,102 @@
+{
+  "LLMGeneration": {
+    "model": "mistralai/mistral-large-2512",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 4260,
+    "prompt_chars": 16219,
+    "response_tokens": 2962,
+    "response_chars": 11468,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.006573,
+    "generation_ms": 50218,
+    "code": "# ---------- IMPORTS ----------\nfrom sklearn.preprocessing import RobustScaler\nfrom torch.optim import AdamW\nfrom torch.optim.lr_scheduler import ReduceLROnPlateau\nfrom sklearn.metrics import roc_auc_score\nimport torch.nn.functional as F\nfrom torch_geometric.nn import global_mean_pool, global_max_pool\nfrom torch_geometric.nn import GATv2Conv\nfrom torch_geometric.data import Data\nfrom torch_geometric.loader import DataLoader as PyGDataLoader\nimport math\n\n# ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.scaler = RobustScaler()\n        self.max_objects = 18\n        self.obj_feature_size = 5\n        self.global_feature_size = 2\n        self.total_features = self.global_feature_size + self.max_objects * self.obj_feature_size\n\n    def make_loader_cfg(self) -> dict:\n        return {\n            \"dataset_builder\": \"llm_script:FourTopsDataset\",\n            \"dataset_kwargs\": {},\n\n            \"loader_class\": \"torch_geometric.loader:DataLoader\",\n            \"batch_size\": 256,\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": False,\n\n            \"collate\": None,\n\n            \"extra_loader_kwargs\": {},\n\n            \"eval_overrides\": {\"shuffle\": False,\n                               \"batch_size\": 256}\n        }\n\n    def fit(self, X, y=None):\n        # Extract global features (E_T_miss, phi_Et_miss)\n        global_features = X[:, :2].numpy()\n        self.scaler.fit(global_features)\n        return self\n\n    def transform(self, X):\n        # X shape: [N, 92]\n        N = X.shape[0]\n\n        # Scale global features\n        global_features = X[:, :2].numpy()\n        global_features_scaled = self.scaler.transform(global_features)\n        global_features_tensor = torch.from_numpy(global_features_scaled).float()\n\n        # Process object features\n        object_features = X[:, 2:].reshape(N, self.max_objects, self.obj_feature_size)  # [N, 18, 5]\n\n        # Extract object types and kinematic features\n        obj_types = object_features[:, :, 0].long()  # [N, 18]\n        kinematic_features = object_features[:, :, 1:]  # [N, 18, 4]\n\n        # Create mask for valid objects (non-zero energy)\n        valid_mask = (kinematic_features[:, :, 0] > 0)  # [N, 18]\n\n        # Create PyG Data objects\n        data_list = []\n        for i in range(N):\n            # Get valid objects for this event\n            valid_idx = valid_mask[i].nonzero(as_tuple=True)[0]\n            num_valid = len(valid_idx)\n\n            if num_valid == 0:\n                # Handle edge case with no valid objects\n                x = torch.zeros((1, 16), dtype=torch.float32)\n                edge_index = torch.empty((2, 0), dtype=torch.long)\n            else:\n                # Get kinematic features for valid objects\n                kin_valid = kinematic_features[i, valid_idx]  # [num_valid, 4]\n\n                # Create node features: [E, pT, eta, phi, E^2, pT^2, eta^2, phi^2, log(E), log(pT)]\n                E = kin_valid[:, 0]\n                pT = kin_valid[:, 1]\n                eta = kin_valid[:, 2]\n                phi = kin_valid[:, 3]\n\n                node_features = torch.cat([\n                    kin_valid,\n                    E.unsqueeze(1)**2,\n                    pT.unsqueeze(1)**2,\n                    eta.unsqueeze(1)**2,\n                    phi.unsqueeze(1)**2,\n                    torch.log(E.unsqueeze(1) + 1e-8),\n                    torch.log(pT.unsqueeze(1) + 1e-8)\n                ], dim=1)  # [num_valid, 12]\n\n                # Add pairwise features\n                num_nodes = node_features.shape[0]\n                pairwise_features = []\n\n                for j in range(num_nodes):\n                    for k in range(j+1, num_nodes):\n                        # Invariant mass\n                        E_j, E_k = E[j], E[k]\n                        px_j = pT[j] * torch.cos(phi[j])\n                        py_j = pT[j] * torch.sin(phi[j])\n                        pz_j = pT[j] * torch.sinh(eta[j])\n                        px_k = pT[k] * torch.cos(phi[k])\n                        py_k = pT[k] * torch.sin(phi[k])\n                        pz_k = pT[k] * torch.sinh(eta[k])\n\n                        E_tot = E_j + E_k\n                        px_tot = px_j + px_k\n                        py_tot = py_j + py_k\n                        pz_tot = pz_j + pz_k\n\n                        m_inv_sq = E_tot**2 - (px_tot**2 + py_tot**2 + pz_tot**2)\n                        m_inv = torch.sqrt(torch.clamp(m_inv_sq, min=0))\n\n                        # Delta R\n                        delta_eta = eta[j] - eta[k]\n                        delta_phi = torch.min(\n                            torch.abs(phi[j] - phi[k]),\n                            2 * math.pi - torch.abs(phi[j] - phi[k])\n                        )\n                        delta_R = torch.sqrt(delta_eta**2 + delta_phi**2)\n\n                        pairwise_features.append(torch.tensor([\n                            m_inv, delta_R,\n                            E_j * E_k, pT[j] * pT[k],\n                            torch.abs(eta[j] - eta[k]),\n                            torch.abs(phi[j] - phi[k])\n                        ]))\n\n                if pairwise_features:\n                    pairwise_features = torch.stack(pairwise_features)  # [num_pairs, 6]\n                    # Create edge_index for fully connected graph\n                    edge_index = torch.combinations(torch.arange(num_nodes), r=2).t()\n                    edge_index = torch.cat([edge_index, edge_index.flip(0)], dim=1)  # [2, 2*num_pairs]\n                    edge_attr = torch.cat([\n                        pairwise_features,\n                        pairwise_features\n                    ], dim=0)  # [2*num_pairs, 6]\n                else:\n                    edge_index = torch.empty((2, 0), dtype=torch.long)\n                    edge_attr = torch.empty((0, 6), dtype=torch.float32)\n\n                # Add global features to each node\n                global_expanded = global_features_tensor[i].unsqueeze(0).expand(num_valid, -1)\n                x = torch.cat([node_features, global_expanded], dim=1)  # [num_valid, 14]\n\n            # Create PyG Data object\n            data = Data(\n                x=x,\n                edge_index=edge_index,\n                edge_attr=edge_attr,\n                y=torch.tensor([0 if y is None else y[i]], dtype=torch.long)\n            )\n            data_list.append(data)\n\n        return data_list\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# ---------- MODEL ARCHITECTURE ----------\nclass BinaryClassifier(nn.Module):\n    def __init__(self, sample_object):\n        super().__init__()\n\n        # Node feature size: 14 (12 kinematic + 2 global)\n        # Edge feature size: 6\n        self.node_encoder = nn.Sequential(\n            nn.Linear(14, 64),\n            nn.BatchNorm1d(64),\n            nn.ReLU(),\n            nn.Linear(64, 64),\n            nn.BatchNorm1d(64),\n            nn.ReLU()\n        )\n\n        self.edge_encoder = nn.Sequential(\n            nn.Linear(6, 32),\n            nn.ReLU(),\n            nn.Linear(32, 32)\n        )\n\n        self.gat1 = GATv2Conv(64, 64, heads=4, edge_dim=32, dropout=0.1)\n        self.gat2 = GATv2Conv(64 * 4, 64, heads=4, edge_dim=32, dropout=0.1)\n        self.gat3 = GATv2Conv(64 * 4, 64, edge_dim=32, dropout=0.1)\n\n        self.readout = nn.Sequential(\n            nn.Linear(64 * 2, 128),\n            nn.BatchNorm1d(128),\n            nn.ReLU(),\n            nn.Dropout(0.2),\n            nn.Linear(128, 64),\n            nn.BatchNorm1d(64),\n            nn.ReLU(),\n            nn.Dropout(0.2),\n            nn.Linear(64, 1)\n        )\n\n    def forward(self, batch):\n        # batch is a PyG Batch object\n        x = batch.x  # [num_nodes, 14]\n        edge_index = batch.edge_index  # [2, num_edges]\n        edge_attr = batch.edge_attr  # [num_edges, 6]\n        batch_idx = batch.batch  # [num_nodes]\n\n        # Encode node and edge features\n        x = self.node_encoder(x)  # [num_nodes, 64]\n        edge_attr = self.edge_encoder(edge_attr)  # [num_edges, 32]\n\n        # GAT layers\n        x = F.relu(self.gat1(x, edge_index, edge_attr))\n        x = F.relu(self.gat2(x, edge_index, edge_attr))\n        x = F.relu(self.gat3(x, edge_index, edge_attr))\n\n        # Global pooling\n        x_mean = global_mean_pool(x, batch_idx)  # [batch_size, 64]\n        x_max = global_max_pool(x, batch_idx)  # [batch_size, 64]\n        x = torch.cat([x_mean, x_max], dim=1)  # [batch_size, 128]\n\n        # Readout\n        logits = self.readout(x)  # [batch_size, 1]\n        return logits.squeeze(1)\n\ndef make_model(example_object):\n    return BinaryClassifier(example_object)\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 30\n\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    device = next(model.parameters()).device\n    optimizer = AdamW(model.parameters(), lr=3e-4, weight_decay=1e-5)\n    scheduler = ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=3, verbose=True)\n\n    best_auc = 0\n    best_model_state = None\n    train_losses = []\n    val_losses = []\n    train_aucs = []\n    val_aucs = []\n\n    for epoch in range(epochs):\n        model.train()\n        train_loss = 0\n        train_preds = []\n        train_targets = []\n\n        for batch in train_loader:\n            batch = batch.to(device)\n            optimizer.zero_grad()\n\n            logits = model(batch)\n            loss = F.binary_cross_entropy_with_logits(logits, batch.y.float())\n\n            loss.backward()\n            optimizer.step()\n\n            train_loss += loss.item()\n            train_preds.append(torch.sigmoid(logits).detach().cpu())\n            train_targets.append(batch.y.detach().cpu())\n\n        train_loss /= len(train_loader)\n        train_preds = torch.cat(train_preds).numpy()\n        train_targets = torch.cat(train_targets).numpy()\n        train_auc = roc_auc_score(train_targets, train_preds)\n\n        # Validation\n        model.eval()\n        val_loss = 0\n        val_preds = []\n        val_targets = []\n\n        with torch.no_grad():\n            for batch in val_loader:\n                batch = batch.to(device)\n                logits = model(batch)\n                loss = F.binary_cross_entropy_with_logits(logits, batch.y.float())\n\n                val_loss += loss.item()\n                val_preds.append(torch.sigmoid(logits).detach().cpu())\n                val_targets.append(batch.y.detach().cpu())\n\n        val_loss /= len(val_loader)\n        val_preds = torch.cat(val_preds).numpy()\n        val_targets = torch.cat(val_targets).numpy()\n        val_auc = roc_auc_score(val_targets, val_preds)\n\n        # Update scheduler\n        scheduler.step(val_auc)\n\n        # Save best model\n        if val_auc > best_auc:\n            best_auc = val_auc\n            best_model_state = model.state_dict()\n\n        train_losses.append(train_loss)\n        val_losses.append(val_loss)\n        train_aucs.append(train_auc)\n        val_aucs.append(val_auc)\n\n        print(f\"Epoch {epoch+1}/{epochs} - Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}, \"\n              f\"Train AUC: {train_auc:.4f}, Val AUC: {val_auc:.4f}\")\n\n        # Early stopping\n        if optimizer.param_groups[0]['lr'] < 1e-6:\n            print(\"Learning rate too small, stopping early\")\n            break\n\n    # Load best model\n    if best_model_state is not None:\n        model.load_state_dict(best_model_state)\n\n    return model, train_losses, val_losses, train_aucs, val_aucs",
+    "reasoning": "",
+    "Outer_attempt": 3
+  },
+  "StaticChecks": {
+    "__timestamp": "2026-01-06T22:47:40Z",
+    "PyLint": {
+      "passed": false,
+      "messages": [
+        {
+          "type": "error",
+          "module": "script_mistralai_mistral-large-2512_2347_3",
+          "obj": "MyPreprocessor.transform",
+          "line": 212,
+          "column": 26,
+          "endLine": 212,
+          "endColumn": 35,
+          "path": "outputs\\01-06\\FOURTOPS\\Q2\\script_mistralai_mistral-large-2512_2347_3.py",
+          "symbol": "possibly-used-before-assignment",
+          "message": "Possibly using variable 'edge_attr' before assignment",
+          "message-id": "E0606"
+        },
+        {
+          "type": "error",
+          "module": "script_mistralai_mistral-large-2512_2347_3",
+          "obj": "MyPreprocessor.transform",
+          "line": 213,
+          "column": 37,
+          "endLine": 213,
+          "endColumn": 38,
+          "path": "outputs\\01-06\\FOURTOPS\\Q2\\script_mistralai_mistral-large-2512_2347_3.py",
+          "symbol": "undefined-variable",
+          "message": "Undefined variable 'y'",
+          "message-id": "E0602"
+        },
+        {
+          "type": "error",
+          "module": "script_mistralai_mistral-large-2512_2347_3",
+          "obj": "MyPreprocessor.transform",
+          "line": 213,
+          "column": 52,
+          "endLine": 213,
+          "endColumn": 53,
+          "path": "outputs\\01-06\\FOURTOPS\\Q2\\script_mistralai_mistral-large-2512_2347_3.py",
+          "symbol": "undefined-variable",
+          "message": "Undefined variable 'y'",
+          "message-id": "E0602"
+        }
+      ]
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2026-01-06T22:47:40Z",
+        "metrics": {
+          ".\\outputs\\01-06\\FOURTOPS\\Q2\\script_mistralai_mistral-large-2512_2347_3.py": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 321,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 321,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  }
+}

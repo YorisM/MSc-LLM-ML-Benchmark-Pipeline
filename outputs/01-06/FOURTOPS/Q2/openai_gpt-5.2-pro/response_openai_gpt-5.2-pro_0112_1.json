@@ -1,0 +1,164 @@
+{
+  "LLMGeneration": {
+    "model": "openai/gpt-5.2-pro",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 4020,
+    "prompt_chars": 16219,
+    "response_tokens": 11113,
+    "response_chars": 14829,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 1.951404,
+    "generation_ms": 703448,
+    "code": "import math\nimport contextlib\nimport numpy as np\nimport torch\nfrom torch import nn\nimport torch.nn.functional as F\nfrom sklearn.metrics import roc_auc_score\n\n\nclass MyPreprocessor:\n    def __init__(self):\n        self._fitted = False\n\n    def make_loader_cfg(self) -> dict:\n        use_cuda = torch.cuda.is_available()\n        bs = 1024 if use_cuda else 512\n        return {\n            \"dataset_builder\": \"llm_script:FourTopsDataset\",\n            \"dataset_kwargs\": {},\n            \"loader_class\": \"torch.utils.data:DataLoader\",\n            \"batch_size\": bs,\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": bool(use_cuda),\n            \"collate\": None,\n            \"extra_loader_kwargs\": {},\n            \"eval_overrides\": {\"shuffle\": False, \"batch_size\": bs},\n        }\n\n    def fit(self, X, y=None):\n        self._fitted = True\n        return self\n\n    def transform(self, X):\n        # Keep raw physics values intact (for invariant mass construction in the model).\n        # Just sanitize NaNs/Infs deterministically.\n        if torch.is_tensor(X):\n            X2 = torch.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)\n            return X2\n        X = np.asarray(X)\n        X2 = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)\n        return X2.astype(np.float32, copy=False)\n\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n\ndef _delta_phi(dphi: torch.Tensor) -> torch.Tensor:\n    # Wrap to [-pi, pi]\n    return torch.atan2(torch.sin(dphi), torch.cos(dphi))\n\n\nclass BinaryClassifier(nn.Module):\n    def __init__(self, sample_object):\n        super().__init__()\n\n        in_dim = int(sample_object.shape[-1])\n        assert in_dim >= 2 and (in_dim - 2) % 5 == 0, f\"Unexpected input feature length: {in_dim}\"\n        self.n_obj = (in_dim - 2) // 5  # 18\n        self.obj_stride = 5\n        self.k_top = 6  # pairwise computed on top-K pT objects (keeps compute small)\n\n        self.n_id = 32  # clip object id into [0, n_id-1]\n        self.d_model = 64\n        self.cont_dim = 8  # per-object continuous features below\n\n        self.id_emb = nn.Embedding(self.n_id, self.d_model)\n        self.obj_linear = nn.Sequential(\n            nn.Linear(self.cont_dim, self.d_model),\n            nn.LayerNorm(self.d_model),\n            nn.GELU(),\n        )\n\n        self.cls_token = nn.Parameter(torch.zeros(1, 1, self.d_model))\n        nn.init.normal_(self.cls_token, std=0.02)\n\n        enc_layer = nn.TransformerEncoderLayer(\n            d_model=self.d_model,\n            nhead=8,\n            dim_feedforward=128,\n            dropout=0.10,\n            activation=\"gelu\",\n            batch_first=True,\n            norm_first=True,\n        )\n        self.transformer = nn.TransformerEncoder(enc_layer, num_layers=2)\n\n        # Global feature head\n        # global feats:\n        #   MET: 3\n        #   event sums: 7\n        #   id counts: n_id\n        #   pairwise: 12\n        # total = 3 + 7 + 32 + 12 = 54\n        self.global_dim = 54\n\n        mlp_in = self.d_model * 3 + self.global_dim  # cls + mean + max + global\n        self.head = nn.Sequential(\n            nn.LayerNorm(mlp_in),\n            nn.Linear(mlp_in, 256),\n            nn.GELU(),\n            nn.Dropout(0.15),\n            nn.Linear(256, 128),\n            nn.GELU(),\n            nn.Dropout(0.10),\n            nn.Linear(128, 1),\n        )\n\n    def forward(self, batch_x):\n        # batch_x: FloatTensor[B, 92]\n        x = batch_x\n        B = x.shape[0]\n\n        met = x[:, 0]  # [B]\n        met_phi = x[:, 1]  # [B]\n\n        objs = x[:, 2:].view(B, self.n_obj, self.obj_stride)  # [B, 18, 5]\n        obj_id_f = objs[:, :, 0]  # [B, 18]\n        E = objs[:, :, 1]  # [B, 18]\n        pT = objs[:, :, 2]  # [B, 18]\n        eta = objs[:, :, 3]  # [B, 18]\n        phi = objs[:, :, 4]  # [B, 18]\n\n        # Valid mask (padding is all zeros; object id is 0 for padding)\n        obj_id = obj_id_f.round().clamp(min=0).long()  # [B, 18]\n        mask = obj_id.ne(0)  # [B, 18] bool\n        mask_f = mask.float()  # [B, 18]\n\n        # Basic 4-vector components from (pT, eta, phi)\n        # Use these both for per-object features and pairwise masses.\n        cosphi = torch.cos(phi)  # [B, 18]\n        sinphi = torch.sin(phi)  # [B, 18]\n        px = pT * cosphi  # [B, 18]\n        py = pT * sinphi  # [B, 18]\n        pz = pT * torch.sinh(eta)  # [B, 18]\n        p2 = pT * pT + pz * pz  # [B, 18]\n        m2 = (E * E - p2).clamp_min(0.0)  # [B, 18]\n        m = torch.sqrt(m2 + 1e-12)  # [B, 18]\n\n        # Per-object continuous features\n        logE = torch.log1p(E.clamp_min(0.0))  # [B, 18]\n        logpT = torch.log1p(pT.clamp_min(0.0))  # [B, 18]\n        logm = torch.log1p(m)  # [B, 18]\n        abs_eta = eta.abs()  # [B, 18]\n        pt_over_E = pT / (E.abs() + 1.0)  # [B, 18]\n        # cont: [B, 18, 8]\n        cont = torch.stack(\n            [logE, logpT, eta, abs_eta, sinphi, cosphi, logm, pt_over_E],\n            dim=-1,\n        )\n        cont = cont * mask_f.unsqueeze(-1)  # [B, 18, 8]\n\n        # Object tokens: [B, 18, d_model]\n        ids_clip = obj_id.clamp(0, self.n_id - 1)  # [B, 18]\n        tok = self.obj_linear(cont) + self.id_emb(ids_clip)  # [B, 18, 64]\n\n        # Transformer sequence with CLS\n        cls = self.cls_token.expand(B, 1, self.d_model)  # [B, 1, 64]\n        seq = torch.cat([cls, tok], dim=1)  # [B, 19, 64]\n        pad_mask = torch.cat([torch.zeros(B, 1, device=x.device, dtype=torch.bool), ~mask], dim=1)  # [B, 19]\n\n        out = self.transformer(seq, src_key_padding_mask=pad_mask)  # [B, 19, 64]\n        cls_out = out[:, 0, :]  # [B, 64]\n        obj_out = out[:, 1:, :]  # [B, 18, 64]\n\n        # Masked pooling\n        denom = mask_f.sum(dim=1).clamp_min(1.0).unsqueeze(-1)  # [B, 1]\n        mean_pool = (obj_out * mask_f.unsqueeze(-1)).sum(dim=1) / denom  # [B, 64]\n        obj_out_masked = obj_out.masked_fill(~mask.unsqueeze(-1), -1e9)  # [B, 18, 64]\n        max_pool = obj_out_masked.max(dim=1).values  # [B, 64]\n        no_obj = mask_f.sum(dim=1).eq(0.0)  # [B]\n        max_pool = torch.where(no_obj.unsqueeze(-1), torch.zeros_like(max_pool), max_pool)  # [B, 64]\n\n        # Global event features\n        logmet = torch.log1p(met.clamp_min(0.0))  # [B]\n        met_sin = torch.sin(met_phi)  # [B]\n        met_cos = torch.cos(met_phi)  # [B]\n\n        ht = (pT.clamp_min(0.0) * mask_f).sum(dim=1)  # [B]\n        sumE = (E.clamp_min(0.0) * mask_f).sum(dim=1)  # [B]\n        lead_pT = (pT.masked_fill(~mask, 0.0)).max(dim=1).values  # [B]\n        nobj = mask_f.sum(dim=1)  # [B]\n        mean_abs_eta = (abs_eta * mask_f).sum(dim=1) / nobj.clamp_min(1.0)  # [B]\n        met_over_ht = met.clamp_min(0.0) / (ht + 1.0)  # [B]\n        loght = torch.log1p(ht.clamp_min(0.0))  # [B]\n        logsumE = torch.log1p(sumE.clamp_min(0.0))  # [B]\n        logleadpt = torch.log1p(lead_pT.clamp_min(0.0))  # [B]\n        frac_nobj = nobj / float(self.n_obj)  # [B]\n\n        # ID counts (normalized): [B, n_id]\n        onehot = F.one_hot(ids_clip, num_classes=self.n_id).float()  # [B, 18, 32]\n        onehot = onehot * mask_f.unsqueeze(-1)  # [B, 18, 32]\n        id_counts = onehot.sum(dim=1) / float(self.n_obj)  # [B, 32]\n\n        # Pairwise features on top-K pT objects\n        pt_masked = pT.masked_fill(~mask, -1e9)  # [B, 18]\n        top_pt, top_idx = pt_masked.topk(self.k_top, dim=1)  # [B, K], [B, K]\n        valid_k = top_pt > -1e8  # [B, K]\n\n        def _gather_feat(feat_2d):\n            # feat_2d: [B, 18] -> [B, K]\n            return torch.gather(feat_2d, dim=1, index=top_idx)\n\n        Ek = _gather_feat(E)  # [B, K]\n        pTk = _gather_feat(pT)  # [B, K]\n        etak = _gather_feat(eta)  # [B, K]\n        phik = _gather_feat(phi)  # [B, K]\n\n        cosk = torch.cos(phik)  # [B, K]\n        sink = torch.sin(phik)  # [B, K]\n        pxk = pTk * cosk  # [B, K]\n        pyk = pTk * sink  # [B, K]\n        pzk = pTk * torch.sinh(etak)  # [B, K]\n\n        # Pair matrices: [B, K, K]\n        dEta = etak.unsqueeze(2) - etak.unsqueeze(1)  # [B, K, K]\n        dPhi = _delta_phi(phik.unsqueeze(2) - phik.unsqueeze(1))  # [B, K, K]\n        dR = torch.sqrt(dEta * dEta + dPhi * dPhi + 1e-12)  # [B, K, K]\n\n        EiEj = Ek.unsqueeze(2) + Ek.unsqueeze(1)  # [B, K, K]\n        pxij = pxk.unsqueeze(2) + pxk.unsqueeze(1)  # [B, K, K]\n        pyij = pyk.unsqueeze(2) + pyk.unsqueeze(1)  # [B, K, K]\n        pzij = pzk.unsqueeze(2) + pzk.unsqueeze(1)  # [B, K, K]\n        m2ij = (EiEj * EiEj - pxij * pxij - pyij * pyij - pzij * pzij).clamp_min(0.0)  # [B, K, K]\n        mij = torch.sqrt(m2ij + 1e-12)  # [B, K, K]\n\n        iu = torch.triu_indices(self.k_top, self.k_top, offset=1, device=x.device)\n        dr_pairs = dR[:, iu[0], iu[1]]  # [B, P]\n        m_pairs = mij[:, iu[0], iu[1]]  # [B, P]\n\n        valid_pairs = valid_k[:, iu[0]] & valid_k[:, iu[1]]  # [B, P]\n        vp_f = valid_pairs.float()  # [B, P]\n        npair = vp_f.sum(dim=1).clamp_min(1.0)  # [B]\n\n        m_sum = (m_pairs * vp_f).sum(dim=1)  # [B]\n        m2_sum = ((m_pairs * m_pairs) * vp_f).sum(dim=1)  # [B]\n        m_mean = m_sum / npair  # [B]\n        m_var = (m2_sum / npair - m_mean * m_mean).clamp_min(0.0)  # [B]\n        m_std = torch.sqrt(m_var + 1e-12)  # [B]\n        m_max = m_pairs.masked_fill(~valid_pairs, -1e9).max(dim=1).values  # [B]\n        has_pair = valid_pairs.any(dim=1)  # [B]\n        m_max = torch.where(has_pair, m_max, torch.zeros_like(m_max))  # [B]\n        m_top3 = m_pairs.masked_fill(~valid_pairs, -1e9).topk(3, dim=1).values  # [B, 3]\n        m_top3 = m_top3.clamp_min(0.0)  # [B, 3]\n\n        dr_sum = (dr_pairs * vp_f).sum(dim=1)  # [B]\n        dr2_sum = ((dr_pairs * dr_pairs) * vp_f).sum(dim=1)  # [B]\n        dr_mean = dr_sum / npair  # [B]\n        dr_var = (dr2_sum / npair - dr_mean * dr_mean).clamp_min(0.0)  # [B]\n        dr_std = torch.sqrt(dr_var + 1e-12)  # [B]\n        dr_max = dr_pairs.masked_fill(~valid_pairs, -1e9).max(dim=1).values  # [B]\n        dr_max = torch.where(has_pair, dr_max, torch.zeros_like(dr_max))  # [B]\n        dr_top3 = dr_pairs.masked_fill(~valid_pairs, -1e9).topk(3, dim=1).values  # [B, 3]\n        dr_top3 = dr_top3.clamp_min(0.0)  # [B, 3]\n\n        # Assemble global features: [B, 54]\n        global_feats = torch.cat(\n            [\n                torch.stack([logmet, met_sin, met_cos], dim=1),  # [B, 3]\n                torch.stack(\n                    [\n                        loght,\n                        logsumE,\n                        logleadpt,\n                        mean_abs_eta,\n                        met_over_ht,\n                        frac_nobj,\n                        torch.log1p((met.clamp_min(0.0) + ht).clamp_min(0.0)),\n                    ],\n                    dim=1,\n                ),  # [B, 7]\n                id_counts,  # [B, 32]\n                torch.stack([m_mean, m_max, m_std, dr_mean, dr_max, dr_std], dim=1),  # [B, 6]\n                m_top3,  # [B, 3]\n                dr_top3,  # [B, 3]\n            ],\n            dim=1,\n        )  # [B, 54]\n\n        feats = torch.cat([cls_out, mean_pool, max_pool, global_feats], dim=1)  # [B, 64*3 + 54] = [B, 246]\n        logits = self.head(feats).squeeze(-1)  # [B]\n        return logits\n\n\ndef make_model(example_object):\n    return BinaryClassifier(example_object)\n\n\nEPOCHS = 12\n\n\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    model = model.to(device)\n\n    opt = torch.optim.AdamW(model.parameters(), lr=3e-4, weight_decay=1e-2, betas=(0.9, 0.999))\n    sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=max(1, epochs))\n\n    scaler = torch.cuda.amp.GradScaler(enabled=(device.type == \"cuda\"))\n    bce = nn.BCEWithLogitsLoss()\n\n    train_loss_hist, val_loss_hist = [], []\n    train_acc_hist, val_acc_hist = [], []\n    val_auc_hist = []\n\n    best_auc = -float(\"inf\")\n    best_state = None\n    patience = 3\n    bad = 0\n\n    for epoch in range(int(epochs)):\n        model.train()\n        total_loss = 0.0\n        total_correct = 0\n        total_seen = 0\n\n        for xb, yb in train_loader:\n            xb = xb.to(device, non_blocking=True).float()\n            yb = yb.to(device, non_blocking=True).float()\n\n            opt.zero_grad(set_to_none=True)\n\n            ctx = torch.cuda.amp.autocast(enabled=(device.type == \"cuda\"))\n            with ctx:\n                logits = model(xb)  # [B]\n                loss = bce(logits, yb)\n\n            scaler.scale(loss).backward()\n            scaler.unscale_(opt)\n            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)\n            scaler.step(opt)\n            scaler.update()\n\n            bs = int(yb.numel())\n            total_loss += float(loss.detach()) * bs\n            preds = (logits.detach() > 0.0).long()\n            total_correct += int((preds == yb.long()).sum().item())\n            total_seen += bs\n\n        sched.step()\n\n        tr_loss = total_loss / max(1, total_seen)\n        tr_acc = total_correct / max(1, total_seen)\n        train_loss_hist.append(tr_loss)\n        train_acc_hist.append(tr_acc)\n\n        model.eval()\n        v_total_loss = 0.0\n        v_total_correct = 0\n        v_total_seen = 0\n        all_logits = []\n        all_y = []\n\n        with torch.no_grad():\n            for xb, yb in val_loader:\n                xb = xb.to(device, non_blocking=True).float()\n                yb_t = yb.to(device, non_blocking=True).float()\n\n                ctx = torch.cuda.amp.autocast(enabled=(device.type == \"cuda\"))\n                with ctx:\n                    logits = model(xb)  # [B]\n                    loss = bce(logits, yb_t)\n\n                bs = int(yb_t.numel())\n                v_total_loss += float(loss.detach()) * bs\n                preds = (logits.detach() > 0.0).long()\n                v_total_correct += int((preds == yb.to(device)).sum().item())\n                v_total_seen += bs\n\n                all_logits.append(logits.detach().float().cpu())\n                all_y.append(yb.detach().cpu())\n\n        va_loss = v_total_loss / max(1, v_total_seen)\n        va_acc = v_total_correct / max(1, v_total_seen)\n        val_loss_hist.append(va_loss)\n        val_acc_hist.append(va_acc)\n\n        logits_cat = torch.cat(all_logits, dim=0).numpy()\n        y_cat = torch.cat(all_y, dim=0).numpy()\n        try:\n            va_auc = float(roc_auc_score(y_cat, logits_cat))\n        except Exception:\n            va_auc = float(\"nan\")\n        val_auc_hist.append(va_auc)\n\n        # Early stopping on AUC\n        improved = (va_auc == va_auc) and (va_auc > best_auc + 1e-4)\n        if improved:\n            best_auc = va_auc\n            best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}\n            bad = 0\n        else:\n            bad += 1\n\n        if bad >= patience:\n            break\n\n    if best_state is not None:\n        model.load_state_dict(best_state)\n\n    return model, train_loss_hist, val_loss_hist, train_acc_hist, val_acc_hist",
+    "reasoning": "",
+    "Outer_attempt": 1
+  },
+  "StaticChecks": {
+    "__timestamp": "2026-01-07T00:12:49Z",
+    "PyLint": {
+      "passed": true,
+      "messages": [
+        {
+          "type": "error",
+          "module": "script_openai_gpt-5.2-pro_0112_1",
+          "obj": "BinaryClassifier.forward",
+          "line": 248,
+          "column": 17,
+          "endLine": 248,
+          "endColumn": 59,
+          "path": "outputs\\01-06\\FOURTOPS\\Q2\\script_openai_gpt-5.2-pro_0112_1.py",
+          "symbol": "not-callable",
+          "message": "F.one_hot is not callable",
+          "message-id": "E1102"
+        }
+      ]
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2026-01-07T00:12:49Z",
+        "metrics": {
+          ".\\outputs\\01-06\\FOURTOPS\\Q2\\script_openai_gpt-5.2-pro_0112_1.py": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 397,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 397,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2026-01-07T00:13:13Z",
+    "passed": true,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/01-06/FOURTOPS/Q2/script_openai_gpt-5.2-pro_0112_1.py\nargv2=--dryrun\nDry-run: skipping artefact manifest\n",
+      "stderr": "/opt/venv/lib/python3.12/site-packages/torch/nn/modules/transformer.py:385: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True\n  warnings.warn(\n/workspace/outputs/01-06/FOURTOPS/Q2/script_openai_gpt-5.2-pro_0112_1.py:355: FutureWarning: `torch.cuda.amp.GradScaler(args...)` is deprecated. Please use `torch.amp.GradScaler('cuda', args...)` instead.\n  scaler = torch.cuda.amp.GradScaler(enabled=(device.type == \"cuda\"))\n/workspace/outputs/01-06/FOURTOPS/Q2/script_openai_gpt-5.2-pro_0112_1.py:379: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.\n  ctx = torch.cuda.amp.autocast(enabled=(device.type == \"cuda\"))\n/workspace/outputs/01-06/FOURTOPS/Q2/script_openai_gpt-5.2-pro_0112_1.py:415: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.\n  ctx = torch.cuda.amp.autocast(enabled=(device.type == \"cuda\"))\n"
+    },
+    "return_code": 0
+  },
+  "Training": {
+    "__timestamp": "2026-01-07T12:06:25.551303+00:00",
+    "passed": true,
+    "resources": {
+      "cpu_seconds_user": 1.25,
+      "cpu_seconds_sys": 1.08,
+      "disk_read_mb": 46.9,
+      "disk_write_mb": 0.5,
+      "max_rss_kb": -32,
+      "training_time_s": 351.09,
+      "gpu_name": null,
+      "gpu_total_mb": null,
+      "gpu_peak_alloc_mb": null,
+      "cuda_available": null
+    },
+    "metrics": {
+      "epochs": 12,
+      "train_loss": [
+        0.6931418104186788,
+        0.6928778622934048,
+        0.6928195724820992,
+        0.6927955024790664,
+        0.692765568356658,
+        0.6927247264518049,
+        0.6926991098387549,
+        0.6925965453778001,
+        0.6923715036963449,
+        0.6918081393573162,
+        0.6910599199016184,
+        0.6905379740209122
+      ],
+      "val_loss": [
+        0.6927751710304624,
+        0.69276247387172,
+        0.6927571013418389,
+        0.6927575521583247,
+        0.6927664041732271,
+        0.6929013195560189,
+        0.6926681180220831,
+        0.692674721075027,
+        0.6921197234879825,
+        0.6913323676443686,
+        0.6905763241844317,
+        0.6903642845192484
+      ],
+      "train_acc": [
+        0.5053898707672445,
+        0.5090438100282632,
+        0.5083113669374362,
+        0.5099831579470075,
+        0.5105335247892674,
+        0.5113114869422363,
+        0.5112866583628862,
+        0.513417778090434,
+        0.5152054358036391,
+        0.5217974236210827,
+        0.5292087545570788,
+        0.5330447700666647
+      ],
+      "val_acc": [
+        0.5105439136623962,
+        0.51047770384348,
+        0.5108087529380607,
+        0.511437746217764,
+        0.5121991591352998,
+        0.5133909358757904,
+        0.511437746217764,
+        0.5110735922137253,
+        0.5207733306849406,
+        0.5294799218724137,
+        0.5339821895587116,
+        0.5396762339855
+      ]
+    },
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/01-06/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_0112_1.py\nargv2=\n#TRAIN_METRICS#{\"epochs\": 12, \"train_loss\": [0.6931418104186788, 0.6928778622934048, 0.6928195724820992, 0.6927955024790664, 0.692765568356658, 0.6927247264518049, 0.6926991098387549, 0.6925965453778001, 0.6923715036963449, 0.6918081393573162, 0.6910599199016184, 0.6905379740209122], \"val_loss\": [0.6927751710304624, 0.69276247387172, 0.6927571013418389, 0.6927575521583247, 0.6927664041732271, 0.6929013195560189, 0.6926681180220831, 0.692674721075027, 0.6921197234879825, 0.6913323676443686, 0.6905763241844317, 0.6903642845192484], \"train_acc\": [0.5053898707672445, 0.5090438100282632, 0.5083113669374362, 0.5099831579470075, 0.5105335247892674, 0.5113114869422363, 0.5112866583628862, 0.513417778090434, 0.5152054358036391, 0.5217974236210827, 0.5292087545570788, 0.5330447700666647], \"val_acc\": [0.5105439136623962, 0.51047770384348, 0.5108087529380607, 0.511437746217764, 0.5121991591352998, 0.5133909358757904, 0.511437746217764, 0.5110735922137253, 0.5207733306849406, 0.5294799218724137, 0.5339821895587116, 0.5396762339855]}\nHash manifest written â†’ openai_gpt-5.2-pro_0112_1_manifest.sha256\n",
+      "stderr": "/opt/venv/lib/python3.12/site-packages/torch/nn/modules/transformer.py:385: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True\n  warnings.warn(\n/workspace/outputs/01-06/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_0112_1.py:355: FutureWarning: `torch.cuda.amp.GradScaler(args...)` is deprecated. Please use `torch.amp.GradScaler('cuda', args...)` instead.\n  scaler = torch.cuda.amp.GradScaler(enabled=(device.type == \"cuda\"))\n/workspace/outputs/01-06/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_0112_1.py:379: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.\n  ctx = torch.cuda.amp.autocast(enabled=(device.type == \"cuda\"))\n/workspace/outputs/01-06/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_0112_1.py:415: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.\n  ctx = torch.cuda.amp.autocast(enabled=(device.type == \"cuda\"))\n/workspace/outputs/01-06/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_0112_1.py:379: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.\n  ctx = torch.cuda.amp.autocast(enabled=(device.type == \"cuda\"))\n/workspace/outputs/01-06/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_0112_1.py:415: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.\n  ctx = torch.cuda.amp.autocast(enabled=(device.type == \"cuda\"))\n/workspace/outputs/01-06/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_0112_1.py:379: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.\n  ctx = torch.cuda.amp.autocast(enabled=(device.type == \"cuda\"))\n/workspace/outputs/01-06/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_0112_1.py:415: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.\n  ctx = torch.cuda.amp.autocast(enabled=(device.type == \"cuda\"))\n/workspace/outputs/01-06/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_0112_1.py:379: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.\n  ctx = torch.cuda.amp.autocast(enabled=(device.type == \"cuda\"))\n/workspace/outputs/01-06/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_0112_1.py:415: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.\n  ctx = torch.cuda.amp.autocast(enabled=(device.type == \"cuda\"))\n/workspace/outputs/01-06/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_0112_1.py:379: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.\n  ctx = torch.cuda.amp.autocast(enabled=(device.type == \"cuda\"))\n/workspace/outputs/01-06/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_0112_1.py:415: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.\n  ctx = torch.cuda.amp.autocast(enabled=(device.type == \"cuda\"))\n/workspace/outputs/01-06/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_0112_1.py:379: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.\n  ctx = torch.cuda.amp.autocast(enabled=(device.type == \"cuda\"))\n/workspace/outputs/01-06/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_0112_1.py:415: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.\n  ctx = torch.cuda.amp.autocast(enabled=(device.type == \"cuda\"))\n/workspace/outputs/01-06/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_0112_1.py:379: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.\n  ctx = torch.cuda.amp.autocast(enabled=(device.type == \"cuda\"))\n/workspace/outputs/01-06/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_0112_1.py:415: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.\n  ctx = torch.cuda.amp.autocast(enabled=(device.type == \"cuda\"))\n/workspace/outputs/01-06/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_0112_1.py:379: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.\n  ctx = torch.cuda.amp.autocast(enabled=(device.type == \"cuda\"))\n/workspace/outputs/01-06/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_0112_1.py:415: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.\n  ctx = torch.cuda.amp.autocast(enabled=(device.type == \"cuda\"))\n/workspace/outputs/01-06/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_0112_1.py:379: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.\n  ctx = torch.cuda.amp.autocast(enabled=(device.type == \"cuda\"))\n/workspace/outputs/01-06/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_0112_1.py:415: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.\n  ctx = torch.cuda.amp.autocast(enabled=(device.type == \"cuda\"))\n/workspace/outputs/01-06/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_0112_1.py:379: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.\n  ctx = torch.cuda.amp.autocast(enabled=(device.type == \"cuda\"))\n/workspace/outputs/01-06/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_0112_1.py:415: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.\n  ctx = torch.cuda.amp.autocast(enabled=(device.type == \"cuda\"))\n/workspace/outputs/01-06/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_0112_1.py:379: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.\n  ctx = torch.cuda.amp.autocast(enabled=(device.type == \"cuda\"))\n/workspace/outputs/01-06/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_0112_1.py:415: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.\n  ctx = torch.cuda.amp.autocast(enabled=(device.type == \"cuda\"))\n/workspace/outputs/01-06/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_0112_1.py:379: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.\n  ctx = torch.cuda.amp.autocast(enabled=(device.type == \"cuda\"))\n/workspace/outputs/01-06/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_0112_1.py:415: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.\n  ctx = torch.cuda.amp.autocast(enabled=(device.type == \"cuda\"))\nWARNING:matplotlib:mkdir -p failed for path /home/sandbox/.config/matplotlib: [Errno 30] Read-only file system: '/home/sandbox/.config'\nWARNING:matplotlib:Matplotlib created a temporary cache directory at /tmp/matplotlib-4xot1ha6 because there was an issue with the default path (/home/sandbox/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.\n"
+    }
+  }
+}

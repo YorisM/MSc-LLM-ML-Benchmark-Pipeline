@@ -7,8 +7,9 @@ from tqdm import tqdm
 from pathlib import Path
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from utils.utils import append_to_response_json, iter_input_dir, SKIP_DIRS
 
+from utils.utils import append_to_response_json, iter_input_dir, SKIP_DIRS
+from utils.run_id import get_active_run_id
 
 # Execution Flow
 # (main.py)  ─▶ execute_scripts_in_batch(...)
@@ -304,8 +305,34 @@ def execute_scripts_in_batch(base_folder, max_workers=1, *, dryrun=False, use_do
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
-    p.add_argument("folder", help="Base output folder to scan/run")
-    p.add_argument("--max-workers", type=int, default=1,
-                   help="1 = serial; >1 = parallel threads")
+    p.add_argument("folder", nargs="?", default=None,
+        help="Base output folder to scan/run. If omitted, uses outputs/<run-id>/<challenge>[/<question>].",)
+    
+    p.add_argument("--run-id", dest="run_id", default=None,
+        help="Run id under outputs/ (e.g. 01-06 or 01-06(2)). Defaults to the active run id.",)
+    
+    p.add_argument("--challenge", "-c", default=None,
+        help="Challenge name (e.g. FOURTOPS, TRACKFORMERS). Required if folder is omitted.",)
+    
+    p.add_argument("-q", default=None, help="Optional question id (e.g. Q1) if folder is omitted.",)
+
+    p.add_argument("--max-workers", type=int, default=1, help="1 = serial; >1 = parallel threads")
+
     args = p.parse_args()
-    execute_scripts_in_batch(args.folder, args.max_workers)
+
+    folder = args.folder
+    if folder is None:
+        run_id = args.run_id or get_active_run_id()
+        if not run_id:
+            p.error("No folder provided and no active run id. Provide folder or --run-id.")
+
+        if not args.challenge:
+            p.error("When folder is omitted you must pass --challenge (e.g. --challenge FOURTOPS).")
+
+        folder_path = Path("outputs") / run_id / args.challenge
+        if args.question:
+            folder_path = folder_path / args.question
+
+        folder = str(folder_path)
+
+    execute_scripts_in_batch(folder, args.max_workers)

@@ -1,0 +1,71 @@
+{
+  "LLMGeneration": {
+    "model": "mistralai/mistral-large-2512",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 4108,
+    "prompt_chars": 15596,
+    "response_tokens": 2278,
+    "response_chars": 8883,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.005471,
+    "generation_ms": 38958,
+    "code": "# ---------- IMPORTS ----------\nfrom sklearn.preprocessing import RobustScaler\nfrom sklearn.metrics import roc_auc_score\nimport torch.nn.functional as F\nfrom torch.optim import AdamW\nfrom torch.optim.lr_scheduler import ReduceLROnPlateau\nimport numpy as np\n\n# ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.scaler = RobustScaler()\n        self.obj_ids = None\n        self.n_objects = 18\n        self.obj_feature_size = 5\n        self.global_feature_size = 2\n        self.total_features = self.global_feature_size + self.n_objects * self.obj_feature_size\n\n    def make_loader_cfg(self) -> dict:\n        return {\n            \"dataset_builder\": \"llm_script:FourTopsDataset\",\n            \"dataset_kwargs\": {},\n\n            \"loader_class\": \"torch.utils.data:DataLoader\",\n            \"batch_size\": 512,\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": False,\n\n            \"collate\": None,\n\n            \"extra_loader_kwargs\": {},\n\n            \"eval_overrides\": {\"shuffle\": False,\n                                \"batch_size\": 1024}\n        }\n\n    def fit(self, X, y=None):\n        # Extract global features (E_T_miss, phi_Et_miss)\n        global_features = X[:, :2].numpy()  # [N, 2]\n\n        # Extract object features (obj_id, E, p_T, eta, phi)\n        object_features = []\n        for i in range(self.n_objects):\n            start_idx = 2 + i * self.obj_feature_size\n            end_idx = start_idx + self.obj_feature_size\n            obj_feats = X[:, start_idx:end_idx]  # [N, 5]\n            object_features.append(obj_feats.numpy())\n\n        # Stack all features for scaling\n        all_features = np.hstack([global_features] + object_features)  # [N, 2 + 18*5]\n\n        # Fit scaler on all features\n        self.scaler.fit(all_features)\n\n        # Store object IDs for reference (though we'll scale them too)\n        self.obj_ids = np.unique(X[:, 2::5].numpy())\n        return self\n\n    def transform(self, X):\n        # Convert to numpy if not already\n        if torch.is_tensor(X):\n            X_np = X.numpy()\n        else:\n            X_np = X\n\n        # Extract global features\n        global_features = X_np[:, :2]  # [N, 2]\n\n        # Extract object features\n        object_features = []\n        for i in range(self.n_objects):\n            start_idx = 2 + i * self.obj_feature_size\n            end_idx = start_idx + self.obj_feature_size\n            obj_feats = X_np[:, start_idx:end_idx]  # [N, 5]\n            object_features.append(obj_feats)\n\n        # Stack all features\n        all_features = np.hstack([global_features] + object_features)  # [N, 92]\n\n        # Transform features\n        all_features_scaled = self.scaler.transform(all_features)\n\n        # Reconstruct the original structure\n        output = np.zeros_like(X_np)\n        output[:, :2] = all_features_scaled[:, :2]  # Global features\n\n        for i in range(self.n_objects):\n            start_idx = 2 + i * self.obj_feature_size\n            end_idx = start_idx + self.obj_feature_size\n            output[:, start_idx:end_idx] = all_features_scaled[:, 2 + i*5:2 + (i+1)*5]\n\n        return torch.from_numpy(output).float()\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# ---------- MODEL ARCHITECTURE ----------\nclass BinaryClassifier(nn.Module):\n    def __init__(self, sample_object):\n        super().__init__()\n\n        # Determine input size from sample\n        input_size = sample_object.shape[1]  # [F]\n\n        # Global features branch (first 2 features)\n        self.global_branch = nn.Sequential(\n            nn.Linear(2, 32),\n            nn.ReLU(),\n            nn.BatchNorm1d(32),\n            nn.Dropout(0.2),\n            nn.Linear(32, 16),\n            nn.ReLU()\n        )\n\n        # Object features branch (remaining features)\n        # Each object has 5 features, 18 objects\n        self.obj_branch = nn.Sequential(\n            nn.Linear(5, 16),\n            nn.ReLU(),\n            nn.BatchNorm1d(16),\n            nn.Dropout(0.2)\n        )\n\n        # Attention mechanism for objects\n        self.attention = nn.Sequential(\n            nn.Linear(16, 8),\n            nn.Tanh(),\n            nn.Linear(8, 1),\n            nn.Softmax(dim=1)\n        )\n\n        # Combined classifier\n        self.classifier = nn.Sequential(\n            nn.Linear(16 + 16, 64),  # global + object features\n            nn.ReLU(),\n            nn.BatchNorm1d(64),\n            nn.Dropout(0.3),\n            nn.Linear(64, 32),\n            nn.ReLU(),\n            nn.BatchNorm1d(32),\n            nn.Dropout(0.2),\n            nn.Linear(32, 1)\n        )\n\n    def forward(self, batch_x):\n        # batch_x: [B, 92]\n\n        # Extract global features (first 2 features)\n        global_feats = batch_x[:, :2]  # [B, 2]\n        global_out = self.global_branch(global_feats)  # [B, 16]\n\n        # Extract object features (18 objects, 5 features each)\n        obj_feats = batch_x[:, 2:].reshape(-1, 18, 5)  # [B, 18, 5]\n\n        # Process each object through shared network\n        obj_out = self.obj_branch(obj_feats)  # [B, 18, 16]\n\n        # Apply attention to objects\n        attention_weights = self.attention(obj_out)  # [B, 18, 1]\n        attended_obj = torch.sum(attention_weights * obj_out, dim=1)  # [B, 16]\n\n        # Combine global and object features\n        combined = torch.cat([global_out, attended_obj], dim=1)  # [B, 32]\n\n        # Final classification\n        logits = self.classifier(combined)  # [B, 1]\n\n        return logits.squeeze(1)  # [B]\n\ndef make_model(example_object):\n    return BinaryClassifier(example_object)\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 30\n\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    device = torch.device(\"cuda\" if torch.cuda.is_available() else \"cpu\")\n    model = model.to(device)\n\n    optimizer = AdamW(model.parameters(), lr=0.001, weight_decay=1e-4)\n    scheduler = ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=3, verbose=False)\n\n    best_auc = 0.0\n    best_model_state = None\n    patience = 5\n    patience_counter = 0\n\n    train_loss = []\n    val_loss = []\n    train_acc = []\n    val_acc = []\n\n    for epoch in range(epochs):\n        model.train()\n        running_loss = 0.0\n        correct = 0\n        total = 0\n\n        for batch_x, batch_y in train_loader:\n            batch_x, batch_y = batch_x.to(device), batch_y.to(device)\n\n            optimizer.zero_grad()\n            outputs = model(batch_x)\n            loss = F.binary_cross_entropy_with_logits(outputs, batch_y.float())\n            loss.backward()\n            optimizer.step()\n\n            running_loss += loss.item()\n            predicted = (torch.sigmoid(outputs) > 0.5).float()\n            correct += (predicted == batch_y.float()).sum().item()\n            total += batch_y.size(0)\n\n        train_loss_epoch = running_loss / len(train_loader)\n        train_acc_epoch = correct / total\n        train_loss.append(train_loss_epoch)\n        train_acc.append(train_acc_epoch)\n\n        # Validation\n        model.eval()\n        val_loss_epoch = 0.0\n        val_correct = 0\n        val_total = 0\n        all_preds = []\n        all_labels = []\n\n        with torch.no_grad():\n            for batch_x, batch_y in val_loader:\n                batch_x, batch_y = batch_x.to(device), batch_y.to(device)\n                outputs = model(batch_x)\n                loss = F.binary_cross_entropy_with_logits(outputs, batch_y.float())\n                val_loss_epoch += loss.item()\n\n                predicted = (torch.sigmoid(outputs) > 0.5).float()\n                val_correct += (predicted == batch_y.float()).sum().item()\n                val_total += batch_y.size(0)\n\n                all_preds.extend(torch.sigmoid(outputs).cpu().numpy())\n                all_labels.extend(batch_y.cpu().numpy())\n\n        val_loss_epoch /= len(val_loader)\n        val_acc_epoch = val_correct / val_total\n        val_loss.append(val_loss_epoch)\n        val_acc.append(val_acc_epoch)\n\n        # Calculate AUC\n        auc_score = roc_auc_score(all_labels, all_preds)\n\n        # Update scheduler\n        scheduler.step(auc_score)\n\n        print(f\"Epoch {epoch+1}/{epochs} - Train Loss: {train_loss_epoch:.4f}, Val Loss: {val_loss_epoch:.4f}, \"\n              f\"Train Acc: {train_acc_epoch:.4f}, Val Acc: {val_acc_epoch:.4f}, AUC: {auc_score:.4f}\")\n\n        # Early stopping based on AUC\n        if auc_score > best_auc:\n            best_auc = auc_score\n            best_model_state = model.state_dict()\n            patience_counter = 0\n        else:\n            patience_counter += 1\n            if patience_counter >= patience:\n                print(f\"Early stopping at epoch {epoch+1}\")\n                break\n\n    # Load best model state\n    if best_model_state is not None:\n        model.load_state_dict(best_model_state)\n\n    return model, train_loss, val_loss, train_acc, val_acc",
+    "reasoning": "",
+    "Outer_attempt": 1
+  },
+  "StaticChecks": {
+    "__timestamp": "2026-01-05T16:38:16Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2026-01-05T16:38:16Z",
+        "metrics": {
+          ".\\outputs\\01-05(2)\\FOURTOPS\\Q1\\script_mistralai_mistral-large-2512_1737_1.py": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 275,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 275,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2026-01-05T16:38:44Z",
+    "passed": false,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/01-05(2)/FOURTOPS/Q1/script_mistralai_mistral-large-2512_1737_1.py\nargv2=--dryrun\nERROR during training: running_mean should contain 18 elements not 16\n",
+      "stderr": "/opt/venv/lib/python3.12/site-packages/torch/optim/lr_scheduler.py:62: UserWarning: The verbose parameter is deprecated. Please use get_last_lr() to access the learning rate.\n  warnings.warn(\nTraceback (most recent call last):\n  File \"/workspace/outputs/01-05(2)/FOURTOPS/Q1/script_mistralai_mistral-large-2512_1737_1.py\", line 403, in <module>\n    _run(dryrun=\"--dryrun\" in sys.argv)\n  File \"/workspace/outputs/01-05(2)/FOURTOPS/Q1/script_mistralai_mistral-large-2512_1737_1.py\", line 363, in _run\n    trained_model, tr_loss, va_loss, tr_acc, va_acc = train_model(\n                                                      ^^^^^^^^^^^^\n  File \"/workspace/outputs/01-05(2)/FOURTOPS/Q1/script_mistralai_mistral-large-2512_1737_1.py\", line 260, in train_model\n    outputs = model(batch_x)\n              ^^^^^^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py\", line 1739, in _wrapped_call_impl\n    return self._call_impl(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py\", line 1750, in _call_impl\n    return forward_call(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/outputs/01-05(2)/FOURTOPS/Q1/script_mistralai_mistral-large-2512_1737_1.py\", line 213, in forward\n    obj_out = self.obj_branch(obj_feats)  # [B, 18, 16]\n              ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py\", line 1739, in _wrapped_call_impl\n    return self._call_impl(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py\", line 1750, in _call_impl\n    return forward_call(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/torch/nn/modules/container.py\", line 250, in forward\n    input = module(input)\n            ^^^^^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py\", line 1739, in _wrapped_call_impl\n    return self._call_impl(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py\", line 1750, in _call_impl\n    return forward_call(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/torch/nn/modules/batchnorm.py\", line 193, in forward\n    return F.batch_norm(\n           ^^^^^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/torch/nn/functional.py\", line 2822, in batch_norm\n    return torch.batch_norm(\n           ^^^^^^^^^^^^^^^^^\nRuntimeError: running_mean should contain 18 elements not 16\n"
+    },
+    "return_code": 1
+  }
+}

@@ -95,6 +95,37 @@ OUT = os.fdopen(3, "w", closefd=False)  # FD 3 is original stdout
 def emit(obj: dict):
     print(json.dumps(obj, allow_nan=False), file=OUT, flush=True)
 
+def to_jsonable(x):
+    import numpy as np
+    try:
+        import torch
+        if torch.is_tensor(x):
+            x = x.detach().cpu()
+            if x.ndim == 0:
+                return x.item()
+            return x.tolist()
+    except Exception:
+        pass
+
+    # numpy
+    if isinstance(x, np.generic):
+        return x.item()
+    if isinstance(x, np.ndarray):
+        return x.tolist()
+
+    # containers
+    if isinstance(x, dict):
+        return {str(k): to_jsonable(v) for k, v in x.items()}
+    if isinstance(x, (list, tuple)):
+        return [to_jsonable(v) for v in x]
+
+    # plain python scalars
+    if isinstance(x, (int, float, str, bool)) or x is None:
+        return x
+
+    # fallback: stringify weird objects
+    return str(x)
+
 try:
     # 1) import evaluator
     module_name = f"challenges.{challenge}.evaluate_{challenge.lower()}"
@@ -126,7 +157,7 @@ try:
     payload = {"ok": True, "load_s": round(t_load, 2), "eval_s": round(t_eval, 2)}
     if isinstance(metrics, dict):
         for k, v in metrics.items():
-            payload[k] = float(v)
+            payload[k] = to_jsonable(v)
     else:
         payload["metric"] = float(metrics)
 

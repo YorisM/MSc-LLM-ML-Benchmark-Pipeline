@@ -1,0 +1,85 @@
+{
+  "LLMGeneration": {
+    "model": "mistralai/mistral-large-2512",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 4260,
+    "prompt_chars": 16219,
+    "response_tokens": 3403,
+    "response_chars": 11983,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.0072345,
+    "generation_ms": 54535,
+    "code": "# ---------- IMPORTS ----------\nfrom sklearn.preprocessing import RobustScaler\nfrom torch.optim import AdamW\nfrom torch.optim.lr_scheduler import ReduceLROnPlateau\nfrom torch.nn import functional as F\nfrom torch.nn import TransformerEncoder, TransformerEncoderLayer\nimport math\n\n# ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.scaler = RobustScaler()\n        self.max_objects = 18\n        self.obj_feature_size = 5\n        self.global_feature_size = 2\n        self.total_features = self.global_feature_size + self.max_objects * self.obj_feature_size\n\n    def make_loader_cfg(self) -> dict:\n        return {\n            \"dataset_builder\": \"llm_script:FourTopsDataset\",\n            \"dataset_kwargs\": {},\n\n            \"loader_class\": \"torch.utils.data:DataLoader\",\n            \"batch_size\": 512,\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": False,\n\n            \"collate\": None,\n\n            \"extra_loader_kwargs\": {},\n\n            \"eval_overrides\": {\"shuffle\": False,\n                                \"batch_size\": 512}\n        }\n\n    def fit(self, X, y=None):\n        # Extract global features (E_T_miss, phi_Et_miss) and object features separately\n        global_features = X[:, :2].numpy()\n        self.scaler.fit(global_features)\n        return self\n\n    def transform(self, X):\n        # X shape: [N, 92]\n        batch_size = X.shape[0]\n\n        # Extract and scale global features\n        global_features = X[:, :2].numpy()\n        global_features = self.scaler.transform(global_features)\n        global_features = torch.from_numpy(global_features).float()  # [N, 2]\n\n        # Extract object features (obj_id, E, p_T, eta, phi)\n        object_features = X[:, 2:].reshape(batch_size, self.max_objects, self.obj_feature_size)  # [N, 18, 5]\n\n        # Convert object IDs to one-hot encoding (assuming obj_id is categorical)\n        obj_ids = object_features[:, :, 0].long()  # [N, 18]\n        obj_ids_onehot = F.one_hot(obj_ids, num_classes=6).float()  # [N, 18, 6] (assuming 6 classes)\n\n        # Extract kinematic features (E, p_T, eta, phi)\n        kinematic_features = object_features[:, :, 1:].float()  # [N, 18, 4]\n\n        # Combine one-hot and kinematic features\n        object_features_processed = torch.cat([obj_ids_onehot, kinematic_features], dim=-1)  # [N, 18, 10]\n\n        # Compute pairwise features (invariant mass and delta R)\n        pairwise_features = self._compute_pairwise_features(kinematic_features)  # [N, 18, 18, 2]\n\n        # Flatten pairwise features for each object (take mean over other objects)\n        pairwise_features_mean = pairwise_features.mean(dim=2)  # [N, 18, 2]\n\n        # Combine all features\n        object_features_final = torch.cat([\n            object_features_processed,  # [N, 18, 10]\n            pairwise_features_mean      # [N, 18, 2]\n        ], dim=-1)  # [N, 18, 12]\n\n        # Create mask for padding (where obj_id == 0)\n        mask = (obj_ids != 0).float().unsqueeze(-1)  # [N, 18, 1]\n\n        # Combine global and object features\n        features = {\n            'global_features': global_features,  # [N, 2]\n            'object_features': object_features_final,  # [N, 18, 12]\n            'mask': mask  # [N, 18, 1]\n        }\n\n        return features\n\n    def _compute_pairwise_features(self, kinematic_features):\n        # kinematic_features: [N, 18, 4] (E, p_T, eta, phi)\n        batch_size, num_objects, _ = kinematic_features.shape\n\n        # Extract components\n        E = kinematic_features[:, :, 0].unsqueeze(-1)  # [N, 18, 1]\n        px = kinematic_features[:, :, 1] * torch.cos(kinematic_features[:, :, 3])  # [N, 18]\n        py = kinematic_features[:, :, 1] * torch.sin(kinematic_features[:, :, 3])  # [N, 18]\n        pz = kinematic_features[:, :, 1] * torch.sinh(kinematic_features[:, :, 2])  # [N, 18]\n\n        # Compute invariant mass m_ij = sqrt((E_i + E_j)^2 - (px_i + px_j)^2 - (py_i + py_j)^2 - (pz_i + pz_j)^2)\n        E_i = E.unsqueeze(2)  # [N, 18, 1, 1]\n        E_j = E.unsqueeze(1)  # [N, 1, 18, 1]\n        px_i = px.unsqueeze(2)  # [N, 18, 1]\n        px_j = px.unsqueeze(1)  # [N, 1, 18]\n        py_i = py.unsqueeze(2)  # [N, 18, 1]\n        py_j = py.unsqueeze(1)  # [N, 1, 18]\n        pz_i = pz.unsqueeze(2)  # [N, 18, 1]\n        pz_j = pz.unsqueeze(1)  # [N, 1, 18]\n\n        m_ij_squared = (E_i + E_j).pow(2) - (px_i + px_j).pow(2) - (py_i + py_j).pow(2) - (pz_i + pz_j).pow(2)\n        m_ij = torch.sqrt(torch.clamp(m_ij_squared, min=0))  # [N, 18, 18]\n\n        # Compute delta R = sqrt((eta_i - eta_j)^2 + (phi_i - phi_j)^2)\n        eta_i = kinematic_features[:, :, 2].unsqueeze(2)  # [N, 18, 1]\n        eta_j = kinematic_features[:, :, 2].unsqueeze(1)  # [N, 1, 18]\n        phi_i = kinematic_features[:, :, 3].unsqueeze(2)  # [N, 18, 1]\n        phi_j = kinematic_features[:, :, 3].unsqueeze(1)  # [N, 1, 18]\n\n        delta_eta = eta_i - eta_j\n        delta_phi = torch.min(\n            torch.abs(phi_i - phi_j),\n            2 * math.pi - torch.abs(phi_i - phi_j)\n        )\n        delta_R = torch.sqrt(delta_eta.pow(2) + delta_phi.pow(2))  # [N, 18, 18]\n\n        # Stack pairwise features\n        pairwise_features = torch.stack([m_ij, delta_R], dim=-1)  # [N, 18, 18, 2]\n\n        return pairwise_features\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# ---------- MODEL ARCHITECTURE ----------\nclass PositionalEncoding(nn.Module):\n    def __init__(self, d_model, max_len=18):\n        super().__init__()\n        position = torch.arange(max_len).unsqueeze(1)\n        div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))\n        pe = torch.zeros(max_len, d_model)\n        pe[:, 0::2] = torch.sin(position * div_term)\n        pe[:, 1::2] = torch.cos(position * div_term)\n        self.register_buffer('pe', pe)\n\n    def forward(self, x):\n        # x: [N, seq_len, d_model]\n        x = x + self.pe[:x.size(1)]\n        return x\n\nclass BinaryClassifier(nn.Module):\n    def __init__(self, sample_object):\n        super().__init__()\n        self.object_feature_size = 12  # From preprocessor\n        self.global_feature_size = 2\n        self.d_model = 128\n        self.nhead = 8\n        self.num_layers = 4\n        self.dropout = 0.1\n\n        # Object feature embedding\n        self.obj_embed = nn.Linear(self.object_feature_size, self.d_model)\n        self.pos_encoder = PositionalEncoding(self.d_model)\n\n        # Transformer encoder\n        encoder_layers = TransformerEncoderLayer(\n            d_model=self.d_model,\n            nhead=self.nhead,\n            dim_feedforward=4*self.d_model,\n            dropout=self.dropout,\n            batch_first=True\n        )\n        self.transformer_encoder = TransformerEncoder(encoder_layers, num_layers=self.num_layers)\n\n        # Global feature embedding\n        self.global_embed = nn.Linear(self.global_feature_size, self.d_model)\n\n        # Classifier\n        self.classifier = nn.Sequential(\n            nn.Linear(2 * self.d_model, self.d_model),\n            nn.ReLU(),\n            nn.Dropout(self.dropout),\n            nn.Linear(self.d_model, 1)\n        )\n\n    def forward(self, batch_x):\n        # batch_x is a dictionary from preprocessor\n        global_features = batch_x['global_features']  # [B, 2]\n        object_features = batch_x['object_features']  # [B, 18, 12]\n        mask = batch_x['mask']  # [B, 18, 1]\n\n        # Embed object features\n        obj_embedded = self.obj_embed(object_features)  # [B, 18, d_model]\n        obj_embedded = self.pos_encoder(obj_embedded)  # [B, 18, d_model]\n\n        # Create attention mask (1 for real objects, 0 for padding)\n        key_padding_mask = (mask.squeeze(-1) == 0)  # [B, 18]\n\n        # Transformer encoder\n        transformer_out = self.transformer_encoder(\n            obj_embedded,\n            src_key_padding_mask=key_padding_mask\n        )  # [B, 18, d_model]\n\n        # Global average pooling over objects\n        mask_expanded = mask.expand_as(transformer_out)  # [B, 18, d_model]\n        sum_out = (transformer_out * mask_expanded).sum(dim=1)  # [B, d_model]\n        count = mask.sum(dim=1)  # [B, 1]\n        pooled_out = sum_out / count.clamp(min=1)  # [B, d_model]\n\n        # Embed global features\n        global_embedded = self.global_embed(global_features)  # [B, d_model]\n\n        # Concatenate global and pooled object features\n        combined = torch.cat([global_embedded, pooled_out], dim=-1)  # [B, 2*d_model]\n\n        # Classifier\n        logits = self.classifier(combined).squeeze(-1)  # [B]\n\n        return logits\n\ndef make_model(example_object):\n    return BinaryClassifier(example_object)\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 30\n\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    device = next(model.parameters()).device\n    optimizer = AdamW(model.parameters(), lr=3e-4, weight_decay=1e-5)\n    scheduler = ReduceLROnPlateau(optimizer, 'max', patience=3, factor=0.5, verbose=True)\n    criterion = nn.BCEWithLogitsLoss()\n\n    best_val_auc = 0\n    best_model_state = None\n    train_losses = []\n    val_losses = []\n    train_accs = []\n    val_accs = []\n\n    for epoch in range(epochs):\n        model.train()\n        train_loss = 0\n        train_correct = 0\n        train_total = 0\n\n        for batch in train_loader:\n            batch_x, batch_y = batch\n            # Move batch_x to device (it's a dict)\n            batch_x = {k: v.to(device) for k, v in batch_x.items()}\n            batch_y = batch_y.to(device).float()\n\n            optimizer.zero_grad()\n            outputs = model(batch_x)\n            loss = criterion(outputs, batch_y)\n            loss.backward()\n            optimizer.step()\n\n            train_loss += loss.item() * batch_y.size(0)\n            predicted = (torch.sigmoid(outputs) > 0.5).float()\n            train_correct += (predicted == batch_y).sum().item()\n            train_total += batch_y.size(0)\n\n        train_loss /= train_total\n        train_acc = train_correct / train_total\n        train_losses.append(train_loss)\n        train_accs.append(train_acc)\n\n        # Validation\n        model.eval()\n        val_loss = 0\n        val_correct = 0\n        val_total = 0\n        all_probs = []\n        all_labels = []\n\n        with torch.no_grad():\n            for batch in val_loader:\n                batch_x, batch_y = batch\n                batch_x = {k: v.to(device) for k, v in batch_x.items()}\n                batch_y = batch_y.to(device).float()\n\n                outputs = model(batch_x)\n                loss = criterion(outputs, batch_y)\n\n                val_loss += loss.item() * batch_y.size(0)\n                predicted = (torch.sigmoid(outputs) > 0.5).float()\n                val_correct += (predicted == batch_y).sum().item()\n                val_total += batch_y.size(0)\n\n                probs = torch.sigmoid(outputs)\n                all_probs.extend(probs.cpu().numpy())\n                all_labels.extend(batch_y.cpu().numpy())\n\n        val_loss /= val_total\n        val_acc = val_correct / val_total\n        val_losses.append(val_loss)\n        val_accs.append(val_acc)\n\n        # Compute AUC\n        from sklearn.metrics import roc_auc_score\n        val_auc = roc_auc_score(all_labels, all_probs)\n\n        print(f'Epoch {epoch+1}/{epochs} - Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.4f}, '\n              f'Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.4f}, Val AUC: {val_auc:.4f}')\n\n        # Early stopping based on AUC\n        scheduler.step(val_auc)\n        if val_auc > best_val_auc:\n            best_val_auc = val_auc\n            best_model_state = model.state_dict()\n\n        # Early stopping if learning rate becomes too small\n        if optimizer.param_groups[0]['lr'] < 1e-6:\n            print(\"Early stopping due to low learning rate\")\n            break\n\n    # Load best model\n    if best_model_state is not None:\n        model.load_state_dict(best_model_state)\n\n    return model, train_losses, val_losses, train_accs, val_accs",
+    "reasoning": "",
+    "Outer_attempt": 2
+  },
+  "StaticChecks": {
+    "__timestamp": "2026-01-06T22:46:16Z",
+    "PyLint": {
+      "passed": true,
+      "messages": [
+        {
+          "type": "error",
+          "module": "script_mistralai_mistral-large-2512_2346_2",
+          "obj": "MyPreprocessor.transform",
+          "line": 113,
+          "column": 25,
+          "endLine": 113,
+          "endColumn": 58,
+          "path": "outputs\\01-06\\FOURTOPS\\Q2\\script_mistralai_mistral-large-2512_2346_2.py",
+          "symbol": "not-callable",
+          "message": "F.one_hot is not callable",
+          "message-id": "E1102"
+        }
+      ]
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2026-01-06T22:46:16Z",
+        "metrics": {
+          ".\\outputs\\01-06\\FOURTOPS\\Q2\\script_mistralai_mistral-large-2512_2346_2.py": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 309,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 309,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2026-01-06T22:46:38Z",
+    "passed": false,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/01-06/FOURTOPS/Q2/script_mistralai_mistral-large-2512_2346_2.py\nargv2=--dryrun\n",
+      "stderr": "Traceback (most recent call last):\n  File \"/workspace/outputs/01-06/FOURTOPS/Q2/script_mistralai_mistral-large-2512_2346_2.py\", line 453, in <module>\n    _run(dryrun=\"--dryrun\" in sys.argv)\n  File \"/workspace/outputs/01-06/FOURTOPS/Q2/script_mistralai_mistral-large-2512_2346_2.py\", line 397, in _run\n    train_ds     = build_dataset(spec, (X_train, Y_train), pre, train=True)\n                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/utils/llm_io.py\", line 149, in build_dataset\n    return builder(events, preproc, train=train, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/outputs/01-06/FOURTOPS/Q2/script_mistralai_mistral-large-2512_2346_2.py\", line 43, in __init__\n    X2 = pre.transform(X) if pre is not None else X\n         ^^^^^^^^^^^^^^^^\n  File \"/workspace/outputs/01-06/FOURTOPS/Q2/script_mistralai_mistral-large-2512_2346_2.py\", line 113, in transform\n    obj_ids_onehot = F.one_hot(obj_ids, num_classes=6).float()  # [N, 18, 6] (assuming 6 classes)\n                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nRuntimeError: Class values must be smaller than num_classes.\n"
+    },
+    "return_code": 1
+  }
+}

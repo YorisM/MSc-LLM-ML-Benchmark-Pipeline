@@ -2,8 +2,8 @@
 
 import gzip, pickle, torch, logging
 import numpy as np
-from utils.llm_io import _initialize_artefacts, normalise_batch, build_dataset, build_dataloader
-from utils.loaderspec import LoaderSpec
+from utils.llm_io import _initialize_artefacts, detect_and_assert_lane, assert_label_output_by_lane, build_dataset, build_dataloader
+from utils.loaderspec import LoaderSpec, enforce_pyg_policy
 from pathlib import Path
 from typing import Tuple
 from tqdm import tqdm
@@ -19,6 +19,13 @@ if device.type == "cuda":
     torch.backends.cudnn.allow_tf32 = False
     torch.backends.cudnn.benchmark = True  # match training harness
 
+def artefact_base_from_path(model_path: str | Path) -> str:
+    name = Path(model_path).name
+    for suf in ("_model.pkl", "_state.pt"):
+        if name.endswith(suf):
+            return name[:-len(suf)]
+    raise ValueError(f"Unrecognized model artifact filename: {name}")
+
 def load_TRACKFORMERS_test(model_path: str, tag: str = DEFAULT_TAG):
     """
     Build the SAME DataLoader config the LLM used in training, but for the hidden
@@ -28,9 +35,7 @@ def load_TRACKFORMERS_test(model_path: str, tag: str = DEFAULT_TAG):
     logging.debug(f"Model path: {model_path}")
 
     # Resolve {base} naming convention
-    model_file = Path(model_path).name
-    logging.debug(f"Model file: {model_file}")
-    base = model_file[:-len("_model.pkl")]
+    base = artefact_base_from_path(model_path)
     logging.debug(f"Base name: {base}")
 
     # Define model directory
@@ -44,6 +49,7 @@ def load_TRACKFORMERS_test(model_path: str, tag: str = DEFAULT_TAG):
     # Load LoaderSpec Object
     spec_path = Path(model_dir) / f"{base}_loaderspec.json"
     spec = LoaderSpec.from_json(spec_path)
+    spec = enforce_pyg_policy(spec, require_torch_collate=True)
 
     # Load test set
     test_dir = Path(__file__).resolve().parent / "data" / "test"
@@ -120,12 +126,18 @@ def evaluate_TRACKFORMERS(model_path: str, test_loader) -> dict:
     Evaluate TRACKFORMERS using FitAccuracy (TrackML-style)
 
     Contract (strict):
-      - For each event with N hits, the model MUST output integer labels of shape (N,).
-      - No embeddings, no clustering, no float labels, no heuristics.
-      - If a batch contains multiple events:
-          - preferred: model returns list/tuple of length B (one (Ni,) array/tensor per event)
-          - allowed: model returns a flat (sum_i Ni,) tensor which we split by event lengths
-          - not allowed: a single (N,) output for B>1 (we raise)
+    Lane A (torch ragged):
+        - DataLoader yields (Xs, ys) where Xs, ys are lists of length B.
+        - Model returns list of integer label tensors, length B, each shape (N_i,).
+
+    Lane B (PyG):
+        - DataLoader yields a PyG Batch/Data object with .x and .y.
+        - Model returns a single integer label tensor of shape (num_nodes,).
+
+    Predicted noise label:
+    - Use -1 for noise/unassigned in model OUTPUT.
+    Truth noise:
+    - truth track_id == 0 is ignored by the metric.
 
     RETURNS
     FitAccuracy: float
@@ -180,107 +192,51 @@ def evaluate_TRACKFORMERS(model_path: str, test_loader) -> dict:
             )
         return arr
 
-    def _as_event_lists(batch_x, batch_y):
-        """
-        Turn normalise_batch outputs into per-event lists.
-        We support:
-          - ragged: list[tensor] / list[tensor]
-          - padded: tensor[B,...] / tensor[B,...]
-          - PyG: batch_x is a Batch object; batch_y should be list or tensor aligned to events (depending on your dataset)
-        """
-        # Ragged list case
-        if isinstance(batch_x, list):
-            xs = batch_x
-            if batch_y is None:
-                ys = [None] * len(xs)
-            elif isinstance(batch_y, list):
-                ys = batch_y
-            elif torch.is_tensor(batch_y) and batch_y.ndim >= 1 and batch_y.shape[0] == len(xs):
-                ys = [batch_y[i] for i in range(len(xs))]
-            else:
-                ys = [batch_y] * len(xs)
-            return xs, ys
-
-        # Padded tensor case
-        if torch.is_tensor(batch_x):
-            if batch_x.ndim == 0:
-                return [batch_x], [batch_y]
-            B = int(batch_x.shape[0])
-            xs = [batch_x[i] for i in range(B)]
-            if batch_y is None:
-                ys = [None] * B
-            elif torch.is_tensor(batch_y) and batch_y.ndim >= 1 and int(batch_y.shape[0]) == B:
-                ys = [batch_y[i] for i in range(B)]
-            elif isinstance(batch_y, list) and len(batch_y) == B:
-                ys = batch_y
-            else:
-                ys = [batch_y] * B
-            return xs, ys
-
-        # PyG Batch / other object: treat as single "event" unless your normalise_batch provides a list
-        return [batch_x], [batch_y]
+    # Initialise loaderspec
+    base = artefact_base_from_path(model_path)
+    model_dir = Path(model_path).resolve().parent
+    spec_path = model_dir / f"{base}_loaderspec.json"
+    spec = LoaderSpec.from_json(spec_path)
+    spec = enforce_pyg_policy(spec, require_torch_collate=True)
 
     with torch.no_grad():
+        mode = None
         for batch in tqdm(test_loader, desc="Evaluating TRACKFORMERS", unit="batch"):
-            view = normalise_batch(batch, device=device)
-            batch_x = view.batch_x
-            batch_y = view.batch_y
+            if mode is None:
+                mode = detect_and_assert_lane(spec, batch)
 
-            xs_list, ys_list = _as_event_lists(batch_x, batch_y)
-            B = len(xs_list)
+            if mode == "torch_ragged_xy":
+                Xs, ys = batch
+                Xs = [x.to(device) for x in Xs]
+                out = model.predict_labels(Xs)
+                assert_label_output_by_lane(mode, batch, out, allow_noise_label=True)
 
-            # Move inputs to device robustly:
-            # - list[tensor] -> each tensor to device
-            # - tensor -> to(device)
-            # - PyG Batch -> has .to(device)
-            if isinstance(batch_x, list):
-                batch_x_dev = [x.to(device) if torch.is_tensor(x) else x for x in batch_x]
-            elif torch.is_tensor(batch_x):
-                batch_x_dev = batch_x.to(device)
-            elif hasattr(batch_x, "to"):
-                batch_x_dev = batch_x.to(device)
-            else:
-                batch_x_dev = batch_x
+                out_list = out          # list[Tensor(N_i)]
+                ys_list = ys            # list[Tensor(N_i)]
 
-            out = model(batch_x_dev)
+            elif mode == "pyg_batch":
+                G = batch.to(device)
 
-            # Convert model output into per-event outputs
-            if isinstance(out, (list, tuple)):
-                if len(out) != B:
-                    raise ValueError(f"Model returned {len(out)} outputs but batch has {B} events.")
-                out_list = list(out)
+                # Safeguard for policy batch_size=1
+                if hasattr(G, "num_graphs") and G.num_graphs != 1:
+                    raise RuntimeError(f"PyG eval expected batch_size=1, got num_graphs={G.num_graphs}.")
+
+                out = model.predict_labels(G)
+                assert_label_output_by_lane(mode, batch, out, allow_noise_label=True)
+
+                out_list = [out]        # Tensor(num_nodes) -> single event (eval batch_size=1)
+                ys_list = [G.y]
 
             else:
-                # Allow flat concatenated output for ragged multi-event batches:
-                # out shape (sum_i Ni,) and we split by hit counts in xs_list.
-                if B > 1 and torch.is_tensor(out) and out.ndim == 1 and isinstance(xs_list, list) and all(
-                    torch.is_tensor(x) and x.ndim >= 1 for x in xs_list
-                ):
-                    lens = [int(x.shape[0]) for x in xs_list]
-                    if int(out.shape[0]) != sum(lens):
-                        raise ValueError(
-                            f"Flat output length {int(out.shape[0])} != sum of hit counts {sum(lens)}."
-                        )
-                    out_list = []
-                    off = 0
-                    for L in lens:
-                        out_list.append(out[off:off + L])
-                        off += L
-                else:
-                    if B != 1:
-                        raise ValueError("Model returned a single output but batch has multiple events.")
-                    out_list = [out]
+                raise RuntimeError(f"Unknown lane mode: {mode}")
 
             # Score per-event
             for out_i, y_i in zip(out_list, ys_list):
                 if y_i is None:
-                    raise ValueError("No truth labels (batch_y) available; cannot compute FitAccuracy.")
+                    raise ValueError("No truth labels available; cannot compute FitAccuracy.")
 
                 # truth labels -> numpy 1D
-                if torch.is_tensor(y_i):
-                    true_tid = y_i.detach().cpu().numpy().reshape(-1)
-                else:
-                    true_tid = np.asarray(y_i).reshape(-1)
+                true_tid = y_i.detach().cpu().numpy().reshape(-1) if torch.is_tensor(y_i) else np.asarray(y_i).reshape(-1)
 
                 # strict predicted labels -> numpy 1D int
                 labels = _to_numpy_1d_int(out_i, expected_len=true_tid.shape[0])

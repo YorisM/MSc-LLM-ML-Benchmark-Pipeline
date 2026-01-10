@@ -1,0 +1,71 @@
+{
+  "LLMGeneration": {
+    "model": "mistralai/devstral-2512:free",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 4108,
+    "prompt_chars": 15596,
+    "response_tokens": 2268,
+    "response_chars": 8664,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0,
+    "generation_ms": 33017,
+    "code": "# ---------- IMPORTS ----------\nimport torch.nn.functional as F\nfrom sklearn.preprocessing import StandardScaler\nfrom torch.optim import Adam\nfrom torch.optim.lr_scheduler import ReduceLROnPlateau\nfrom sklearn.metrics import roc_auc_score\nimport copy\n\n# ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.scaler = StandardScaler()\n        self.mask_value = -999.0  # Special value to mark padding\n\n    def make_loader_cfg(self) -> dict:\n        return {\n            \"dataset_builder\": \"llm_script:FourTopsDataset\",\n            \"dataset_kwargs\": {},\n            \"loader_class\": \"torch.utils.data:DataLoader\",\n            \"batch_size\": 1024,\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": True,\n            \"collate\": None,\n            \"extra_loader_kwargs\": {},\n            \"eval_overrides\": {\"shuffle\": False, \"batch_size\": 1024}\n        }\n\n    def fit(self, X, y=None):\n        # Replace padding zeros with mask_value for scaling\n        X_masked = X.clone()\n        X_masked[X_masked == 0] = self.mask_value\n\n        # Scale all features except object identifiers (which are at positions 2,7,12,...)\n        # We'll scale everything and then restore the object identifiers\n        obj_mask = torch.zeros_like(X_masked, dtype=torch.bool)\n        for i in range(18):\n            obj_mask[:, 2 + i*5] = True\n\n        # Save object identifiers\n        obj_ids = X_masked[obj_mask].reshape(-1, 18)\n\n        # Scale non-identifier features\n        non_obj_features = X_masked[~obj_mask].reshape(-1, 88)\n        self.scaler.fit(non_obj_features.numpy())\n\n        return self\n\n    def transform(self, X):\n        X_masked = X.clone()\n        X_masked[X_masked == 0] = self.mask_value\n\n        # Create mask for object identifiers\n        obj_mask = torch.zeros_like(X_masked, dtype=torch.bool)\n        for i in range(18):\n            obj_mask[:, 2 + i*5] = True\n\n        # Save and restore object identifiers\n        obj_ids = X_masked[obj_mask].reshape(-1, 18)\n\n        # Scale non-identifier features\n        non_obj_features = X_masked[~obj_mask].reshape(-1, 88)\n        scaled_features = self.scaler.transform(non_obj_features.numpy())\n\n        # Reconstruct the tensor\n        X_scaled = torch.zeros_like(X_masked)\n        X_scaled[~obj_mask] = torch.from_numpy(scaled_features).reshape(-1)\n        X_scaled[obj_mask] = obj_ids.reshape(-1)\n\n        # Restore original zeros (padding)\n        X_scaled[X_scaled == self.mask_value] = 0\n\n        return X_scaled\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# ---------- MODEL ARCHITECTURE ----------\nclass BinaryClassifier(nn.Module):\n    def __init__(self, sample_object):\n        super().__init__()\n        # Extract dimensions from sample\n        self.num_objects = 18\n        self.obj_dim = 5  # obj_id, E, pT, eta, phi\n\n        # Global features (missing ET)\n        self.global_dim = 2\n\n        # Object processing\n        self.obj_encoder = nn.Sequential(\n            nn.Linear(self.obj_dim, 64),\n            nn.BatchNorm1d(64),\n            nn.ReLU(),\n            nn.Linear(64, 32),\n            nn.BatchNorm1d(32),\n            nn.ReLU()\n        )\n\n        # Attention mechanism for objects\n        self.attention = nn.Sequential(\n            nn.Linear(32, 16),\n            nn.Tanh(),\n            nn.Linear(16, 1)\n        )\n\n        # Global feature processing\n        self.global_encoder = nn.Sequential(\n            nn.Linear(self.global_dim, 32),\n            nn.BatchNorm1d(32),\n            nn.ReLU()\n        )\n\n        # Combined processing\n        self.combined = nn.Sequential(\n            nn.Linear(32 + 32, 128),\n            nn.BatchNorm1d(128),\n            nn.ReLU(),\n            nn.Dropout(0.3),\n            nn.Linear(128, 64),\n            nn.BatchNorm1d(64),\n            nn.ReLU(),\n            nn.Dropout(0.2),\n            nn.Linear(64, 1)\n        )\n\n    def forward(self, batch_x):\n        # batch_x shape: [B, 92]\n        B = batch_x.size(0)\n\n        # Extract global features (first 2 elements)\n        global_feat = batch_x[:, :2]  # [B, 2]\n\n        # Extract object features (remaining 90 elements = 18 objects * 5 features)\n        obj_feats = batch_x[:, 2:].view(B, self.num_objects, self.obj_dim)  # [B, 18, 5]\n\n        # Process each object\n        obj_encoded = self.obj_encoder(obj_feats)  # [B, 18, 32]\n\n        # Attention weights\n        attn_weights = F.softmax(self.attention(obj_encoded), dim=1)  # [B, 18, 1]\n        obj_aggregated = (obj_encoded * attn_weights).sum(dim=1)  # [B, 32]\n\n        # Process global features\n        global_encoded = self.global_encoder(global_feat)  # [B, 32]\n\n        # Combine features\n        combined = torch.cat([obj_aggregated, global_encoded], dim=1)  # [B, 64]\n\n        # Final classification\n        out = self.combined(combined)  # [B, 1]\n\n        return out.squeeze(-1)\n\ndef make_model(example_object):\n    return BinaryClassifier(example_object)\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 50\n\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    device = torch.device(\"cuda\" if torch.cuda.is_available() else \"cpu\")\n    model = model.to(device)\n\n    # Optimizer and scheduler\n    optimizer = Adam(model.parameters(), lr=0.001, weight_decay=1e-5)\n    scheduler = ReduceLROnPlateau(optimizer, 'max', patience=5, factor=0.5, verbose=True)\n\n    # Loss function\n    criterion = nn.BCEWithLogitsLoss()\n\n    # Training loop\n    best_model = None\n    best_auc = 0.0\n    patience = 10\n    patience_counter = 0\n\n    train_loss_history = []\n    val_loss_history = []\n    train_acc_history = []\n    val_acc_history = []\n\n    for epoch in range(epochs):\n        # Training phase\n        model.train()\n        train_loss = 0.0\n        train_correct = 0\n        train_total = 0\n        train_preds = []\n        train_targets = []\n\n        for batch_x, batch_y in train_loader:\n            batch_x, batch_y = batch_x.to(device), batch_y.to(device).float()\n\n            optimizer.zero_grad()\n            outputs = model(batch_x)\n            loss = criterion(outputs, batch_y.unsqueeze(1))\n\n            loss.backward()\n            optimizer.step()\n\n            train_loss += loss.item() * batch_x.size(0)\n            preds = torch.sigmoid(outputs) > 0.5\n            train_correct += preds.eq(batch_y.byte()).sum().item()\n            train_total += batch_x.size(0)\n\n            train_preds.extend(torch.sigmoid(outputs).detach().cpu().numpy())\n            train_targets.extend(batch_y.detach().cpu().numpy())\n\n        # Validation phase\n        model.eval()\n        val_loss = 0.0\n        val_correct = 0\n        val_total = 0\n        val_preds = []\n        val_targets = []\n\n        with torch.no_grad():\n            for batch_x, batch_y in val_loader:\n                batch_x, batch_y = batch_x.to(device), batch_y.to(device).float()\n\n                outputs = model(batch_x)\n                loss = criterion(outputs, batch_y.unsqueeze(1))\n\n                val_loss += loss.item() * batch_x.size(0)\n                preds = torch.sigmoid(outputs) > 0.5\n                val_correct += preds.eq(batch_y.byte()).sum().item()\n                val_total += batch_x.size(0)\n\n                val_preds.extend(torch.sigmoid(outputs).detach().cpu().numpy())\n                val_targets.extend(batch_y.detach().cpu().numpy())\n\n        # Calculate metrics\n        train_loss = train_loss / train_total\n        val_loss = val_loss / val_total\n        train_acc = train_correct / train_total\n        val_acc = val_correct / val_total\n\n        train_auc = roc_auc_score(train_targets, train_preds)\n        val_auc = roc_auc_score(val_targets, val_preds)\n\n        # Update scheduler\n        scheduler.step(val_auc)\n\n        # Store history\n        train_loss_history.append(train_loss)\n        val_loss_history.append(val_loss)\n        train_acc_history.append(train_acc)\n        val_acc_history.append(val_acc)\n\n        # Early stopping and model saving\n        if val_auc > best_auc:\n            best_auc = val_auc\n            best_model = copy.deepcopy(model)\n            patience_counter = 0\n        else:\n            patience_counter += 1\n            if patience_counter >= patience:\n                print(f\"Early stopping at epoch {epoch}\")\n                break\n\n        print(f\"Epoch {epoch+1}/{epochs} - \"\n              f\"Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f} - \"\n              f\"Train Acc: {train_acc:.4f}, Val Acc: {val_acc:.4f} - \"\n              f\"Train AUC: {train_auc:.4f}, Val AUC: {val_auc:.4f}\")\n\n    return best_model, train_loss_history, val_loss_history, train_acc_history, val_acc_history",
+    "reasoning": "",
+    "Outer_attempt": 1
+  },
+  "StaticChecks": {
+    "__timestamp": "2026-01-05T16:24:34Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2026-01-05T16:24:34Z",
+        "metrics": {
+          ".\\outputs\\01-05(2)\\FOURTOPS\\Q1\\script_mistralai_devstral-2512_free_1724_1.py": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 268,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 268,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2026-01-05T16:25:01Z",
+    "passed": false,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/01-05(2)/FOURTOPS/Q1/script_mistralai_devstral-2512_free_1724_1.py\nargv2=--dryrun\n",
+      "stderr": "Traceback (most recent call last):\n  File \"/workspace/outputs/01-05(2)/FOURTOPS/Q1/script_mistralai_devstral-2512_free_1724_1.py\", line 399, in <module>\n    _run(dryrun=\"--dryrun\" in sys.argv)\n  File \"/workspace/outputs/01-05(2)/FOURTOPS/Q1/script_mistralai_devstral-2512_free_1724_1.py\", line 336, in _run\n    pre     = make_preprocessor().fit(X_train, Y_train)\n              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/outputs/01-05(2)/FOURTOPS/Q1/script_mistralai_devstral-2512_free_1724_1.py\", line 100, in fit\n    non_obj_features = X_masked[~obj_mask].reshape(-1, 88)\n                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nRuntimeError: shape '[-1, 88]' is invalid for input of size 29600\n"
+    },
+    "return_code": 1
+  }
+}

@@ -1,0 +1,71 @@
+{
+  "LLMGeneration": {
+    "model": "mistralai/mistral-large-2512",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 4260,
+    "prompt_chars": 16219,
+    "response_tokens": 2344,
+    "response_chars": 8825,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.005646,
+    "generation_ms": 36915,
+    "code": "# ---------- IMPORTS ----------\nfrom sklearn.preprocessing import RobustScaler\nfrom torch.optim import AdamW\nfrom torch.optim.lr_scheduler import ReduceLROnPlateau\nfrom sklearn.metrics import roc_auc_score\nimport torch.nn.functional as F\n\n# ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.scaler = RobustScaler()\n        self.obj_slice = slice(2, None)  # Skip E_T_miss and phi_Et_miss\n        self.per_obj_features = 5\n        self.max_objects = 18\n\n    def make_loader_cfg(self) -> dict:\n        return {\n            \"dataset_builder\": \"llm_script:FourTopsDataset\",\n            \"dataset_kwargs\": {},\n\n            \"loader_class\": \"torch.utils.data:DataLoader\",\n            \"batch_size\": 512,\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": False,\n\n            \"collate\": None,\n\n            \"extra_loader_kwargs\": {},\n\n            \"eval_overrides\": {\"shuffle\": False,\n                                \"batch_size\": 512}\n        }\n\n    def fit(self, X, y=None):\n        # Extract only kinematic features (E, p_T, eta, phi) for scaling\n        kinematic_features = X[:, self.obj_slice].reshape(-1, self.per_obj_features)[:, 1:]\n        # Remove zero-padded objects (obj_id == 0)\n        mask = (X[:, self.obj_slice].reshape(-1, self.per_obj_features)[:, 0] != 0)\n        kinematic_features = kinematic_features[mask]\n        self.scaler.fit(kinematic_features)\n        return self\n\n    def transform(self, X):\n        # Create a copy to avoid modifying the original\n        X_transformed = X.clone()\n\n        # Scale kinematic features (E, p_T, eta, phi)\n        kinematic_features = X_transformed[:, self.obj_slice].reshape(-1, self.per_obj_features)[:, 1:]\n        mask = (X_transformed[:, self.obj_slice].reshape(-1, self.per_obj_features)[:, 0] != 0)\n        kinematic_features[mask] = self.scaler.transform(kinematic_features[mask])\n        X_transformed[:, self.obj_slice] = kinematic_features.reshape(X_transformed.shape[0], -1)\n\n        # Add pairwise features: invariant mass and delta R\n        n_events = X_transformed.shape[0]\n        pairwise_features = torch.zeros((n_events, self.max_objects, self.max_objects, 2), device=X_transformed.device)\n\n        for i in range(self.max_objects):\n            for j in range(i+1, self.max_objects):\n                # Get object indices\n                idx_i = 2 + i * self.per_obj_features\n                idx_j = 2 + j * self.per_obj_features\n\n                # Skip if either object is padding\n                if (X_transformed[:, idx_i] == 0).all() or (X_transformed[:, idx_j] == 0).all():\n                    continue\n\n                # Extract features\n                E_i = X_transformed[:, idx_i+1]\n                px_i = X_transformed[:, idx_i+2] * torch.cos(X_transformed[:, idx_i+4])\n                py_i = X_transformed[:, idx_i+2] * torch.sin(X_transformed[:, idx_i+4])\n                pz_i = X_transformed[:, idx_i+2] * torch.sinh(X_transformed[:, idx_i+3])\n\n                E_j = X_transformed[:, idx_j+1]\n                px_j = X_transformed[:, idx_j+2] * torch.cos(X_transformed[:, idx_j+4])\n                py_j = X_transformed[:, idx_j+2] * torch.sin(X_transformed[:, idx_j+4])\n                pz_j = X_transformed[:, idx_j+2] * torch.sinh(X_transformed[:, idx_j+3])\n\n                # Invariant mass\n                m_ij = torch.sqrt((E_i + E_j)**2 - (px_i + px_j)**2 - (py_i + py_j)**2 - (pz_i + pz_j)**2)\n                pairwise_features[:, i, j, 0] = m_ij\n                pairwise_features[:, j, i, 0] = m_ij\n\n                # Delta R\n                delta_eta = X_transformed[:, idx_i+3] - X_transformed[:, idx_j+3]\n                delta_phi = torch.abs(X_transformed[:, idx_i+4] - X_transformed[:, idx_j+4])\n                delta_phi = torch.min(delta_phi, 2*torch.pi - delta_phi)\n                delta_R = torch.sqrt(delta_eta**2 + delta_phi**2)\n                pairwise_features[:, i, j, 1] = delta_R\n                pairwise_features[:, j, i, 1] = delta_R\n\n        # Flatten pairwise features and concatenate with original features\n        pairwise_flat = pairwise_features.reshape(n_events, -1)\n        X_transformed = torch.cat([X_transformed, pairwise_flat], dim=1)\n\n        return X_transformed\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# ---------- MODEL ARCHITECTURE ----------\nclass BinaryClassifier(nn.Module):\n    def __init__(self, sample_object):\n        super().__init__()\n        input_dim = sample_object.shape[1]\n\n        # Feature extraction layers\n        self.fc1 = nn.Linear(input_dim, 512)\n        self.fc2 = nn.Linear(512, 256)\n        self.fc3 = nn.Linear(256, 128)\n\n        # Attention mechanism\n        self.attention = nn.Sequential(\n            nn.Linear(128, 64),\n            nn.Tanh(),\n            nn.Linear(64, 1),\n            nn.Softmax(dim=1)\n        )\n\n        # Output layer\n        self.output = nn.Linear(128, 1)\n\n        # Dropout\n        self.dropout = nn.Dropout(0.3)\n\n        # Batch norm\n        self.bn1 = nn.BatchNorm1d(512)\n        self.bn2 = nn.BatchNorm1d(256)\n        self.bn3 = nn.BatchNorm1d(128)\n\n    def forward(self, batch_x):\n        # Feature extraction\n        x = F.relu(self.bn1(self.fc1(batch_x)))  # [B, 512]\n        x = self.dropout(x)\n        x = F.relu(self.bn2(self.fc2(x)))        # [B, 256]\n        x = self.dropout(x)\n        x = F.relu(self.bn3(self.fc3(x)))        # [B, 128]\n        x = self.dropout(x)\n\n        # Attention mechanism\n        attention_weights = self.attention(x)    # [B, 1]\n        x = x * attention_weights                # [B, 128]\n\n        # Output\n        logits = self.output(x).squeeze(-1)     # [B]\n        return logits\n\ndef make_model(example_object):\n    return BinaryClassifier(example_object)\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 30\n\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    optimizer = AdamW(model.parameters(), lr=0.001, weight_decay=1e-5)\n    scheduler = ReduceLROnPlateau(optimizer, 'max', patience=3, factor=0.5, verbose=True)\n    criterion = nn.BCEWithLogitsLoss()\n\n    best_auc = 0.0\n    best_model = None\n    train_losses = []\n    val_losses = []\n    train_accs = []\n    val_accs = []\n\n    for epoch in range(epochs):\n        model.train()\n        train_loss = 0.0\n        train_preds = []\n        train_targets = []\n\n        for batch_x, batch_y in train_loader:\n            batch_x, batch_y = batch_x.to(device), batch_y.to(device)\n\n            optimizer.zero_grad()\n            logits = model(batch_x)\n            loss = criterion(logits, batch_y.float())\n            loss.backward()\n            optimizer.step()\n\n            train_loss += loss.item()\n            train_preds.extend(torch.sigmoid(logits).detach().cpu().numpy())\n            train_targets.extend(batch_y.detach().cpu().numpy())\n\n        train_loss /= len(train_loader)\n        train_auc = roc_auc_score(train_targets, train_preds)\n        train_acc = (torch.sigmoid(torch.tensor(train_preds)) > 0.5).float().eq(torch.tensor(train_targets)).float().mean().item()\n\n        # Validation\n        model.eval()\n        val_loss = 0.0\n        val_preds = []\n        val_targets = []\n\n        with torch.no_grad():\n            for batch_x, batch_y in val_loader:\n                batch_x, batch_y = batch_x.to(device), batch_y.to(device)\n                logits = model(batch_x)\n                loss = criterion(logits, batch_y.float())\n                val_loss += loss.item()\n                val_preds.extend(torch.sigmoid(logits).cpu().numpy())\n                val_targets.extend(batch_y.cpu().numpy())\n\n        val_loss /= len(val_loader)\n        val_auc = roc_auc_score(val_targets, val_preds)\n        val_acc = (torch.sigmoid(torch.tensor(val_preds)) > 0.5).float().eq(torch.tensor(val_targets)).float().mean().item()\n\n        # Update learning rate based on validation AUC\n        scheduler.step(val_auc)\n\n        # Store metrics\n        train_losses.append(train_loss)\n        val_losses.append(val_loss)\n        train_accs.append(train_acc)\n        val_accs.append(val_acc)\n\n        print(f\"Epoch {epoch+1}/{epochs} - Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}, \"\n              f\"Train AUC: {train_auc:.4f}, Val AUC: {val_auc:.4f}, \"\n              f\"Train Acc: {train_acc:.4f}, Val Acc: {val_acc:.4f}\")\n\n        # Early stopping based on validation AUC\n        if val_auc > best_auc:\n            best_auc = val_auc\n            best_model = model.state_dict()\n            patience = 0\n        else:\n            patience += 1\n            if patience >= 5:\n                print(\"Early stopping triggered\")\n                break\n\n    # Load best model\n    if best_model is not None:\n        model.load_state_dict(best_model)\n\n    return model, train_losses, val_losses, train_accs, val_accs",
+    "reasoning": "",
+    "Outer_attempt": 1
+  },
+  "StaticChecks": {
+    "__timestamp": "2026-01-05T17:19:33Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2026-01-05T17:19:33Z",
+        "metrics": {
+          ".\\outputs\\01-05(2)\\FOURTOPS\\Q2\\script_mistralai_mistral-large-2512_1819_1.py": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 256,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 256,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2026-01-05T17:19:54Z",
+    "passed": false,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/01-05(2)/FOURTOPS/Q2/script_mistralai_mistral-large-2512_1819_1.py\nargv2=--dryrun\n",
+      "stderr": "Traceback (most recent call last):\n  File \"/workspace/outputs/01-05(2)/FOURTOPS/Q2/script_mistralai_mistral-large-2512_1819_1.py\", line 369, in <module>\n    _run(dryrun=\"--dryrun\" in sys.argv)\n  File \"/workspace/outputs/01-05(2)/FOURTOPS/Q2/script_mistralai_mistral-large-2512_1819_1.py\", line 313, in _run\n    train_ds     = build_dataset(spec, (X_train, Y_train), pre, train=True)\n                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/utils/llm_io.py\", line 149, in build_dataset\n    return builder(events, preproc, train=train, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/outputs/01-05(2)/FOURTOPS/Q2/script_mistralai_mistral-large-2512_1819_1.py\", line 43, in __init__\n    X2 = pre.transform(X) if pre is not None else X\n         ^^^^^^^^^^^^^^^^\n  File \"/workspace/outputs/01-05(2)/FOURTOPS/Q2/script_mistralai_mistral-large-2512_1819_1.py\", line 107, in transform\n    kinematic_features[mask] = self.scaler.transform(kinematic_features[mask])\n    ~~~~~~~~~~~~~~~~~~^^^^^^\nTypeError: can't assign a numpy.ndarray to a torch.FloatTensor\n"
+    },
+    "return_code": 1
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "dataset": {
+    "builder": "utils.llm_io:EventDataset",
+    "expects_train_flag": true,
+    "kwargs": {}
+  },
+  "eval_overrides": {
+    "shuffle": false
+  },
+  "loader": {
+    "batch_size": 32,
+    "class": "torch.utils.data:DataLoader",
+    "collate": {
+      "builtin": "ragged_xy"
+    },
+    "extra_kwargs": {},
+    "num_workers": 0,
+    "pin_memory": false,
+    "shuffle": true
+  },
+  "schema_version": 1,
+  "script_module": "llm_script"
+}

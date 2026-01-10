@@ -1,0 +1,142 @@
+{
+  "LLMGeneration": {
+    "model": "x-ai/grok-code-fast-1",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 4305,
+    "prompt_chars": 17785,
+    "response_tokens": 7168,
+    "response_chars": 5641,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.01157844,
+    "generation_ms": 73419,
+    "code": "import torch\nimport torch.nn as nn\nimport torch.nn.functional as F\nfrom sklearn.cluster import DBSCAN\n\n# ---------- IMPORTS ----------\n# <LLM: Import modules>\n# Already have torch, nn, etc.\n\n# ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.mean = None\n        self.std = None\n\n    def make_loader_cfg(self) -> dict:\n        return {\n            \"dataset_builder\": \"utils.llm_io:EventDataset\",\n            \"dataset_kwargs\": {},\n            \"loader_class\": \"torch.utils.data:DataLoader\",\n            \"batch_size\": 64,\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": False,\n            \"collate\": \"ragged_xy\",\n            \"extra_loader_kwargs\": {},\n            \"eval_overrides\": {\"shuffle\": False}\n        }\n\n    def fit(self, Xs):\n        # Xs: list of per-event X, each [N_hits_i, 4] (r, theta, z, layer_id)\n        cartesian_list = []\n        for X in Xs:\n            r, theta, z, layer = X[:, 0], X[:, 1], X[:, 2], X[:, 3]\n            x = r * torch.cos(theta)\n            y = r * torch.sin(theta)\n            cartesian = torch.stack([x, y, z, layer], dim=1)  # [N, 4]\n            cartesian_list.append(cartesian)\n        full_cartesian = torch.cat(cartesian_list, dim=0)\n        self.mean = full_cartesian.mean(dim=0)\n        self.std = full_cartesian.std(dim=0)\n        return self\n\n    def transform(self, X):\n        # X: [N_hits, 4]\n        r, theta, z, layer = X[:, 0], X[:, 1], X[:, 2], X[:, 3]\n        x = r * torch.cos(theta)\n        y = r * torch.sin(theta)\n        cartesian = torch.stack([x, y, z, layer], dim=1)  # [N, 4]\n        cartesian = (cartesian - self.mean) / self.std\n        return cartesian  # torch.FloatTensor [N, 4]\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# ---------- MODEL ARCHITECTURE ----------\nclass HitClassifier(nn.Module):\n    def __init__(self, example_batch_x):\n        super().__init__()\n        F = example_batch_x[0].shape[1]  # 4\n        self.mlp = nn.Sequential(\n            nn.Linear(F, 128),\n            nn.ReLU(),\n            nn.Linear(128, 64)\n        )\n\n    def forward(self, batch_x):\n        # batch_x: list of [N_i, F], output list of [N_i, 64] embeddings, normalized\n        return [F.normalize(self.mlp(X.to(device)), dim=1) for X in batch_x]\n\n    def predict_labels(self, batch_x):\n        # Use DBSCAN to cluster normalized embeddings per event\n        with torch.no_grad():\n            embeddings = self.forward(batch_x)\n            labels = []\n            for emb in embeddings:\n                # emb: [N, 64], normalized\n                emb_np = emb.cpu().numpy()\n                # Tune eps and min_samples for clustering; adjust as needed for performance\n                eps = 0.5   # Hardcoded; in practice, tune via validation\n                min_samples = 2\n                cluster_labels = DBSCAN(eps=eps, min_samples=min_samples).fit_predict(emb_np)\n                # DBSCAN labels outliers (potential noise) as -1\n                labels.append(torch.tensor(cluster_labels, dtype=torch.long))\n            return labels  # list of [N_i], with -1 for noise/unassigned\n\ndef make_model(example_batch_x):\n    return HitClassifier(example_batch_x)\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 10  # Adjust epochs for convergence\n\ndef info_nce_loss(emb, y, temp=0.1):\n    # emb: [N, 64] normalized, y: [N]\n    N = emb.shape[0]\n    if N <= 1:\n        return torch.tensor(0.0, device=device, requires_grad=True)\n\n    # Cosine similarity matrix (N, N)\n    cos_sim = emb @ emb.t() / temp\n    cos_sim[torch.arange(N), torch.arange(N)] = -float('inf')  # Exclude self-similarity\n\n    # Positive mask: same track (>0), exclude self\n    mask_y = (y.unsqueeze(1) == y.unsqueeze(0)) & (y.unsqueeze(1) > 0) & (y.unsqueeze(0) > 0)\n    mask_y.fill_diagonal_(False)\n\n    loss = 0.0\n    valid_count = 0\n    for i in range(N):\n        pos_mask = mask_y[i]\n        if pos_mask.sum() == 0:\n            continue\n        pos_sims = cos_sim[i, pos_mask]  # Sums for positives\n        all_sims = cos_sim[i]\n        sum_pos = torch.logsumexp(pos_sims, 0)\n        sum_all = torch.logsumexp(all_sims, 0)\n        loss += sum_all - sum_pos\n        valid_count += 1\n    loss /= max(valid_count, 1)\n    return loss\n\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    # Train embeddings with InfoNCE loss\n    opt = torch.optim.Adam(model.parameters(), lr=0.001)\n    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=epochs)\n\n    train_losses = []\n    val_accs = []  # FitAccuracy will be computed by harness, dummy here\n\n    for epoch in range(epochs):\n        model.train()\n        total_loss = 0.0\n        num_batches = 0\n        for xs, ys in train_loader:\n            Xs = [x.to(device) for x in xs]\n            ys = [y.to(device) for y in ys]\n            emb = model.forward(Xs)  # list of normalized [N_i, 64]\n            batch_loss = 0.0\n            for emb_i, y_i in zip(emb, ys):\n                batch_loss += info_nce_loss(emb_i, y_i)\n            batch_loss /= max(len(emb), 1)\n            opt.zero_grad()\n            batch_loss.backward()\n            opt.step()\n            total_loss += batch_loss.item()\n            num_batches += 1\n        avg_loss = total_loss / num_batches\n        train_losses.append(avg_loss)\n        scheduler.step()\n\n        # Validation: Compute dummy val_acc; harness handles true FitAccuracy\n        # Here, simulate acc computation if needed, but rely on harness\n        val_accs.append(0.0)  # Placeholder\n\n    return model, train_losses, [], [0.0] * epochs, val_accs",
+    "reasoning": "",
+    "Outer_attempt": 1
+  },
+  "StaticChecks": {
+    "__timestamp": "2026-01-05T11:23:39Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2026-01-05T11:23:39Z",
+        "metrics": {
+          ".\\outputs\\01-05(2)\\TRACKFORMERS\\Q1\\script_x-ai_grok-code-fast-1_1223_1.py": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 218,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 218,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2026-01-05T11:24:13Z",
+    "passed": true,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/01-05(2)/TRACKFORMERS/Q1/script_x-ai_grok-code-fast-1_1223_1.py\nargv2=--dryrun\nDry-run: skipping artefact manifest\n",
+      "stderr": ""
+    },
+    "return_code": 0
+  },
+  "Training": {
+    "__timestamp": "2026-01-08T00:16:10.233051+00:00",
+    "passed": true,
+    "resources": {
+      "cpu_seconds_user": 0.95,
+      "cpu_seconds_sys": 0.97,
+      "disk_read_mb": 46.7,
+      "disk_write_mb": 0.2,
+      "max_rss_kb": 920,
+      "training_time_s": 16584.0,
+      "gpu_name": null,
+      "gpu_total_mb": null,
+      "gpu_peak_alloc_mb": null,
+      "cuda_available": null
+    },
+    "metrics": {
+      "epochs": 10,
+      "train_loss": [
+        1.3094569842020671,
+        0.8901606807633052,
+        0.7159500245064024,
+        0.6688969163667589,
+        0.6477385560671488,
+        0.6358050297177027,
+        0.6263096323088994,
+        0.61969479587343,
+        0.6150278581513299,
+        0.6130235829050579
+      ],
+      "val_loss": null,
+      "train_acc": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "val_acc": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/01-05(2)/TRACKFORMERS/Q1/x-ai_grok-code-fast-1/script_x-ai_grok-code-fast-1_1223_1.py\nargv2=\n#TRAIN_METRICS#{\"epochs\": 10, \"train_loss\": [1.3094569842020671, 0.8901606807633052, 0.7159500245064024, 0.6688969163667589, 0.6477385560671488, 0.6358050297177027, 0.6263096323088994, 0.61969479587343, 0.6150278581513299, 0.6130235829050579], \"val_loss\": null, \"train_acc\": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], \"val_acc\": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]}\nHash manifest written â†’ x-ai_grok-code-fast-1_1223_1_manifest.sha256\n",
+      "stderr": "WARNING:matplotlib:mkdir -p failed for path /home/sandbox/.config/matplotlib: [Errno 30] Read-only file system: '/home/sandbox/.config'\nWARNING:matplotlib:Matplotlib created a temporary cache directory at /tmp/matplotlib-xpmms6zg because there was an issue with the default path (/home/sandbox/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.\n"
+    }
+  },
+  "Evaluation": {
+    "__timestamp": "2026-01-09T17:12:22Z",
+    "passed": true,
+    "metrics": {
+      "ok": true,
+      "load_s": 4.66,
+      "eval_s": 5.7,
+      "FitAccuracy": 0.39794478671871325
+    },
+    "runtime_s": 17.18
+  }
+}

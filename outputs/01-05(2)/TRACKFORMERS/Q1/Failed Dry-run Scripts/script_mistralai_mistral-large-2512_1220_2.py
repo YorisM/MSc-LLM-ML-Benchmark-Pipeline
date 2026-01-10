@@ -1,0 +1,535 @@
+
+# ----------------  START HARNESS PREFIX WRAPPER (FOR CONTEXT)  ---------------- 
+# Environment: python 3.12, torch 2.6.0, torch_geometric 2.6.1, numpy 2.3.1, 
+# scipy 1.16.0, scikit-learn 1.7.0, hdbscan v0.8.40
+import os, sys, gzip, json, pickle, torch, torch_geometric
+import pandas as pd, numpy as np
+from torch import nn
+from torch.utils.data import Dataset
+from utils.llm_io import detect_and_assert_lane, assert_label_output_by_lane, build_dataset, build_dataloader
+from utils.loaderspec import build_spec_from_preproc, enforce_pyg_policy
+from utils.suffix_utils import base_from_argv0, plot_train_val, persist_artefacts, build_trackformers_model
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+if device.type == "cuda":
+    torch.backends.cudnn.benchmark = True
+
+torch.manual_seed(42)                        
+os.environ["PYTHONHASHSEED"] = "42"
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(sys.argv[0]))
+DATA_DIR = "./challenges/TRACKFORMERS/data/train"
+TAG      = "REDVID_10-50_linear_frac0.05"
+
+def _load_events(split: str):
+    pkl = os.path.join(DATA_DIR, f"{TAG}_{split}.pkl.gz")
+    with gzip.open(pkl, "rb") as fh:
+        return pickle.load(fh)["events"]
+
+def split_X_y(evt):
+    X = np.column_stack([
+        evt["hit_r"].astype(np.float32),
+        evt["hit_theta"].astype(np.float32),
+        evt["hit_z"].astype(np.float32),
+        evt["layer_id"].astype(np.float32)
+    ])
+    y = evt["track_id"].astype(np.int64)
+    return torch.from_numpy(X), torch.from_numpy(y)
+
+class EventDataset(Dataset):
+    def __init__(self, events, pre, train=True):
+        self.events, self.pre, self.train = events, pre, train
+    def __len__(self):
+        return len(self.events)
+    def __getitem__(self, idx):
+        X, labels = split_X_y(self.events[idx])
+        X = self.pre.transform(X) if self.pre is not None else X
+        return (X, labels)
+
+# ----------------  END HARNESS PREFIX WRAPPER (FOR CONTEXT)  ---------------- 
+# -------------------------- START OF LLM BLOCK ------------------------------
+
+# ---------- IMPORTS ----------
+from torch.nn import functional as F
+from torch.optim import AdamW
+from torch.optim.lr_scheduler import CosineAnnealingLR
+from sklearn.preprocessing import StandardScaler
+from scipy.spatial import KDTree
+import hdbscan
+from collections import defaultdict
+
+# ----------- (OPTIONAL) PRE-PROCESSING ----------
+class MyPreprocessor:
+    def __init__(self):
+        self.scaler = StandardScaler()
+        self.layer_mean_r = None
+        self.layer_mean_z = None
+        self.layer_mean_theta = None
+
+    def make_loader_cfg(self) -> dict:
+        return {
+            "dataset_builder": "utils.llm_io:EventDataset",
+            "dataset_kwargs": {},
+
+            "loader_class": "torch.utils.data:DataLoader",
+            "batch_size": 32,
+            "shuffle": True,
+            "num_workers": 4,
+            "pin_memory": True,
+
+            "collate": "ragged_xy",
+            "extra_loader_kwargs": {},
+
+            "eval_overrides": {"shuffle": False, "num_workers": 0}
+        }
+
+    def fit(self, Xs):
+        # Compute global statistics for normalization
+        all_X = np.concatenate(Xs, axis=0)
+        self.scaler.fit(all_X[:, :3])  # Only scale r, theta, z
+
+        # Compute per-layer means for feature engineering
+        layer_ids = np.concatenate([X[:, 3] for X in Xs])
+        unique_layers = np.unique(layer_ids)
+
+        self.layer_mean_r = {}
+        self.layer_mean_z = {}
+        self.layer_mean_theta = {}
+
+        for layer in unique_layers:
+            mask = (layer_ids == layer)
+            self.layer_mean_r[layer] = np.mean(all_X[mask, 0])
+            self.layer_mean_z[layer] = np.mean(all_X[mask, 2])
+            self.layer_mean_theta[layer] = np.mean(all_X[mask, 1])
+
+        return self
+
+    def transform(self, X):
+        # X shape: [N_hits, 4] (r, theta, z, layer_id)
+        X = X.clone().numpy() if isinstance(X, torch.Tensor) else X.copy()
+
+        # Normalize r, theta, z
+        X[:, :3] = self.scaler.transform(X[:, :3])
+
+        # Add per-layer mean features
+        layer_ids = X[:, 3]
+        r_mean = np.array([self.layer_mean_r.get(l, 0) for l in layer_ids])
+        z_mean = np.array([self.layer_mean_z.get(l, 0) for l in layer_ids])
+        theta_mean = np.array([self.layer_mean_theta.get(l, 0) for l in layer_ids])
+
+        # Create additional features
+        X_new = np.zeros((X.shape[0], 10), dtype=np.float32)
+        X_new[:, :3] = X[:, :3]  # normalized r, theta, z
+        X_new[:, 3] = X[:, 3]    # layer_id (not normalized)
+        X_new[:, 4] = X[:, 0] - r_mean  # r deviation from layer mean
+        X_new[:, 5] = X[:, 2] - z_mean  # z deviation from layer mean
+        X_new[:, 6] = np.sin(X[:, 1] - theta_mean)  # theta deviation (cyclic)
+        X_new[:, 7] = np.cos(X[:, 1] - theta_mean)  # theta deviation (cyclic)
+        X_new[:, 8] = X[:, 0] * X[:, 2]  # r-z correlation
+        X_new[:, 9] = X[:, 0] * np.sin(X[:, 1])  # r-theta correlation
+
+        return torch.from_numpy(X_new)
+
+def make_preprocessor():
+    return MyPreprocessor()
+
+# ---------- MODEL ARCHITECTURE ----------
+class HitClassifier(nn.Module):
+    def __init__(self, example_batch_x):
+        super().__init__()
+
+        # Determine input feature dimension from first event in batch
+        self.input_dim = example_batch_x[0].shape[1]
+
+        # Embedding layers
+        self.hit_embed = nn.Sequential(
+            nn.Linear(self.input_dim, 128),
+            nn.LayerNorm(128),
+            nn.ReLU(),
+            nn.Linear(128, 128),
+            nn.LayerNorm(128),
+            nn.ReLU()
+        )
+
+        # Transformer encoder
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=128,
+            nhead=8,
+            dim_feedforward=512,
+            dropout=0.1,
+            activation='gelu',
+            batch_first=True
+        )
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=6)
+
+        # Output layers
+        self.cluster_head = nn.Sequential(
+            nn.Linear(128, 64),
+            nn.LayerNorm(64),
+            nn.ReLU(),
+            nn.Linear(64, 32)
+        )
+
+        # Track classification head
+        self.track_head = nn.Sequential(
+            nn.Linear(128, 64),
+            nn.LayerNorm(64),
+            nn.ReLU(),
+            nn.Linear(64, 1)
+        )
+
+        # Learnable position encoding
+        self.pos_encoder = nn.Parameter(torch.randn(1, 1000, 128))
+
+    def forward(self, batch_x):
+        # batch_x: list of tensors [N_i, F]
+        device = next(self.parameters()).device
+        batch_embeddings = []
+
+        for x in batch_x:
+            x = x.to(device)
+            # Embed hits
+            embed = self.hit_embed(x)  # [N_i, 128]
+
+            # Add position encoding (truncated)
+            pos_enc = self.pos_encoder[:, :embed.shape[0], :]
+            embed = embed + pos_enc
+
+            batch_embeddings.append(embed)
+
+        # Pad sequences for transformer
+        max_len = max(e.shape[0] for e in batch_embeddings)
+        padded_embeddings = []
+        masks = []
+
+        for embed in batch_embeddings:
+            # Pad embeddings
+            pad_size = max_len - embed.shape[0]
+            padded = F.pad(embed, (0, 0, 0, pad_size))
+            padded_embeddings.append(padded)
+
+            # Create attention mask
+            mask = torch.zeros(max_len, max_len, device=device)
+            mask[:, :embed.shape[0]] = 1
+            masks.append(mask)
+
+        # Stack and process with transformer
+        embeddings = torch.stack(padded_embeddings)  # [B, max_len, 128]
+        mask = torch.stack(masks)  # [B, max_len, max_len]
+
+        # Transformer expects [max_len, B, 128] for batch_first=False
+        embeddings = embeddings.transpose(0, 1)  # [max_len, B, 128]
+        mask = mask.transpose(0, 1)  # [max_len, B, max_len]
+
+        # Process with transformer
+        transformer_out = self.transformer(embeddings, mask=mask)
+        transformer_out = transformer_out.transpose(0, 1)  # [B, max_len, 128]
+
+        # Unpad sequences
+        outputs = []
+        for i, embed in enumerate(batch_embeddings):
+            outputs.append(transformer_out[i, :embed.shape[0], :])
+
+        return outputs
+
+    def predict_labels(self, batch_x):
+        device = next(self.parameters()).device
+        embeddings = self.forward(batch_x)
+
+        # Get cluster assignments
+        all_labels = []
+        for embed in embeddings:
+            embed = embed.detach().cpu().numpy()
+
+            # Use HDBSCAN for clustering
+            clusterer = hdbscan.HDBSCAN(
+                min_cluster_size=5,
+                min_samples=3,
+                cluster_selection_epsilon=0.5,
+                metric='euclidean',
+                gen_min_span_tree=False
+            )
+            labels = clusterer.fit_predict(embed)
+
+            # Convert to torch tensor
+            labels = torch.from_numpy(labels).to(device)
+            all_labels.append(labels)
+
+        return all_labels
+
+def make_model(example_batch_x):
+    return HitClassifier(example_batch_x)
+
+# ---------- MODEL TRAINING ----------
+EPOCHS = 30
+
+def train_model(model, train_loader, val_loader, epochs):
+    device = next(model.parameters()).device
+    optimizer = AdamW(model.parameters(), lr=3e-4, weight_decay=1e-4)
+    scheduler = CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-5)
+
+    best_val_loss = float('inf')
+    patience = 5
+    patience_counter = 0
+
+    train_losses = []
+    val_losses = []
+    train_accs = []
+    val_accs = []
+
+    for epoch in range(epochs):
+        model.train()
+        total_loss = 0
+        total_hits = 0
+
+        for Xs, ys in train_loader:
+            Xs = [x.to(device) for x in Xs]
+            ys = [y.to(device) for y in ys]
+
+            optimizer.zero_grad()
+
+            # Forward pass
+            embeddings = model(Xs)
+
+            # Compute loss
+            loss = 0
+            for embed, y in zip(embeddings, ys):
+                # Skip noise hits (track_id == 0)
+                mask = (y != 0)
+                if mask.sum() == 0:
+                    continue
+
+                embed = embed[mask]
+                y = y[mask]
+
+                # Create pairwise similarity matrix
+                sim_matrix = torch.matmul(embed, embed.T)  # [N, N]
+                sim_matrix = sim_matrix / (torch.norm(embed, dim=1, keepdim=True) * torch.norm(embed, dim=1) + 1e-8)
+
+                # Create target matrix (1 if same track, 0 otherwise)
+                y_matrix = (y.unsqueeze(0) == y.unsqueeze(1)).float()
+
+                # Compute contrastive loss
+                pos_mask = y_matrix
+                neg_mask = 1 - y_matrix
+
+                pos_loss = -torch.log(sim_matrix + 1e-8) * pos_mask
+                neg_loss = torch.log(1 - sim_matrix + 1e-8) * neg_mask
+
+                loss += (pos_loss.sum() + neg_loss.sum()) / (mask.sum() ** 2)
+
+            if loss > 0:
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                optimizer.step()
+
+            total_loss += loss.item() * sum(x.shape[0] for x in Xs)
+            total_hits += sum(x.shape[0] for x in Xs)
+
+        scheduler.step()
+
+        # Validation
+        model.eval()
+        val_loss = 0
+        val_hits = 0
+
+        with torch.no_grad():
+            for Xs, ys in val_loader:
+                Xs = [x.to(device) for x in Xs]
+                ys = [y.to(device) for y in ys]
+
+                embeddings = model(Xs)
+
+                for embed, y in zip(embeddings, ys):
+                    mask = (y != 0)
+                    if mask.sum() == 0:
+                        continue
+
+                    embed = embed[mask]
+                    y = y[mask]
+
+                    sim_matrix = torch.matmul(embed, embed.T)
+                    sim_matrix = sim_matrix / (torch.norm(embed, dim=1, keepdim=True) * torch.norm(embed, dim=1) + 1e-8)
+
+                    y_matrix = (y.unsqueeze(0) == y.unsqueeze(1)).float()
+
+                    pos_mask = y_matrix
+                    neg_mask = 1 - y_matrix
+
+                    pos_loss = -torch.log(sim_matrix + 1e-8) * pos_mask
+                    neg_loss = torch.log(1 - sim_matrix + 1e-8) * neg_mask
+
+                    val_loss += (pos_loss.sum() + neg_loss.sum()).item()
+
+                val_hits += sum(x.shape[0] for x in Xs)
+
+        # Calculate metrics
+        avg_train_loss = total_loss / total_hits if total_hits > 0 else 0
+        avg_val_loss = val_loss / val_hits if val_hits > 0 else 0
+
+        train_losses.append(avg_train_loss)
+        val_losses.append(avg_val_loss)
+
+        # Simple accuracy estimation (not true FitAccuracy but for monitoring)
+        train_acc = estimate_accuracy(model, train_loader, device)
+        val_acc = estimate_accuracy(model, val_loader, device)
+
+        train_accs.append(train_acc)
+        val_accs.append(val_acc)
+
+        print(f"Epoch {epoch+1}/{epochs} - Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}, "
+              f"Train Acc: {train_acc:.4f}, Val Acc: {val_acc:.4f}")
+
+        # Early stopping
+        if avg_val_loss < best_val_loss:
+            best_val_loss = avg_val_loss
+            patience_counter = 0
+        else:
+            patience_counter += 1
+            if patience_counter >= patience:
+                print(f"Early stopping at epoch {epoch+1}")
+                break
+
+    return model, train_losses, val_losses, train_accs, val_accs
+
+def estimate_accuracy(model, loader, device):
+    model.eval()
+    total_correct = 0
+    total_hits = 0
+
+    with torch.no_grad():
+        for Xs, ys in loader:
+            Xs = [x.to(device) for x in Xs]
+            ys = [y.to(device) for y in ys]
+
+            pred_labels = model.predict_labels(Xs)
+
+            for pred, true in zip(pred_labels, ys):
+                # Only consider non-noise hits
+                mask = (true != 0)
+                if mask.sum() == 0:
+                    continue
+
+                pred = pred[mask]
+                true = true[mask]
+
+                # Simple accuracy (not true FitAccuracy but for monitoring)
+                # Count how many hits are in the same cluster as their true track
+                # This is a simplified version of the actual metric
+                unique_true = torch.unique(true)
+                for t in unique_true:
+                    if t == 0:
+                        continue
+                    t_mask = (true == t)
+                    if t_mask.sum() < 4:
+                        continue
+
+                    # Find most common predicted label for this true track
+                    pred_for_track = pred[t_mask]
+                    if len(pred_for_track) == 0:
+                        continue
+                    pred_label = torch.mode(pred_for_track).values.item()
+
+                    # Count how many hits from this track have this predicted label
+                    correct = (pred == pred_label)[t_mask].sum().item()
+                    total_correct += correct
+                    total_hits += t_mask.sum().item()
+
+    return total_correct / total_hits if total_hits > 0 else 0
+
+# ----------------  START HARNESS SUFFIX WRAPPER (FOR CONTEXT)  ---------------- 
+
+def _run(dryrun=False):
+    sys.modules.setdefault("llm_script", sys.modules[__name__])
+
+    # Load & preprocess
+    raw_train, raw_val = _load_events("train"), _load_events("val")
+    if dryrun:
+        raw_train, raw_val = raw_train[:32], raw_val[:8]
+    Xs = [split_X_y(evt)[0] for evt in raw_train]
+    pre = make_preprocessor().fit(Xs)
+
+    # Build LoaderSpec
+    spec = build_spec_from_preproc(pre, script_module="llm_script")
+    spec = enforce_pyg_policy(spec)
+
+    # Build loaders - preproc in dataset
+    train_ds     = build_dataset(spec, raw_train, pre, train=True)
+    val_ds       = build_dataset(spec, raw_val,   pre, train=False)
+    train_loader = build_dataloader(spec, train_ds, is_eval=False)
+    val_loader   = build_dataloader(spec, val_ds,   is_eval=True)
+
+    # Build batch and check
+    first_batch = next(iter(train_loader))
+    mode = detect_and_assert_lane(spec, first_batch)
+
+    # Build model
+    model = build_trackformers_model(mode, first_batch, make_model, device)
+
+    # Train model
+    n_epochs = 1 if dryrun else globals().get("EPOCHS", 10)
+    try:
+        trained_model, tr_loss, va_loss, tr_acc, va_acc = train_model(
+            model, train_loader, val_loader, epochs=n_epochs)
+    except Exception as e:
+        print("ERROR during training:", e)
+        raise
+
+    # Dry-run safety check
+    if dryrun:
+        if not hasattr(trained_model, "predict_labels") or not callable(getattr(trained_model, "predict_labels")):
+            raise TypeError("Contract error: trained model must implement predict_labels(batch_x).")
+
+        trained_model.eval()
+        try:
+            with torch.no_grad():
+                mode = None
+                for i, batch in enumerate(val_loader):
+                    if mode is None:
+                        mode = detect_and_assert_lane(spec, batch)
+
+                    if mode == "torch_ragged_xy":
+                        Xs, _ys = batch
+                        Xs = [x.to(device) for x in Xs]
+                        out = trained_model.predict_labels(Xs)
+                    elif mode == "pyg_batch":
+                        G = batch.to(device)
+                        out = trained_model.predict_labels(G)
+                    else:
+                        raise RuntimeError(f"Unknown lane mode: {mode}")
+
+                    assert_label_output_by_lane(mode, batch, out, allow_noise_label=True)
+                    if i >= 3:  # 4 batches
+                        break
+        except Exception as e:
+            raise RuntimeError("Sanity-check predict_labels() failed") from e
+        return
+
+
+    if not dryrun:
+        # Persist artefacts
+        base = base_from_argv0()
+        persist_artefacts(base, SCRIPT_DIR, trained_model, pre, spec)
+
+        # Save plots
+        plot_train_val(tr_loss, va_loss, f"{base} Loss", os.path.join(SCRIPT_DIR, f"{base}_loss.png"))
+        plot_train_val(tr_acc, va_acc, f"{base} Accuracy", os.path.join(SCRIPT_DIR, f"{base}_accuracy.png"))
+        
+        # Write JSON Summary
+        summary = {
+            "epochs": n_epochs      if n_epochs else None,
+            "train_loss": tr_loss   if tr_loss else None,
+            "val_loss":   va_loss   if va_loss else None,
+            "train_acc":  tr_acc    if tr_acc else None,
+            "val_acc":    va_acc    if va_acc else None,
+        }
+        print("#TRAIN_METRICS#" + json.dumps(summary))
+
+if "__main__" not in sys.modules:
+    sys.modules["__main__"] = sys.modules[__name__]
+
+if __name__ == "__main__":
+    _run(dryrun="--dryrun" in sys.argv)
+
+# ----------------  END HARNESS SUFFIX WRAPPER (FOR CONTEXT)  ---------------- 
+

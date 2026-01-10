@@ -1,0 +1,71 @@
+{
+  "LLMGeneration": {
+    "model": "google/gemini-3-pro-preview",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 4803,
+    "prompt_chars": 17785,
+    "response_tokens": 18033,
+    "response_chars": 11542,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.226002,
+    "generation_ms": 161353,
+    "code": "# <start code template>\n# ---------- IMPORTS ----------\n# NOTE: Some imports (torch, nn, numpy, DataLoader) are already available (see prefix).\n# Only import extra std-lib modules or modules available in the environment, i.e: torch, scipy, sklearn (sub-)modules you actually use.\nimport torch\nimport torch.nn as nn\nimport torch.nn.functional as F\nimport numpy as np\nimport scipy.sparse as sp\nfrom scipy.sparse import csgraph\nfrom torch.utils.data import Dataset\nimport torch_geometric\nfrom torch_geometric.data import Data, Batch\nfrom torch_geometric.nn import knn_graph\n\n#  -------- (OPTIONAL) CUSTOM DATASET  --------\nclass CustomDataset(Dataset):\n#   REQUIREMENT: If you want a custom dataset: in make_loader_cfg set dataset_builder to \"llm_script:CustomDataset\"\n   def __init__(self, events, pre, train: bool = True, **kwargs):\n       self.events = events\n       self.pre = pre\n       self.train = train\n\n   def __len__(self):\n       return len(self.events)\n\n   def __getitem__(self, idx):\n       # Retrieve raw event dict\n       evt = self.events[idx]\n       # Delegate processing to preprocessor to centralize logic\n       return self.pre.process_event(evt)\n\n# ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    # REQUIREMENTS\n    #   - IMPORTANT: All state must be picklable with the std-lib pickle module.\n    #   - May allocate NumPy arrays or Torch tensors internally, but: transform() must be deterministic.\n    #   - Store only derived parameters needed for transform i.e. do not store the raw data itself in the preprocessor object.\n\n    def __init__(self):\n        # Normalization constraints\n        self.scale_r = 1000.0\n        self.scale_z = 3000.0\n        # Graph construction constraints\n        self.k = 12\n\n    def make_loader_cfg(self) -> dict:\n        # LoaderSpec-first: evaluator rebuilds loaders from this.\n        return {\n            \"dataset_builder\": \"llm_script:CustomDataset\", \n            \"dataset_kwargs\": {},\n\n            # PyG Lane Configuration\n            \"loader_class\": \"torch_geometric.loader:DataLoader\",\n            \"batch_size\": 16,     # Batch size for Graph data\n            \"shuffle\": True,\n            \"num_workers\": 0,     # Avoid spawn/fork overhead issues in scripts\n            \"pin_memory\": False,\n            \"collate\": \"None\",    # PyG loader handles collation of Data objects\n\n            \"extra_loader_kwargs\": {},\n            \"eval_overrides\": {\"shuffle\": False}\n        }\n\n    def fit(self, Xs):\n        # Xs: list of per-event X, each [N_hits_i, F_raw]\n        # X columns: hit_r, hit_theta, hit_z, layer_id\n\n        # Estimate normalization scales from a subset of data\n        max_r = 100.0\n        max_z = 100.0\n\n        # Sample every 10th event to be fast\n        for x in Xs[::10]:\n            # x is Tensor [N, 4]\n            r = x[:, 0].abs().max().item()\n            z = x[:, 2].abs().max().item()\n            if r > max_r: max_r = r\n            if z > max_z: max_z = z\n\n        self.scale_r = max_r + 1.0\n        self.scale_z = max_z + 1.0\n        return self\n\n    def transform(self, X):\n        # This method is required by the harness interface but primarily used \n        # by the default EventDataset. We use CustomDataset, so we use process_event instead.\n        # We return X as-is to satisfy return type hints if checked.\n        return X\n\n    def process_event(self, evt):\n        # Convert raw dict to PyG Data object\n\n        # 1. Extract and cast data\n        # Inputs: r, theta, z, layer\n        r = torch.from_numpy(evt[\"hit_r\"].astype(np.float32))\n        theta = torch.from_numpy(evt[\"hit_theta\"].astype(np.float32))\n        z = torch.from_numpy(evt[\"hit_z\"].astype(np.float32))\n        layer = torch.from_numpy(evt[\"layer_id\"].astype(np.float32))\n        y = torch.from_numpy(evt[\"track_id\"].astype(np.int64))\n\n        # 2. Coordinate Transformation (Cylindrical -> Cartesian)\n        x_coord = r * torch.cos(theta)\n        y_coord = r * torch.sin(theta)\n        z_coord = z\n\n        # 3. Features for Input Node (Normalized)\n        # Using [x, y, z, r, layer]\n        feat_x = x_coord / self.scale_r\n        feat_y = y_coord / self.scale_r\n        feat_z = z_coord / self.scale_z\n        feat_r = r / self.scale_r\n        feat_l = layer / 10.0 # Approximate layer scale\n\n        # Node features: [N, 5]\n        x = torch.stack([feat_x, feat_y, feat_z, feat_r, feat_l], dim=1)\n\n        # 4. Graph Construction (k-NN)\n        # Use normalized spatial coordinates for finding neighbors\n        pos = torch.stack([feat_x, feat_y, feat_z], dim=1)\n\n        # k=12 is a good tradeoff for efficiency vs recall\n        edge_index = knn_graph(pos, k=self.k, loop=False)\n\n        # 5. Label Generation (Edge Classification)\n        src, dst = edge_index\n        # An edge is True if: same track ID AND track ID is not noise (0)\n        lid_src = y[src]\n        lid_dst = y[dst]\n\n        edge_label = (lid_src == lid_dst) & (lid_src != 0)\n        edge_label = edge_label.float()\n\n        # Return PyG Data\n        return Data(x=x, edge_index=edge_index, y=y, edge_label=edge_label, num_nodes=x.size(0))\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# ---------- MODEL ARCHITECTURE ----------\nclass HitClassifier(nn.Module):\n    def __init__(self, example_batch_x):\n        super().__init__()\n        # PyG Lane: example_batch_x is a Batch object (or Data)\n        input_dim = 5 # x,y,z,r,layer\n        hidden_dim = 96\n        self.layers = 4\n\n        # Feature Encoder\n        self.node_enc = nn.Sequential(\n            nn.Linear(input_dim, hidden_dim),\n            nn.ReLU(),\n            nn.BatchNorm1d(hidden_dim),\n            nn.Linear(hidden_dim, hidden_dim),\n            nn.ReLU()\n        )\n\n        # MPNN Layers\n        self.edge_updates = nn.ModuleList()\n        self.node_updates = nn.ModuleList()\n\n        for _ in range(self.layers):\n            # Edge Update Network: Concat(u, v) -> edge_hidden\n            self.edge_updates.append(nn.Sequential(\n                nn.Linear(2 * hidden_dim, hidden_dim),\n                nn.BatchNorm1d(hidden_dim),\n                nn.ReLU(),\n                nn.Linear(hidden_dim, hidden_dim),\n                nn.ReLU()\n            ))\n\n            # Node Update Network: Concat(u, aggr_edge) -> node_hidden\n            self.node_updates.append(nn.Sequential(\n                nn.Linear(2 * hidden_dim, hidden_dim),\n                nn.BatchNorm1d(hidden_dim),\n                nn.ReLU(),\n                nn.Linear(hidden_dim, hidden_dim),\n                nn.ReLU()\n            ))\n\n        # Final Edge Classifier\n        self.classifier = nn.Sequential(\n            nn.Linear(2 * hidden_dim, hidden_dim),\n            nn.ReLU(),\n            nn.Linear(hidden_dim, 1)\n        )\n\n    def forward(self, batch_x):\n        # Unpack\n        x = batch_x.x\n        edge_index = batch_x.edge_index\n        src, dst = edge_index\n\n        # Encode\n        x = self.node_enc(x)\n\n        # Message Passing\n        for i in range(self.layers):\n            # 1. Edge Update\n            edge_input = torch.cat([x[src], x[dst]], dim=1)\n            edge_msg = self.edge_updates[i](edge_input)\n\n            # 2. Aggregation (Sum)\n            # Scatter sum edge messages to destination nodes\n            aggr = torch.zeros_like(x)\n            aggr.index_add_(0, dst, edge_msg)\n\n            # 3. Node Update\n            node_input = torch.cat([x, aggr], dim=1)\n            dx = self.node_updates[i](node_input)\n            x = x + dx # Residual\n\n        # Final Classification\n        # Using updated node embeddings\n        edge_input = torch.cat([x[src], x[dst]], dim=1)\n        logits = self.classifier(edge_input).squeeze(-1)\n\n        return logits\n\n    def predict_labels(self, batch_x):\n        # 1. Run inference\n        self.eval()\n        with torch.no_grad():\n            scores = self.forward(batch_x)\n            probs = torch.sigmoid(scores)\n\n        # 2. Thresholding for valid edges\n        # Slightly higher threshold to prefer precision (purity) over recall\n        threshold = 0.55\n        mask = probs > threshold\n\n        # 3. Connected Components\n        # Use CPU filtering and Scipy\n        n_nodes = batch_x.num_nodes\n        edge_index = batch_x.edge_index\n\n        # Filter predicted edges\n        src = edge_index[0][mask].cpu().numpy()\n        dst = edge_index[1][mask].cpu().numpy()\n\n        # Build symmetric adjacency for undirected clustering (track is a line)\n        # Using a boolean/ones matrix\n        adj = sp.coo_matrix((np.ones(len(src)), (src, dst)), shape=(n_nodes, n_nodes))\n\n        # Find components\n        n_comps, labels = csgraph.connected_components(adj, directed=False)\n\n        # Return LongTensor of labels\n        return torch.from_numpy(labels).long().to(batch_x.x.device)\n\ndef make_model(example_batch_x):\n    return HitClassifier(example_batch_x)\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 12\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    # Setup optimizer\n    optimizer = torch.optim.Adam(model.parameters(), lr=0.002)\n    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.5)\n\n    # Loss: weighted BCE because real edges are sparse in KNN graph\n    # Weight ~ (k / 2) roughly, k=12 -> 6. Conservative: 5.0\n    pos_weight = torch.tensor([5.0]).to(device)\n    criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)\n\n    train_hist_loss, val_hist_loss = [], []\n    train_hist_acc, val_hist_acc = [], []\n\n    for epoch in range(epochs):\n        model.train()\n        t_loss, t_acc, n_batches = 0.0, 0.0, 0\n\n        for batch in train_loader:\n            batch = batch.to(device)\n            optimizer.zero_grad()\n\n            out = model(batch)\n            loss = criterion(out, batch.edge_label)\n\n            loss.backward()\n            optimizer.step()\n\n            t_loss += loss.item()\n            with torch.no_grad():\n                pred = (out > 0.0).float()\n                acc = (pred == batch.edge_label).float().mean()\n                t_acc += acc.item()\n            n_batches += 1\n\n        avg_t_loss = t_loss / max(n_batches, 1)\n        avg_t_acc = t_acc / max(n_batches, 1)\n        train_hist_loss.append(avg_t_loss)\n        train_hist_acc.append(avg_t_acc)\n\n        scheduler.step()\n\n        # Validation\n        model.eval()\n        v_loss, v_acc, n_val = 0.0, 0.0, 0\n        with torch.no_grad():\n            for batch in val_loader:\n                batch = batch.to(device)\n                out = model(batch)\n                loss = criterion(out, batch.edge_label)\n\n                v_loss += loss.item()\n                pred = (out > 0.0).float()\n                acc = (pred == batch.edge_label).float().mean()\n                v_acc += acc.item()\n                n_val += 1\n\n        avg_v_loss = v_loss / max(n_val, 1)\n        avg_v_acc = v_acc / max(n_val, 1)\n        val_hist_loss.append(avg_v_loss)\n        val_hist_acc.append(avg_v_acc)\n\n        print(f\"Epoch {epoch+1} | T_Loss: {avg_t_loss:.4f} Acc: {avg_t_acc:.4f} | V_Loss: {avg_v_loss:.4f} Acc: {avg_v_acc:.4f}\")\n\n    return model, train_hist_loss, val_hist_loss, train_hist_acc, val_hist_acc\n# <end code template>",
+    "reasoning": "",
+    "Outer_attempt": 1
+  },
+  "StaticChecks": {
+    "__timestamp": "2026-01-05T12:03:16Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2026-01-05T12:03:16Z",
+        "metrics": {
+          ".\\outputs\\01-05(2)\\TRACKFORMERS\\Q1\\script_google_gemini-3-pro-preview_1303_1.py": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 292,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 292,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2026-01-05T12:03:32Z",
+    "passed": false,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/01-05(2)/TRACKFORMERS/Q1/script_google_gemini-3-pro-preview_1303_1.py\nargv2=--dryrun\n",
+      "stderr": "Traceback (most recent call last):\n  File \"/workspace/outputs/01-05(2)/TRACKFORMERS/Q1/script_google_gemini-3-pro-preview_1303_1.py\", line 465, in <module>\n    _run(dryrun=\"--dryrun\" in sys.argv)\n  File \"/workspace/outputs/01-05(2)/TRACKFORMERS/Q1/script_google_gemini-3-pro-preview_1303_1.py\", line 386, in _run\n    spec = build_spec_from_preproc(pre, script_module=\"llm_script\")\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/utils/loaderspec.py\", line 250, in build_spec_from_preproc\n    raise ValueError(\nValueError: Unsupported collate='None'. Must be 'ragged_xy', 'identity', or None (PyG only).\n"
+    },
+    "return_code": 1
+  }
+}

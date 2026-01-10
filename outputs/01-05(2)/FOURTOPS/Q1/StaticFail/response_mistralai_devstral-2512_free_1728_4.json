@@ -1,0 +1,76 @@
+{
+  "LLMGeneration": {
+    "model": "mistralai/devstral-2512:free",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 4108,
+    "prompt_chars": 15596,
+    "response_tokens": 1572,
+    "response_chars": 6166,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0,
+    "generation_ms": 27920,
+    "code": "# -------------------------- START OF LLM BLOCK ------------------------------\n# <start code template>\n# ---------- IMPORTS ----------\nfrom sklearn.preprocessing import StandardScaler\nfrom torch.nn import Linear, ReLU, Dropout, BatchNorm1d, Sequential, Sigmoid\nfrom torch.optim import Adam\nfrom torch.nn import BCEWithLogitsLoss\nfrom torchmetrics import AUROC\nimport torch.nn.functional as F\n\n#  -------- (OPTIONAL) CUSTOM DATASET  --------\n# class CustomDataset(Dataset):\n#  REQUIREMENT: If you want a custom dataset: in make_loader_cfg set dataset_builder to \"llm_script:CustomDataset\"\n#    def __init__(self, events, pre, train: bool = True, **kwargs):\n#        X, y = events\n#        self.X = pre.transform(X) if pre is not None else X\n#        self.y = y\n#    def __len__(self):\n#        return int(self.y.shape[0])\n#    def __getitem__(self, idx):\n#        return self.X[idx], self.y[idx]\n\n# ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.scaler = StandardScaler()\n        self.global_scaler = StandardScaler()\n        self.obj_scaler = StandardScaler()\n\n    def make_loader_cfg(self) -> dict:\n        return {\n            \"dataset_builder\": \"llm_script:FourTopsDataset\",\n            \"dataset_kwargs\": {},\n            \"loader_class\": \"torch.utils.data:DataLoader\",\n            \"batch_size\": 512,\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": False,\n            \"collate\": None,\n            \"extra_loader_kwargs\": {},\n            \"eval_overrides\": {\"shuffle\": False, \"batch_size\": 512}\n        }\n\n    def fit(self, X, y=None):\n        # Separate global and object features\n        global_features = X[:, :2]  # E_T_miss, phi_Et_miss\n        obj_features = X[:, 2:].reshape(-1, 18*5)  # Flatten all object features\n\n        # Fit scalers\n        self.global_scaler.fit(global_features)\n        self.obj_scaler.fit(obj_features)\n        return self\n\n    def transform(self, X):\n        # Apply scaling\n        global_features = X[:, :2]\n        obj_features = X[:, 2:].reshape(-1, 18*5)\n\n        global_scaled = self.global_scaler.transform(global_features)\n        obj_scaled = self.obj_scaler.transform(obj_features)\n\n        # Reshape back to original structure\n        X_scaled = np.zeros_like(X)\n        X_scaled[:, :2] = global_scaled\n        X_scaled[:, 2:] = obj_scaled.reshape(-1, 18*5)\n\n        return X_scaled\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# ---------- MODEL ARCHITECTURE ----------\nclass BinaryClassifier(nn.Module):\n    def __init__(self, sample_object):\n        super().__init__()\n        # Extract input dimensions from sample\n        input_dim = sample_object.shape[1]  # Should be 92\n\n        # Define network architecture\n        self.model = Sequential(\n            Linear(input_dim, 256),\n            BatchNorm1d(256),\n            ReLU(),\n            Dropout(0.3),\n\n            Linear(256, 128),\n            BatchNorm1d(128),\n            ReLU(),\n            Dropout(0.3),\n\n            Linear(128, 64),\n            BatchNorm1d(64),\n            ReLU(),\n            Dropout(0.2),\n\n            Linear(64, 32),\n            BatchNorm1d(32),\n            ReLU(),\n\n            Linear(32, 1)\n        )\n\n    def forward(self, batch_x):\n        # batch_x shape: [B, 92]\n        return self.model(batch_x).squeeze(-1)  # [B]\n\ndef make_model(example_object):\n    return BinaryClassifier(example_object)\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 50\n\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    device = torch.device(\"cuda\" if torch.cuda.is_available() else \"cpu\")\n    model = model.to(device)\n\n    # Loss and optimizer\n    criterion = BCEWithLogitsLoss()\n    optimizer = Adam(model.parameters(), lr=0.001, weight_decay=1e-5)\n    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=5, factor=0.5)\n\n    # Metrics\n    auc_metric = AUROC(task=\"binary\").to(device)\n\n    # Training loop\n    best_val_auc = 0\n    train_losses, val_losses = [], []\n    train_aucs, val_aucs = [], []\n\n    for epoch in range(epochs):\n        # Training phase\n        model.train()\n        epoch_train_loss = 0\n        epoch_train_auc = 0\n        count = 0\n\n        for X_batch, y_batch in train_loader:\n            X_batch, y_batch = X_batch.to(device), y_batch.to(device).float()\n\n            optimizer.zero_grad()\n            outputs = model(X_batch)\n            loss = criterion(outputs, y_batch)\n            loss.backward()\n            optimizer.step()\n\n            epoch_train_loss += loss.item()\n            epoch_train_auc += auc_metric(outputs, y_batch.int())\n            count += 1\n\n        # Validation phase\n        model.eval()\n        epoch_val_loss = 0\n        epoch_val_auc = 0\n        with torch.no_grad():\n            for X_batch, y_batch in val_loader:\n                X_batch, y_batch = X_batch.to(device), y_batch.to(device).float()\n\n                outputs = model(X_batch)\n                loss = criterion(outputs, y_batch)\n\n                epoch_val_loss += loss.item()\n                epoch_val_auc += auc_metric(outputs, y_batch.int())\n\n        # Calculate metrics\n        train_loss = epoch_train_loss / count\n        val_loss = epoch_val_loss / len(val_loader)\n        train_auc = epoch_train_auc / count\n        val_auc = epoch_val_auc / len(val_loader)\n\n        # Update scheduler\n        scheduler.step(val_loss)\n\n        # Store metrics\n        train_losses.append(train_loss)\n        val_losses.append(val_loss)\n        train_aucs.append(train_auc.item())\n        val_aucs.append(val_auc.item())\n\n        # Early stopping\n        if val_auc > best_val_auc:\n            best_val_auc = val_auc\n            best_model = model.state_dict()\n            patience = 0\n        else:\n            patience += 1\n            if patience >= 10:\n                print(f\"Early stopping at epoch {epoch}\")\n                break\n\n    # Load best model\n    model.load_state_dict(best_model)\n\n    return model, train_losses, val_losses, train_aucs, val_aucs\n\n# <end code template>\n# ---------------------------  END OF LLM-CODE BLOCK  ---------------------------",
+    "reasoning": "",
+    "Outer_attempt": 4
+  },
+  "StaticChecks": {
+    "__timestamp": "2026-01-05T16:28:14Z",
+    "PyLint": {
+      "passed": false,
+      "messages": [
+        {
+          "type": "error",
+          "module": "script_mistralai_devstral-2512_free_1728_4",
+          "obj": "",
+          "line": 64,
+          "column": 0,
+          "endLine": 64,
+          "endColumn": 30,
+          "path": "outputs\\01-05(2)\\FOURTOPS\\Q1\\script_mistralai_devstral-2512_free_1728_4.py",
+          "symbol": "import-error",
+          "message": "Unable to import 'torchmetrics'",
+          "message-id": "E0401"
+        }
+      ]
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2026-01-05T16:28:14Z",
+        "metrics": {
+          ".\\outputs\\01-05(2)\\FOURTOPS\\Q1\\script_mistralai_devstral-2512_free_1728_4.py": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 217,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 217,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  }
+}

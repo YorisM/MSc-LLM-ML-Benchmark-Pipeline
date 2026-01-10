@@ -1,0 +1,723 @@
+script,success,return_code,stdout,stderr,duration_s,max_rss_kb
+C:\Users\yoris\projects\Benchmark\outputs\01-06\FOURTOPS\Q1\anthropic_claude-sonnet-4.5\script_anthropic_claude-sonnet-4.5_2321_1.py,True,0,"argv0=/usr/local/bin/train.sh
+argv1=outputs/01-06/FOURTOPS/Q1/anthropic_claude-sonnet-4.5/script_anthropic_claude-sonnet-4.5_2321_1.py
+argv2=
+Epoch 1/15 - Train Loss: 0.6712, Train Acc: 0.5980, Val Loss: 0.6641, Val Acc: 0.6078
+Epoch 2/15 - Train Loss: 0.6667, Train Acc: 0.6084, Val Loss: 0.6630, Val Acc: 0.6122
+Epoch 3/15 - Train Loss: 0.6656, Train Acc: 0.6092, Val Loss: 0.6634, Val Acc: 0.6121
+Epoch 4/15 - Train Loss: 0.6648, Train Acc: 0.6106, Val Loss: 0.6624, Val Acc: 0.6126
+Epoch 5/15 - Train Loss: 0.6636, Train Acc: 0.6117, Val Loss: 0.6580, Val Acc: 0.6137
+Epoch 6/15 - Train Loss: 0.6582, Train Acc: 0.6181, Val Loss: 0.6403, Val Acc: 0.6436
+Epoch 7/15 - Train Loss: 0.6318, Train Acc: 0.6471, Val Loss: 0.6053, Val Acc: 0.6741
+Epoch 8/15 - Train Loss: 0.6181, Train Acc: 0.6623, Val Loss: 0.6082, Val Acc: 0.6715
+Epoch 9/15 - Train Loss: 0.6145, Train Acc: 0.6652, Val Loss: 0.6085, Val Acc: 0.6654
+Epoch 10/15 - Train Loss: 0.6123, Train Acc: 0.6690, Val Loss: 0.6016, Val Acc: 0.6746
+Epoch 11/15 - Train Loss: 0.6111, Train Acc: 0.6687, Val Loss: 0.6040, Val Acc: 0.6715
+Epoch 12/15 - Train Loss: 0.6099, Train Acc: 0.6709, Val Loss: 0.6010, Val Acc: 0.6794
+Epoch 13/15 - Train Loss: 0.6097, Train Acc: 0.6700, Val Loss: 0.6010, Val Acc: 0.6754
+Epoch 14/15 - Train Loss: 0.6086, Train Acc: 0.6718, Val Loss: 0.5979, Val Acc: 0.6817
+Epoch 15/15 - Train Loss: 0.6079, Train Acc: 0.6721, Val Loss: 0.5966, Val Acc: 0.6796
+#TRAIN_METRICS#{""epochs"": 15, ""train_loss"": [0.6712280218813947, 0.666731041935512, 0.6655720314253042, 0.6648115757512031, 0.66355572670204, 0.6582478381039094, 0.6318230609030584, 0.6181329210789842, 0.6145364166506289, 0.6122611041763735, 0.6111236804942197, 0.6099308507993499, 0.6097465814805837, 0.6085728977944755, 0.6078964588783273], ""val_loss"": [0.6641496388078797, 0.6630057818319677, 0.6634168073583803, 0.6623693196899104, 0.6579799362077737, 0.6402748697472648, 0.6052884693320499, 0.60815838969373, 0.6085353506161155, 0.6016014840383691, 0.604036456645058, 0.6009673422942605, 0.6009557674735954, 0.5979077598996285, 0.5966239458565822], ""train_acc"": [0.5980459908051494, 0.6084077845872455, 0.6091816086436561, 0.6105678709907016, 0.6116561903855464, 0.6180619638578646, 0.6470741588284221, 0.662302354163132, 0.6652155741402069, 0.6689522753323927, 0.6687081276354503, 0.6708930426182564, 0.670048870920354, 0.6717579047989506, 0.67210964300641], ""val_acc"": [0.6078061376502135, 0.6122421955175953, 0.6121428807892211, 0.6126394544310921, 0.6136657066242924, 0.6435925447743901, 0.6741483762041911, 0.6714999834475452, 0.66540868010726, 0.6746449498460622, 0.6714999834475452, 0.6794451617174827, 0.6753732578541398, 0.6816631906511735, 0.6796106862647731]}
+Hash manifest written â†’ anthropic_claude-sonnet-4.5_2321_1_manifest.sha256
+","WARNING:matplotlib:mkdir -p failed for path /home/sandbox/.config/matplotlib: [Errno 30] Read-only file system: '/home/sandbox/.config'
+WARNING:matplotlib:Matplotlib created a temporary cache directory at /tmp/matplotlib-ddb85dhy because there was an issue with the default path (/home/sandbox/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.
+",134.6154503999278,364
+C:\Users\yoris\projects\Benchmark\outputs\01-06\FOURTOPS\Q1\deepseek_deepseek-v3.2\script_deepseek_deepseek-v3.2_2317_2.py,True,0,"argv0=/usr/local/bin/train.sh
+argv1=outputs/01-06/FOURTOPS/Q1/deepseek_deepseek-v3.2/script_deepseek_deepseek-v3.2_2317_2.py
+argv2=
+Epoch 5/50: Train Loss: 0.5365, Val Loss: 0.5349, Train Acc: 0.7346, Val Acc: 0.7336, Val AUC: 0.8114
+Epoch 10/50: Train Loss: 0.5259, Val Loss: 0.5630, Train Acc: 0.7417, Val Acc: 0.7043, Val AUC: 0.7884
+Early stopping at epoch 14
+#TRAIN_METRICS#{""epochs"": 50, ""train_loss"": [0.5805871367652835, 0.5551785674056163, 0.5454922196894749, 0.541011833734463, 0.5365171476517169, 0.5327859524286339, 0.5310122863782677, 0.5290141307088261, 0.526878151365805, 0.5258519369484125, 0.5223781458678838, 0.521798000220429, 0.5205824235506884], ""val_loss"": [0.5487619977659675, 0.5308125950486705, 0.5272993190137822, 0.5269408322217477, 0.5349033678960968, 0.5540042222817658, 0.5746089417093235, 0.5926263280912196, 0.5849174847607768, 0.5629868250015014, 0.585068463296333, 0.5864606134656815, 0.571109037475179], ""train_acc"": [0.6930566877847528, 0.7187873721845426, 0.7281974037582193, 0.7316734048672292, 0.7346321439064459, 0.7370901732621029, 0.73779778777358, 0.7399951170460611, 0.7406779029781881, 0.7416503556693992, 0.743818718265972, 0.7438021658797387, 0.744153904087198], ""val_acc"": [0.7170192339523951, 0.7378091170920648, 0.7416161816797431, 0.7423444896878207, 0.7336378985003476, 0.7175158075942663, 0.6945410004303638, 0.6795444764458569, 0.6831198066673287, 0.7043400536299533, 0.6883503823617042, 0.6853709405104778, 0.6981825404707518]}
+Hash manifest written â†’ deepseek_deepseek-v3.2_2317_2_manifest.sha256
+","WARNING:matplotlib:mkdir -p failed for path /home/sandbox/.config/matplotlib: [Errno 30] Read-only file system: '/home/sandbox/.config'
+WARNING:matplotlib:Matplotlib created a temporary cache directory at /tmp/matplotlib-zy7oojth because there was an issue with the default path (/home/sandbox/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.
+",7413.215751199983,-307772
+C:\Users\yoris\projects\Benchmark\outputs\01-06\FOURTOPS\Q1\google_gemini-3-pro-preview\script_google_gemini-3-pro-preview_2324_1.py,True,0,"argv0=/usr/local/bin/train.sh
+argv1=outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py
+argv2=
+Epoch 1: TrL=0.5682, TrA=0.7033, VaL=0.5331, VaA=0.7341
+Epoch 2: TrL=0.5361, TrA=0.7331, VaL=0.5198, VaA=0.7435
+Epoch 3: TrL=0.5267, TrA=0.7389, VaL=0.5125, VaA=0.7490
+Epoch 4: TrL=0.5165, TrA=0.7447, VaL=0.5122, VaA=0.7497
+Epoch 5: TrL=0.5079, TrA=0.7504, VaL=0.4988, VaA=0.7596
+Epoch 6: TrL=0.5033, TrA=0.7533, VaL=0.4898, VaA=0.7633
+Epoch 7: TrL=0.4991, TrA=0.7553, VaL=0.4859, VaA=0.7677
+Epoch 8: TrL=0.4960, TrA=0.7575, VaL=0.4841, VaA=0.7667
+Epoch 9: TrL=0.4918, TrA=0.7599, VaL=0.4827, VaA=0.7687
+Epoch 10: TrL=0.4888, TrA=0.7622, VaL=0.4811, VaA=0.7696
+Epoch 11: TrL=0.4849, TrA=0.7643, VaL=0.4770, VaA=0.7719
+Epoch 12: TrL=0.4804, TrA=0.7675, VaL=0.4760, VaA=0.7735
+Epoch 13: TrL=0.4771, TrA=0.7692, VaL=0.4736, VaA=0.7732
+Epoch 14: TrL=0.4732, TrA=0.7712, VaL=0.4731, VaA=0.7738
+Epoch 15: TrL=0.4714, TrA=0.7720, VaL=0.4731, VaA=0.7734
+#TRAIN_METRICS#{""epochs"": 15, ""train_loss"": [0.5681649322898624, 0.5360845458564168, 0.5267191450013081, 0.516497142723649, 0.5079470207257611, 0.5033174056285079, 0.499131958570543, 0.4959757251821133, 0.4918292572398705, 0.48879896695438135, 0.48486344306174867, 0.4804463967538922, 0.47710958201814374, 0.47315584848217124, 0.4713762768244573], ""val_loss"": [0.533124990688518, 0.5198418484877959, 0.5125202286163326, 0.5122087992863168, 0.49882689413083686, 0.48980054641608967, 0.48590633530233485, 0.4841175541687687, 0.4826545578026466, 0.4810658349867164, 0.4769784601998273, 0.47596122469941343, 0.4735937992335116, 0.4731120457181818, 0.47312349020757977], ""train_acc"": [0.7032984768670434, 0.7330886338813039, 0.7388736928868891, 0.7446959947782716, 0.7503941537144478, 0.7532577165651337, 0.7552522790801113, 0.7574702989076526, 0.7599490187461013, 0.7621877288857527, 0.7642774677076529, 0.7674720782891726, 0.7691811120969807, 0.7712377461434543, 0.772028122546141], ""val_acc"": [0.7340682622345083, 0.743470056139772, 0.748965471614953, 0.7496606742084316, 0.7595921478015915, 0.7633330019409008, 0.7676697454567908, 0.7666765975396493, 0.7686959977723298, 0.7695898302033858, 0.7718740688277343, 0.7734631043554366, 0.7731982649534869, 0.7737941535763025, 0.773363789374492]}
+Hash manifest written â†’ google_gemini-3-pro-preview_2324_1_manifest.sha256
+","/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:158: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  met_vals = np.stack([np.log1p(met_e), np.log1p(met_e), np.zeros_like(met_e)], axis=1)
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:171: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  np.log1p(col_e[mask]),
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:172: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  np.log1p(col_pt[mask]),
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:202: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  met_kin = np.stack([np.log1p(met_e), np.log1p(met_e), np.zeros(N)], axis=1)
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:204: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[:, 0, 3] = np.sin(met_phi)
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:205: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[:, 0, 4] = np.cos(met_phi)
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:222: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  kin_raw[:, 0] = np.log1p(oe[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:223: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  kin_raw[:, 1] = np.log1p(opt[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:230: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[valid, k+1, 3] = np.sin(ophi[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:231: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[valid, k+1, 4] = np.cos(ophi[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:238: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  is_id = np.abs(oid[valid] - raw_id) < 0.1
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:222: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  kin_raw[:, 0] = np.log1p(oe[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:223: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  kin_raw[:, 1] = np.log1p(opt[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:230: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[valid, k+1, 3] = np.sin(ophi[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:231: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[valid, k+1, 4] = np.cos(ophi[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:238: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  is_id = np.abs(oid[valid] - raw_id) < 0.1
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:222: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  kin_raw[:, 0] = np.log1p(oe[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:223: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  kin_raw[:, 1] = np.log1p(opt[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:230: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[valid, k+1, 3] = np.sin(ophi[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:231: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[valid, k+1, 4] = np.cos(ophi[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:238: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  is_id = np.abs(oid[valid] - raw_id) < 0.1
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:222: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  kin_raw[:, 0] = np.log1p(oe[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:223: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  kin_raw[:, 1] = np.log1p(opt[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:230: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[valid, k+1, 3] = np.sin(ophi[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:231: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[valid, k+1, 4] = np.cos(ophi[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:238: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  is_id = np.abs(oid[valid] - raw_id) < 0.1
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:222: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  kin_raw[:, 0] = np.log1p(oe[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:223: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  kin_raw[:, 1] = np.log1p(opt[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:230: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[valid, k+1, 3] = np.sin(ophi[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:231: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[valid, k+1, 4] = np.cos(ophi[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:238: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  is_id = np.abs(oid[valid] - raw_id) < 0.1
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:222: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  kin_raw[:, 0] = np.log1p(oe[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:223: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  kin_raw[:, 1] = np.log1p(opt[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:230: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[valid, k+1, 3] = np.sin(ophi[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:231: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[valid, k+1, 4] = np.cos(ophi[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:238: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  is_id = np.abs(oid[valid] - raw_id) < 0.1
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:222: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  kin_raw[:, 0] = np.log1p(oe[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:223: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  kin_raw[:, 1] = np.log1p(opt[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:230: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[valid, k+1, 3] = np.sin(ophi[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:231: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[valid, k+1, 4] = np.cos(ophi[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:238: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  is_id = np.abs(oid[valid] - raw_id) < 0.1
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:222: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  kin_raw[:, 0] = np.log1p(oe[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:223: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  kin_raw[:, 1] = np.log1p(opt[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:230: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[valid, k+1, 3] = np.sin(ophi[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:231: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[valid, k+1, 4] = np.cos(ophi[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:238: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  is_id = np.abs(oid[valid] - raw_id) < 0.1
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:222: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  kin_raw[:, 0] = np.log1p(oe[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:223: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  kin_raw[:, 1] = np.log1p(opt[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:230: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[valid, k+1, 3] = np.sin(ophi[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:231: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[valid, k+1, 4] = np.cos(ophi[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:238: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  is_id = np.abs(oid[valid] - raw_id) < 0.1
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:222: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  kin_raw[:, 0] = np.log1p(oe[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:223: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  kin_raw[:, 1] = np.log1p(opt[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:230: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[valid, k+1, 3] = np.sin(ophi[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:231: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[valid, k+1, 4] = np.cos(ophi[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:238: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  is_id = np.abs(oid[valid] - raw_id) < 0.1
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:222: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  kin_raw[:, 0] = np.log1p(oe[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:223: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  kin_raw[:, 1] = np.log1p(opt[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:230: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[valid, k+1, 3] = np.sin(ophi[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:231: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[valid, k+1, 4] = np.cos(ophi[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:238: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  is_id = np.abs(oid[valid] - raw_id) < 0.1
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:222: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  kin_raw[:, 0] = np.log1p(oe[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:223: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  kin_raw[:, 1] = np.log1p(opt[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:230: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[valid, k+1, 3] = np.sin(ophi[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:231: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[valid, k+1, 4] = np.cos(ophi[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:238: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  is_id = np.abs(oid[valid] - raw_id) < 0.1
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:222: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  kin_raw[:, 0] = np.log1p(oe[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:223: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  kin_raw[:, 1] = np.log1p(opt[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:230: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[valid, k+1, 3] = np.sin(ophi[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:231: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[valid, k+1, 4] = np.cos(ophi[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:238: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  is_id = np.abs(oid[valid] - raw_id) < 0.1
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:222: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  kin_raw[:, 0] = np.log1p(oe[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:223: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  kin_raw[:, 1] = np.log1p(opt[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:230: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[valid, k+1, 3] = np.sin(ophi[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:231: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[valid, k+1, 4] = np.cos(ophi[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:238: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  is_id = np.abs(oid[valid] - raw_id) < 0.1
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:222: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  kin_raw[:, 0] = np.log1p(oe[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:223: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  kin_raw[:, 1] = np.log1p(opt[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:230: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[valid, k+1, 3] = np.sin(ophi[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:231: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[valid, k+1, 4] = np.cos(ophi[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:238: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  is_id = np.abs(oid[valid] - raw_id) < 0.1
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:222: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  kin_raw[:, 0] = np.log1p(oe[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:223: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  kin_raw[:, 1] = np.log1p(opt[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:230: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[valid, k+1, 3] = np.sin(ophi[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:231: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[valid, k+1, 4] = np.cos(ophi[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:238: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  is_id = np.abs(oid[valid] - raw_id) < 0.1
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:222: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  kin_raw[:, 0] = np.log1p(oe[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:223: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  kin_raw[:, 1] = np.log1p(opt[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:230: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[valid, k+1, 3] = np.sin(ophi[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:231: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[valid, k+1, 4] = np.cos(ophi[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:238: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  is_id = np.abs(oid[valid] - raw_id) < 0.1
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:202: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  met_kin = np.stack([np.log1p(met_e), np.log1p(met_e), np.zeros(N)], axis=1)
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:204: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[:, 0, 3] = np.sin(met_phi)
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:205: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[:, 0, 4] = np.cos(met_phi)
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:222: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  kin_raw[:, 0] = np.log1p(oe[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:223: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  kin_raw[:, 1] = np.log1p(opt[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:230: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[valid, k+1, 3] = np.sin(ophi[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:231: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[valid, k+1, 4] = np.cos(ophi[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:238: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  is_id = np.abs(oid[valid] - raw_id) < 0.1
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:222: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  kin_raw[:, 0] = np.log1p(oe[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:223: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  kin_raw[:, 1] = np.log1p(opt[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:230: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[valid, k+1, 3] = np.sin(ophi[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:231: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[valid, k+1, 4] = np.cos(ophi[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:238: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  is_id = np.abs(oid[valid] - raw_id) < 0.1
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:222: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  kin_raw[:, 0] = np.log1p(oe[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:223: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  kin_raw[:, 1] = np.log1p(opt[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:230: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[valid, k+1, 3] = np.sin(ophi[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:231: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[valid, k+1, 4] = np.cos(ophi[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:238: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  is_id = np.abs(oid[valid] - raw_id) < 0.1
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:222: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  kin_raw[:, 0] = np.log1p(oe[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:223: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  kin_raw[:, 1] = np.log1p(opt[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:230: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[valid, k+1, 3] = np.sin(ophi[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:231: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[valid, k+1, 4] = np.cos(ophi[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:238: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  is_id = np.abs(oid[valid] - raw_id) < 0.1
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:222: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  kin_raw[:, 0] = np.log1p(oe[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:223: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  kin_raw[:, 1] = np.log1p(opt[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:230: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[valid, k+1, 3] = np.sin(ophi[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:231: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[valid, k+1, 4] = np.cos(ophi[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:238: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  is_id = np.abs(oid[valid] - raw_id) < 0.1
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:222: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  kin_raw[:, 0] = np.log1p(oe[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:223: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  kin_raw[:, 1] = np.log1p(opt[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:230: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[valid, k+1, 3] = np.sin(ophi[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:231: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[valid, k+1, 4] = np.cos(ophi[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:238: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  is_id = np.abs(oid[valid] - raw_id) < 0.1
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:222: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  kin_raw[:, 0] = np.log1p(oe[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:223: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  kin_raw[:, 1] = np.log1p(opt[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:230: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[valid, k+1, 3] = np.sin(ophi[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:231: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[valid, k+1, 4] = np.cos(ophi[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:238: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  is_id = np.abs(oid[valid] - raw_id) < 0.1
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:222: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  kin_raw[:, 0] = np.log1p(oe[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:223: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  kin_raw[:, 1] = np.log1p(opt[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:230: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[valid, k+1, 3] = np.sin(ophi[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:231: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[valid, k+1, 4] = np.cos(ophi[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:238: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  is_id = np.abs(oid[valid] - raw_id) < 0.1
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:222: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  kin_raw[:, 0] = np.log1p(oe[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:223: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  kin_raw[:, 1] = np.log1p(opt[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:230: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[valid, k+1, 3] = np.sin(ophi[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:231: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[valid, k+1, 4] = np.cos(ophi[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:238: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  is_id = np.abs(oid[valid] - raw_id) < 0.1
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:222: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  kin_raw[:, 0] = np.log1p(oe[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:223: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  kin_raw[:, 1] = np.log1p(opt[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:230: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[valid, k+1, 3] = np.sin(ophi[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:231: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[valid, k+1, 4] = np.cos(ophi[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:238: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  is_id = np.abs(oid[valid] - raw_id) < 0.1
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:222: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  kin_raw[:, 0] = np.log1p(oe[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:223: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  kin_raw[:, 1] = np.log1p(opt[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:230: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[valid, k+1, 3] = np.sin(ophi[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:231: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[valid, k+1, 4] = np.cos(ophi[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:238: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  is_id = np.abs(oid[valid] - raw_id) < 0.1
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:222: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  kin_raw[:, 0] = np.log1p(oe[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:223: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  kin_raw[:, 1] = np.log1p(opt[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:230: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[valid, k+1, 3] = np.sin(ophi[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:231: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[valid, k+1, 4] = np.cos(ophi[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:238: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  is_id = np.abs(oid[valid] - raw_id) < 0.1
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:222: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  kin_raw[:, 0] = np.log1p(oe[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:223: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  kin_raw[:, 1] = np.log1p(opt[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:230: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[valid, k+1, 3] = np.sin(ophi[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:231: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[valid, k+1, 4] = np.cos(ophi[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:238: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  is_id = np.abs(oid[valid] - raw_id) < 0.1
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:222: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  kin_raw[:, 0] = np.log1p(oe[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:223: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  kin_raw[:, 1] = np.log1p(opt[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:230: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[valid, k+1, 3] = np.sin(ophi[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:231: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[valid, k+1, 4] = np.cos(ophi[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:238: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  is_id = np.abs(oid[valid] - raw_id) < 0.1
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:222: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  kin_raw[:, 0] = np.log1p(oe[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:223: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  kin_raw[:, 1] = np.log1p(opt[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:230: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[valid, k+1, 3] = np.sin(ophi[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:231: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[valid, k+1, 4] = np.cos(ophi[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:238: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  is_id = np.abs(oid[valid] - raw_id) < 0.1
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:222: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  kin_raw[:, 0] = np.log1p(oe[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:223: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  kin_raw[:, 1] = np.log1p(opt[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:230: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[valid, k+1, 3] = np.sin(ophi[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:231: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[valid, k+1, 4] = np.cos(ophi[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:238: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  is_id = np.abs(oid[valid] - raw_id) < 0.1
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:222: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  kin_raw[:, 0] = np.log1p(oe[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:223: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  kin_raw[:, 1] = np.log1p(opt[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:230: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[valid, k+1, 3] = np.sin(ophi[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:231: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[valid, k+1, 4] = np.cos(ophi[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:238: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  is_id = np.abs(oid[valid] - raw_id) < 0.1
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:222: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  kin_raw[:, 0] = np.log1p(oe[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:223: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  kin_raw[:, 1] = np.log1p(opt[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:230: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[valid, k+1, 3] = np.sin(ophi[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:231: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  out[valid, k+1, 4] = np.cos(ophi[valid])
+/workspace/outputs/01-06/FOURTOPS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2324_1.py:238: DeprecationWarning: __array_wrap__ must accept context and return_scalar arguments (positionally) in the future. (Deprecated NumPy 2.0)
+  is_id = np.abs(oid[valid] - raw_id) < 0.1
+/opt/venv/lib/python3.12/site-packages/torch/nn/modules/transformer.py:385: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  warnings.warn(
+WARNING:matplotlib:mkdir -p failed for path /home/sandbox/.config/matplotlib: [Errno 30] Read-only file system: '/home/sandbox/.config'
+WARNING:matplotlib:Matplotlib created a temporary cache directory at /tmp/matplotlib-4zfgxr0_ because there was an issue with the default path (/home/sandbox/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.
+",1038.1282144999132,472
+C:\Users\yoris\projects\Benchmark\outputs\01-06\FOURTOPS\Q1\mistralai_mistral-large-2512\script_mistralai_mistral-large-2512_2251_3.py,True,0,"argv0=/usr/local/bin/train.sh
+argv1=outputs/01-06/FOURTOPS/Q1/mistralai_mistral-large-2512/script_mistralai_mistral-large-2512_2251_3.py
+argv2=
+Epoch 1/30 - Train Loss: 0.6082, Val Loss: 0.5770, Train Acc: 0.6785, Val Acc: 0.7032, AUC: 0.7697
+Epoch 2/30 - Train Loss: 0.5846, Val Loss: 0.5698, Train Acc: 0.6955, Val Acc: 0.7064, AUC: 0.7752
+Epoch 3/30 - Train Loss: 0.5785, Val Loss: 0.5678, Train Acc: 0.7006, Val Acc: 0.7089, AUC: 0.7776
+Epoch 4/30 - Train Loss: 0.5754, Val Loss: 0.5645, Train Acc: 0.7034, Val Acc: 0.7122, AUC: 0.7808
+Epoch 5/30 - Train Loss: 0.5729, Val Loss: 0.5661, Train Acc: 0.7050, Val Acc: 0.7085, AUC: 0.7816
+Epoch 6/30 - Train Loss: 0.5714, Val Loss: 0.5628, Train Acc: 0.7058, Val Acc: 0.7127, AUC: 0.7821
+Epoch 7/30 - Train Loss: 0.5700, Val Loss: 0.5621, Train Acc: 0.7078, Val Acc: 0.7113, AUC: 0.7838
+Epoch 8/30 - Train Loss: 0.5692, Val Loss: 0.5620, Train Acc: 0.7074, Val Acc: 0.7157, AUC: 0.7848
+Epoch 9/30 - Train Loss: 0.5677, Val Loss: 0.5609, Train Acc: 0.7087, Val Acc: 0.7153, AUC: 0.7849
+Epoch 10/30 - Train Loss: 0.5673, Val Loss: 0.5599, Train Acc: 0.7091, Val Acc: 0.7155, AUC: 0.7853
+Epoch 11/30 - Train Loss: 0.5664, Val Loss: 0.5594, Train Acc: 0.7097, Val Acc: 0.7173, AUC: 0.7864
+Epoch 12/30 - Train Loss: 0.5657, Val Loss: 0.5596, Train Acc: 0.7107, Val Acc: 0.7177, AUC: 0.7863
+Epoch 13/30 - Train Loss: 0.5650, Val Loss: 0.5584, Train Acc: 0.7112, Val Acc: 0.7162, AUC: 0.7872
+Epoch 14/30 - Train Loss: 0.5650, Val Loss: 0.5574, Train Acc: 0.7111, Val Acc: 0.7169, AUC: 0.7873
+Epoch 15/30 - Train Loss: 0.5644, Val Loss: 0.5579, Train Acc: 0.7111, Val Acc: 0.7185, AUC: 0.7873
+Epoch 16/30 - Train Loss: 0.5637, Val Loss: 0.5574, Train Acc: 0.7115, Val Acc: 0.7180, AUC: 0.7874
+Epoch 17/30 - Train Loss: 0.5633, Val Loss: 0.5580, Train Acc: 0.7113, Val Acc: 0.7168, AUC: 0.7871
+Epoch 18/30 - Train Loss: 0.5631, Val Loss: 0.5569, Train Acc: 0.7116, Val Acc: 0.7176, AUC: 0.7879
+Epoch 19/30 - Train Loss: 0.5625, Val Loss: 0.5572, Train Acc: 0.7126, Val Acc: 0.7176, AUC: 0.7882
+Epoch 20/30 - Train Loss: 0.5622, Val Loss: 0.5588, Train Acc: 0.7126, Val Acc: 0.7161, AUC: 0.7877
+Epoch 21/30 - Train Loss: 0.5621, Val Loss: 0.5565, Train Acc: 0.7132, Val Acc: 0.7169, AUC: 0.7885
+Epoch 22/30 - Train Loss: 0.5613, Val Loss: 0.5566, Train Acc: 0.7130, Val Acc: 0.7173, AUC: 0.7889
+Epoch 23/30 - Train Loss: 0.5608, Val Loss: 0.5569, Train Acc: 0.7138, Val Acc: 0.7180, AUC: 0.7880
+Epoch 24/30 - Train Loss: 0.5610, Val Loss: 0.5562, Train Acc: 0.7143, Val Acc: 0.7180, AUC: 0.7884
+Epoch 25/30 - Train Loss: 0.5606, Val Loss: 0.5561, Train Acc: 0.7140, Val Acc: 0.7189, AUC: 0.7887
+Epoch 26/30 - Train Loss: 0.5599, Val Loss: 0.5573, Train Acc: 0.7144, Val Acc: 0.7175, AUC: 0.7879
+Epoch 27/30 - Train Loss: 0.5583, Val Loss: 0.5559, Train Acc: 0.7159, Val Acc: 0.7190, AUC: 0.7889
+Epoch 28/30 - Train Loss: 0.5580, Val Loss: 0.5560, Train Acc: 0.7156, Val Acc: 0.7189, AUC: 0.7887
+Epoch 29/30 - Train Loss: 0.5579, Val Loss: 0.5556, Train Acc: 0.7157, Val Acc: 0.7192, AUC: 0.7890
+Epoch 30/30 - Train Loss: 0.5578, Val Loss: 0.5558, Train Acc: 0.7164, Val Acc: 0.7182, AUC: 0.7888
+#TRAIN_METRICS#{""epochs"": 30, ""train_loss"": [0.6082190434523083, 0.5846034509653687, 0.5785386229108767, 0.5753823218397754, 0.572949228879265, 0.5713624644525241, 0.5699541879618681, 0.5691528589649122, 0.5676787464725147, 0.5673174204397362, 0.5664200565065521, 0.5656683194935597, 0.5650085224555829, 0.5649645104477405, 0.5644001786518527, 0.5636684577414554, 0.5633419365307528, 0.5631210968787109, 0.5625424255966909, 0.5621596127175645, 0.5621054375232386, 0.5612547911135891, 0.5607831618788196, 0.5609578417907485, 0.5605762061830859, 0.5598937095945773, 0.5582908935938594, 0.5579642820797411, 0.5579112702924486, 0.5578005655535027], ""val_loss"": [0.5770259587101032, 0.5697686813196289, 0.5678154146927418, 0.5644866775214568, 0.5660835917800202, 0.5628415321598943, 0.5620652802707099, 0.5620101915908775, 0.5609058866743322, 0.5599485905376365, 0.5594169985680917, 0.5595599952057267, 0.5584016545438386, 0.5573895903161223, 0.5579388613346794, 0.5573661671804965, 0.558017352155222, 0.5568995608565832, 0.5572170057548376, 0.5588169712968548, 0.5564967588176754, 0.5565736333967206, 0.5568674130863919, 0.5561645929534058, 0.5560911693741747, 0.5572670200246999, 0.5558768826373643, 0.5559799584430943, 0.5555763011632698, 0.5558171810233085], ""train_acc"": [0.678490587899378, 0.6955395457197598, 0.7005507806519158, 0.7033688244081487, 0.70496612967967, 0.705793748991339, 0.707796587725578, 0.7073910542628602, 0.7086655880028304, 0.7091249167208068, 0.7097125264320918, 0.7106684267370695, 0.7112353459655628, 0.7110615459101123, 0.7111070649722541, 0.7114960460487385, 0.7113387983795214, 0.7116036365592555, 0.7126298845057251, 0.7126298845057251, 0.7131968037342183, 0.7129609322303927, 0.7138257944110867, 0.7143099517084132, 0.7140037325630956, 0.7144009898326967, 0.7158824284005842, 0.7155762092552668, 0.7156713854761086, 0.7164369333394025], ""val_acc"": [0.7032144867083788, 0.7064256629258119, 0.7088754262257093, 0.7121859171715166, 0.7084781673122124, 0.7127155957228457, 0.7112920846161486, 0.7156619326646142, 0.7152646737511172, 0.7154964081173238, 0.7173171781375178, 0.7177475419604727, 0.7161916112159433, 0.7168868143145628, 0.7184758499685503, 0.7180454861455954, 0.7167874995861886, 0.7175820174131824, 0.7176482272320985, 0.716059191578111, 0.7168868143145628, 0.7173171781375178, 0.7179792763266792, 0.7180454861455954, 0.7189062137915053, 0.7174827026848082, 0.7190055285198795, 0.7189393187009634, 0.7191710530671699, 0.7181779057834277]}
+Hash manifest written â†’ mistralai_mistral-large-2512_2251_3_manifest.sha256
+","/opt/venv/lib/python3.12/site-packages/torch/optim/lr_scheduler.py:62: UserWarning: The verbose parameter is deprecated. Please use get_last_lr() to access the learning rate.
+  warnings.warn(
+WARNING:matplotlib:mkdir -p failed for path /home/sandbox/.config/matplotlib: [Errno 30] Read-only file system: '/home/sandbox/.config'
+WARNING:matplotlib:Matplotlib created a temporary cache directory at /tmp/matplotlib-1p16j9mm because there was an issue with the default path (/home/sandbox/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.
+",282.31449000001885,460
+C:\Users\yoris\projects\Benchmark\outputs\01-06\FOURTOPS\Q1\openai_gpt-5.1-codex-max\script_openai_gpt-5.1-codex-max_2327_1.py,True,0,"argv0=/usr/local/bin/train.sh
+argv1=outputs/01-06/FOURTOPS/Q1/openai_gpt-5.1-codex-max/script_openai_gpt-5.1-codex-max_2327_1.py
+argv2=
+#TRAIN_METRICS#{""epochs"": 12, ""train_loss"": [0.5437515847244617, 0.5316166438182152, 0.5278434896538967, 0.5263244979648644, 0.5248867619286597, 0.5241185924919918, 0.5237186374527347, 0.523419405997914, 0.523069725093025, 0.5227671876670764, 0.522958562473436, 0.5210496831409966], ""val_loss"": [0.5234643737565845, 0.5227837601433201, 0.5192588295036644, 0.5182479699006773, 0.5171329183083138, 0.5177484562484062, 0.5165128146962368, 0.515967965570009, 0.5168938954663331, 0.5180261586077634, 0.5164624207064874, 0.5150825182715235], ""train_acc"": [0.7270801176874662, 0.7365232540336096, 0.7383771212917483, 0.7396226883558101, 0.7400199456254112, 0.7411330935996061, 0.7410337792822058, 0.741311031751615, 0.7407565268127967, 0.7411993031445395, 0.7414889699036238, 0.7423827987602263], ""val_acc"": [0.7436024762472274, 0.7406892442149171, 0.7432714271526467, 0.7454232462674215, 0.745654980633628, 0.7455887708147119, 0.74476114807826, 0.7458867149998345, 0.745654980633628, 0.7433707418810209, 0.7446949382593439, 0.7458867149998345]}
+Hash manifest written â†’ openai_gpt-5.1-codex-max_2327_1_manifest.sha256
+","WARNING:matplotlib:mkdir -p failed for path /home/sandbox/.config/matplotlib: [Errno 30] Read-only file system: '/home/sandbox/.config'
+WARNING:matplotlib:Matplotlib created a temporary cache directory at /tmp/matplotlib-3rs85n6w because there was an issue with the default path (/home/sandbox/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.
+",113.29327940009534,404
+C:\Users\yoris\projects\Benchmark\outputs\01-06\FOURTOPS\Q1\openai_gpt-5.2-pro\script_openai_gpt-5.2-pro_2337_1.py,True,0,"argv0=/usr/local/bin/train.sh
+argv1=outputs/01-06/FOURTOPS/Q1/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2337_1.py
+argv2=
+#TRAIN_METRICS#{""epochs"": 25, ""train_loss"": [0.5796180012945267, 0.5288618721671796, 0.5167900006150823, 0.5093407098260488, 0.5031753779922741, 0.49675094262267105, 0.49296924685762183, 0.48893782152092247, 0.4852087086803755, 0.4831474462578959, 0.4818980278511947, 0.4791850103388367, 0.4772920150742224, 0.4751470453461478, 0.47365186703523926, 0.4713151714128553, 0.46967047409355955, 0.4677486104686239, 0.4662601106457107, 0.4646164947667949, 0.463213387384174, 0.4617351379622416, 0.46061159100548793, 0.45995828114037485, 0.459439581931751], ""val_loss"": [0.5259390850861867, 0.5079819897810618, 0.4988459418217341, 0.49526104231675466, 0.4946570207675298, 0.48201485971609753, 0.4795671045780182, 0.47863625089327494, 0.47629024386405944, 0.47474027077356973, 0.4705515762170156, 0.47133335570494334, 0.47059071958065035, 0.4689627339442571, 0.46684842705726626, 0.4671009719371796, 0.4673669477303823, 0.4674287557601929, 0.46477248668670657, 0.46774774889151255, 0.46418870985507965, 0.4647822360197703, 0.4643079141775767, 0.4642244686683019, 0.4642503609259923], ""train_acc"": [0.6947491692771159, 0.7393371596932843, 0.7476381813893246, 0.7517721398511112, 0.7551281361599291, 0.7589062183176982, 0.7610290618521293, 0.763400191180061, 0.7649602535825571, 0.7663423778330444, 0.7678900259458654, 0.769011450113177, 0.7707494506676819, 0.7717674224210348, 0.7727812560778293, 0.7741013088799414, 0.7746889185912265, 0.7763317429248894, 0.7766834811323488, 0.7773621289679173, 0.7788352913426881, 0.7801470679516835, 0.7799153345444163, 0.7806519157318017, 0.78068088240771], ""val_acc"": [0.7472440162876155, 0.7562816565696693, 0.756645810573708, 0.7617108617207932, 0.7619757009964577, 0.7709802363690536, 0.7703843479988082, 0.7713443903730923, 0.7733306849405767, 0.7733306849405767, 0.7770384347998808, 0.7763432317012613, 0.7775350084417519, 0.7776343231701262, 0.7778991624457907, 0.7801171913794815, 0.7804482404740622, 0.7802496110173138, 0.7804482404740622, 0.780348925745688, 0.7805475552024366, 0.7792564637335717, 0.7804813453835204, 0.7808123944781011, 0.7799847717416493]}
+Hash manifest written â†’ openai_gpt-5.2-pro_2337_1_manifest.sha256
+","/opt/venv/lib/python3.12/site-packages/torch/nn/modules/transformer.py:385: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  warnings.warn(
+/workspace/outputs/01-06/FOURTOPS/Q1/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2337_1.py:415: FutureWarning: `torch.cuda.amp.GradScaler(args...)` is deprecated. Please use `torch.amp.GradScaler('cuda', args...)` instead.
+  scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
+/workspace/outputs/01-06/FOURTOPS/Q1/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2337_1.py:437: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  with torch.cuda.amp.autocast(enabled=use_amp):
+/workspace/outputs/01-06/FOURTOPS/Q1/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2337_1.py:437: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  with torch.cuda.amp.autocast(enabled=use_amp):
+/workspace/outputs/01-06/FOURTOPS/Q1/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2337_1.py:437: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  with torch.cuda.amp.autocast(enabled=use_amp):
+/workspace/outputs/01-06/FOURTOPS/Q1/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2337_1.py:437: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  with torch.cuda.amp.autocast(enabled=use_amp):
+/workspace/outputs/01-06/FOURTOPS/Q1/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2337_1.py:437: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  with torch.cuda.amp.autocast(enabled=use_amp):
+/workspace/outputs/01-06/FOURTOPS/Q1/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2337_1.py:437: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  with torch.cuda.amp.autocast(enabled=use_amp):
+/workspace/outputs/01-06/FOURTOPS/Q1/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2337_1.py:437: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  with torch.cuda.amp.autocast(enabled=use_amp):
+/workspace/outputs/01-06/FOURTOPS/Q1/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2337_1.py:437: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  with torch.cuda.amp.autocast(enabled=use_amp):
+/workspace/outputs/01-06/FOURTOPS/Q1/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2337_1.py:437: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  with torch.cuda.amp.autocast(enabled=use_amp):
+/workspace/outputs/01-06/FOURTOPS/Q1/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2337_1.py:437: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  with torch.cuda.amp.autocast(enabled=use_amp):
+/workspace/outputs/01-06/FOURTOPS/Q1/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2337_1.py:437: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  with torch.cuda.amp.autocast(enabled=use_amp):
+/workspace/outputs/01-06/FOURTOPS/Q1/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2337_1.py:437: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  with torch.cuda.amp.autocast(enabled=use_amp):
+/workspace/outputs/01-06/FOURTOPS/Q1/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2337_1.py:437: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  with torch.cuda.amp.autocast(enabled=use_amp):
+/workspace/outputs/01-06/FOURTOPS/Q1/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2337_1.py:437: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  with torch.cuda.amp.autocast(enabled=use_amp):
+/workspace/outputs/01-06/FOURTOPS/Q1/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2337_1.py:437: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  with torch.cuda.amp.autocast(enabled=use_amp):
+/workspace/outputs/01-06/FOURTOPS/Q1/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2337_1.py:437: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  with torch.cuda.amp.autocast(enabled=use_amp):
+/workspace/outputs/01-06/FOURTOPS/Q1/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2337_1.py:437: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  with torch.cuda.amp.autocast(enabled=use_amp):
+/workspace/outputs/01-06/FOURTOPS/Q1/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2337_1.py:437: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  with torch.cuda.amp.autocast(enabled=use_amp):
+/workspace/outputs/01-06/FOURTOPS/Q1/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2337_1.py:437: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  with torch.cuda.amp.autocast(enabled=use_amp):
+/workspace/outputs/01-06/FOURTOPS/Q1/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2337_1.py:437: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  with torch.cuda.amp.autocast(enabled=use_amp):
+/workspace/outputs/01-06/FOURTOPS/Q1/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2337_1.py:437: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  with torch.cuda.amp.autocast(enabled=use_amp):
+/workspace/outputs/01-06/FOURTOPS/Q1/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2337_1.py:437: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  with torch.cuda.amp.autocast(enabled=use_amp):
+/workspace/outputs/01-06/FOURTOPS/Q1/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2337_1.py:437: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  with torch.cuda.amp.autocast(enabled=use_amp):
+/workspace/outputs/01-06/FOURTOPS/Q1/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2337_1.py:437: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  with torch.cuda.amp.autocast(enabled=use_amp):
+/workspace/outputs/01-06/FOURTOPS/Q1/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2337_1.py:437: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  with torch.cuda.amp.autocast(enabled=use_amp):
+WARNING:matplotlib:mkdir -p failed for path /home/sandbox/.config/matplotlib: [Errno 30] Read-only file system: '/home/sandbox/.config'
+WARNING:matplotlib:Matplotlib created a temporary cache directory at /tmp/matplotlib-eetggr85 because there was an issue with the default path (/home/sandbox/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.
+",712.5344283001032,-168
+C:\Users\yoris\projects\Benchmark\outputs\01-06\FOURTOPS\Q1\x-ai_grok-code-fast-1\script_x-ai_grok-code-fast-1_2252_1.py,True,0,"argv0=/usr/local/bin/train.sh
+argv1=outputs/01-06/FOURTOPS/Q1/x-ai_grok-code-fast-1/script_x-ai_grok-code-fast-1_2252_1.py
+argv2=
+Epoch 1/50, Train Loss: 0.5584, Val Loss: 0.5288, Train Acc: 0.7178, Val Acc: 0.7397
+Epoch 2/50, Train Loss: 0.5381, Val Loss: 0.5417, Train Acc: 0.7343, Val Acc: 0.7417
+Epoch 3/50, Train Loss: 0.5329, Val Loss: 0.5234, Train Acc: 0.7374, Val Acc: 0.7434
+Epoch 4/50, Train Loss: 0.5303, Val Loss: 0.5226, Train Acc: 0.7387, Val Acc: 0.7431
+Epoch 5/50, Train Loss: 0.5281, Val Loss: 0.5207, Train Acc: 0.7398, Val Acc: 0.7464
+Epoch 6/50, Train Loss: 0.5259, Val Loss: 0.5182, Train Acc: 0.7418, Val Acc: 0.7463
+Epoch 7/50, Train Loss: 0.5239, Val Loss: 0.5184, Train Acc: 0.7420, Val Acc: 0.7469
+Epoch 8/50, Train Loss: 0.5221, Val Loss: 0.5222, Train Acc: 0.7434, Val Acc: 0.7450
+Epoch 9/50, Train Loss: 0.5209, Val Loss: 0.5209, Train Acc: 0.7436, Val Acc: 0.7478
+Epoch 10/50, Train Loss: 0.5199, Val Loss: 0.5308, Train Acc: 0.7445, Val Acc: 0.7468
+Epoch 11/50, Train Loss: 0.5183, Val Loss: 0.5152, Train Acc: 0.7460, Val Acc: 0.7464
+Epoch 12/50, Train Loss: 0.5170, Val Loss: 0.5598, Train Acc: 0.7463, Val Acc: 0.7481
+Epoch 13/50, Train Loss: 0.5166, Val Loss: 0.5210, Train Acc: 0.7465, Val Acc: 0.7486
+Epoch 14/50, Train Loss: 0.5156, Val Loss: 0.5350, Train Acc: 0.7465, Val Acc: 0.7480
+Epoch 15/50, Train Loss: 0.5147, Val Loss: 0.5504, Train Acc: 0.7472, Val Acc: 0.7489
+Epoch 16/50, Train Loss: 0.5141, Val Loss: 0.5322, Train Acc: 0.7483, Val Acc: 0.7481
+Epoch 17/50, Train Loss: 0.5137, Val Loss: 0.5146, Train Acc: 0.7480, Val Acc: 0.7475
+Epoch 18/50, Train Loss: 0.5126, Val Loss: 0.5174, Train Acc: 0.7489, Val Acc: 0.7479
+Epoch 19/50, Train Loss: 0.5120, Val Loss: 0.5170, Train Acc: 0.7491, Val Acc: 0.7489
+Epoch 20/50, Train Loss: 0.5110, Val Loss: 0.5266, Train Acc: 0.7498, Val Acc: 0.7475
+Epoch 21/50, Train Loss: 0.5108, Val Loss: 0.5385, Train Acc: 0.7495, Val Acc: 0.7477
+Epoch 22/50, Train Loss: 0.5098, Val Loss: 0.5388, Train Acc: 0.7504, Val Acc: 0.7458
+Epoch 23/50, Train Loss: 0.5097, Val Loss: 0.5162, Train Acc: 0.7510, Val Acc: 0.7468
+Epoch 24/50, Train Loss: 0.5058, Val Loss: 0.5150, Train Acc: 0.7528, Val Acc: 0.7470
+Epoch 25/50, Train Loss: 0.5049, Val Loss: 0.5142, Train Acc: 0.7536, Val Acc: 0.7464
+Epoch 26/50, Train Loss: 0.5037, Val Loss: 0.5148, Train Acc: 0.7540, Val Acc: 0.7455
+Epoch 27/50, Train Loss: 0.5031, Val Loss: 0.5141, Train Acc: 0.7542, Val Acc: 0.7469
+Epoch 28/50, Train Loss: 0.5025, Val Loss: 0.5151, Train Acc: 0.7551, Val Acc: 0.7474
+Epoch 29/50, Train Loss: 0.5024, Val Loss: 0.5145, Train Acc: 0.7543, Val Acc: 0.7477
+Epoch 30/50, Train Loss: 0.5019, Val Loss: 0.5160, Train Acc: 0.7550, Val Acc: 0.7464
+Epoch 31/50, Train Loss: 0.5017, Val Loss: 0.5154, Train Acc: 0.7555, Val Acc: 0.7466
+Epoch 32/50, Train Loss: 0.5006, Val Loss: 0.5158, Train Acc: 0.7557, Val Acc: 0.7455
+Epoch 33/50, Train Loss: 0.5004, Val Loss: 0.5153, Train Acc: 0.7553, Val Acc: 0.7466
+Epoch 34/50, Train Loss: 0.4979, Val Loss: 0.5155, Train Acc: 0.7565, Val Acc: 0.7464
+Epoch 35/50, Train Loss: 0.4981, Val Loss: 0.5155, Train Acc: 0.7575, Val Acc: 0.7465
+Epoch 36/50, Train Loss: 0.4977, Val Loss: 0.5156, Train Acc: 0.7575, Val Acc: 0.7455
+Epoch 37/50, Train Loss: 0.4966, Val Loss: 0.5160, Train Acc: 0.7585, Val Acc: 0.7450
+Early stopping!
+#TRAIN_METRICS#{""epochs"": 50, ""train_loss"": [0.558375134559001, 0.5380827148081893, 0.5329025887836845, 0.5303478076170056, 0.5281025026056726, 0.5259497134109675, 0.5239434712013956, 0.5221343551904468, 0.5209162730281636, 0.5198659134744588, 0.5182929558647891, 0.5169527038805566, 0.516626180291681, 0.5155920854185597, 0.5147320616800907, 0.5141044919521122, 0.5136963076636953, 0.5125852431154857, 0.5120356141636937, 0.5110320145169557, 0.5107574446474091, 0.5098141390767138, 0.5096527686563589, 0.5058370646152456, 0.5048619374253992, 0.503664304707515, 0.5030573973968878, 0.5024722543687133, 0.5023517822057514, 0.501923225756924, 0.5016962256977113, 0.5006244748957076, 0.5003587727324438, 0.4978651278099771, 0.4980969831221185, 0.497676523370763, 0.4965571313465046], ""val_loss"": [0.5288498472359221, 0.541735016188379, 0.523394660929502, 0.5225844034704111, 0.5207233934079186, 0.518197738013025, 0.5184108746253838, 0.5222204711477635, 0.5209313817953659, 0.5307630588442592, 0.5152449521978023, 0.5597984487727538, 0.5209518110348006, 0.5350300760592445, 0.5503786549729816, 0.5321773805860746, 0.5145743368035656, 0.5173727501246889, 0.5170272406885179, 0.526627802242667, 0.5384960411968878, 0.5387693699133598, 0.5162178757837264, 0.5150057052151632, 0.5141817780874544, 0.5147959872827692, 0.5141083673905518, 0.5151065431408963, 0.5145437227467359, 0.5159688940492727, 0.5154416449999405, 0.5157729159977477, 0.5153121518886695, 0.5155469522637836, 0.5155071823273675, 0.5155543003041866, 0.5159701957540997], ""train_acc"": [0.7177900909139814, 0.7342514390230782, 0.7373798400211871, 0.7386874785336242, 0.739788212218144, 0.7418117414351747, 0.7420145081665336, 0.7434173228998125, 0.7436366420174049, 0.7444849518118656, 0.7460450142143616, 0.7463098523940958, 0.7465126191254546, 0.7464588238701962, 0.747211957443815, 0.7482961387421014, 0.7479775053071088, 0.748879610356828, 0.7490865151847453, 0.7497982677927807, 0.7494879105509048, 0.7504107060834158, 0.750977625311909, 0.7528314925700477, 0.7536135928195749, 0.7540315405719678, 0.7541722358549514, 0.7550950313874624, 0.7543046549448185, 0.754970888490712, 0.7555005648501802, 0.7556867791953057, 0.7553350409878464, 0.7564647413482746, 0.7574992654878608, 0.7575406464534443, 0.7584551657928386], ""val_acc"": [0.7396960969311749, 0.7417154964081173, 0.7434369516999371, 0.7431390075148144, 0.7463832886417056, 0.7462508690038733, 0.7469460721024928, 0.7449928824444665, 0.7478399046578608, 0.7467805475552024, 0.7464494984606217, 0.7481378488429834, 0.7486344224848545, 0.7480385341146092, 0.7488661568510611, 0.7481378488429834, 0.747475750653822, 0.7479061144767769, 0.7488661568510611, 0.747475750653822, 0.7477405899294866, 0.7458205051809184, 0.7468467573741185, 0.7470122819214089, 0.7464494984606217, 0.7455225609957957, 0.7469460721024928, 0.7474095408349059, 0.7477074850200285, 0.7463832886417056, 0.7466481279173701, 0.7454894560863377, 0.7466481279173701, 0.7464494984606217, 0.7464826033700798, 0.7454894560863377, 0.7450259873539246]}
+Hash manifest written â†’ x-ai_grok-code-fast-1_2252_1_manifest.sha256
+","/opt/venv/lib/python3.12/site-packages/torch/optim/lr_scheduler.py:62: UserWarning: The verbose parameter is deprecated. Please use get_last_lr() to access the learning rate.
+  warnings.warn(
+WARNING:matplotlib:mkdir -p failed for path /home/sandbox/.config/matplotlib: [Errno 30] Read-only file system: '/home/sandbox/.config'
+WARNING:matplotlib:Matplotlib created a temporary cache directory at /tmp/matplotlib-dpt6rcry because there was an issue with the default path (/home/sandbox/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.
+",255.4783279998228,208
+C:\Users\yoris\projects\Benchmark\outputs\01-06\FOURTOPS\Q2\anthropic_claude-sonnet-4.5\script_anthropic_claude-sonnet-4.5_0049_1.py,True,0,"argv0=/usr/local/bin/train.sh
+argv1=outputs/01-06/FOURTOPS/Q2/anthropic_claude-sonnet-4.5/script_anthropic_claude-sonnet-4.5_0049_1.py
+argv2=
+Epoch 1/25: TrLoss=0.6914 TrAcc=0.5266 TrAUC=0.5345 | ValLoss=0.6913 ValAcc=0.5258 ValAUC=0.5379
+Epoch 2/25: TrLoss=0.6910 TrAcc=0.5302 TrAUC=0.5378 | ValLoss=0.6909 ValAcc=0.5295 ValAUC=0.5381
+Epoch 3/25: TrLoss=0.6910 TrAcc=0.5299 TrAUC=0.5384 | ValLoss=0.6909 ValAcc=0.5293 ValAUC=0.5388
+Epoch 4/25: TrLoss=0.6905 TrAcc=0.5313 TrAUC=0.5417 | ValLoss=0.6924 ValAcc=0.5228 ValAUC=0.5375
+Epoch 5/25: TrLoss=0.6907 TrAcc=0.5302 TrAUC=0.5403 | ValLoss=0.6909 ValAcc=0.5279 ValAUC=0.5379
+Epoch 6/25: TrLoss=0.6907 TrAcc=0.5304 TrAUC=0.5403 | ValLoss=0.6909 ValAcc=0.5287 ValAUC=0.5377
+Epoch 7/25: TrLoss=0.6906 TrAcc=0.5308 TrAUC=0.5409 | ValLoss=0.6909 ValAcc=0.5295 ValAUC=0.5376
+Epoch 8/25: TrLoss=0.6907 TrAcc=0.5303 TrAUC=0.5397 | ValLoss=0.6909 ValAcc=0.5287 ValAUC=0.5378
+Epoch 9/25: TrLoss=0.6906 TrAcc=0.5310 TrAUC=0.5410 | ValLoss=0.6921 ValAcc=0.5224 ValAUC=0.5382
+Epoch 10/25: TrLoss=0.6900 TrAcc=0.5336 TrAUC=0.5454 | ValLoss=0.6935 ValAcc=0.5077 ValAUC=0.5379
+Early stopping at epoch 10
+#TRAIN_METRICS#{""epochs"": 25, ""train_loss"": [0.6914351112802395, 0.6909748345327735, 0.6909629206131118, 0.6904977941936116, 0.69074834618601, 0.6907135913092802, 0.6906032163240652, 0.6907460024752005, 0.6906035491244141, 0.6899927605885392], ""val_loss"": [0.6913180127989024, 0.6908967167511003, 0.6909084937070259, 0.6924244832778658, 0.6908807531287765, 0.690884523831433, 0.6909477498781781, 0.6908586424240097, 0.6921295449016829, 0.6934824335790972], ""train_acc"": [0.5265686489528547, 0.5302391406001068, 0.5299163690685559, 0.5312778028362514, 0.5302350025035484, 0.5303963882693239, 0.5308101979251584, 0.5303425930140654, 0.5310295170427507, 0.5336158273917163], ""val_acc"": [0.5258052769225676, 0.5295130267818717, 0.5293143973251233, 0.5228258350713411, 0.5279239911278842, 0.528718508954878, 0.5295461316913298, 0.528718508954878, 0.5224285761578442, 0.5076637865395438]}
+Hash manifest written â†’ anthropic_claude-sonnet-4.5_0049_1_manifest.sha256
+","/opt/venv/lib/python3.12/site-packages/torch/nn/modules/transformer.py:508: UserWarning: The PyTorch API of nested tensors is in prototype stage and will change in the near future. We recommend specifying layout=torch.jagged when constructing a nested tensor, as this layout receives active development, has better operator coverage, and works with torch.compile. (Triggered internally at /pytorch/aten/src/ATen/NestedTensorImpl.cpp:178.)
+  output = torch._nested_tensor_from_mask(
+WARNING:matplotlib:mkdir -p failed for path /home/sandbox/.config/matplotlib: [Errno 30] Read-only file system: '/home/sandbox/.config'
+WARNING:matplotlib:Matplotlib created a temporary cache directory at /tmp/matplotlib-p49fomox because there was an issue with the default path (/home/sandbox/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.
+",314.29427409986965,192
+C:\Users\yoris\projects\Benchmark\outputs\01-06\FOURTOPS\Q2\google_gemini-3-pro-preview\script_google_gemini-3-pro-preview_0056_2.py,False,1,"argv0=/usr/local/bin/train.sh
+argv1=outputs/01-06/FOURTOPS/Q2/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_0056_2.py
+argv2=
+Epoch 1/10 | Train Loss: 0.5631 AUC: 0.7784 | Val Loss: 0.5377 AUC: 0.8138
+Epoch 2/10 | Train Loss: 0.5380 AUC: 0.8037 | Val Loss: 0.5192 AUC: 0.8221
+Epoch 3/10 | Train Loss: 0.5300 AUC: 0.8111 | Val Loss: 0.5109 AUC: 0.8274
+Epoch 4/10 | Train Loss: 0.5173 AUC: 0.8218 | Val Loss: 0.5011 AUC: 0.8362
+Epoch 5/10 | Train Loss: 0.5086 AUC: 0.8286 | Val Loss: 0.4959 AUC: 0.8411
+Epoch 6/10 | Train Loss: 0.5005 AUC: 0.8347 | Val Loss: 0.4954 AUC: 0.8418
+Epoch 7/10 | Train Loss: 0.4943 AUC: 0.8392 | Val Loss: 0.4853 AUC: 0.8469
+Epoch 8/10 | Train Loss: 0.4881 AUC: 0.8437 | Val Loss: 0.4799 AUC: 0.8505
+Epoch 9/10 | Train Loss: 0.4820 AUC: 0.8481 | Val Loss: 0.4771 AUC: 0.8518
+Epoch 10/10 | Train Loss: 0.4777 AUC: 0.8510 | Val Loss: 0.4766 AUC: 0.8522
+","/opt/venv/lib/python3.12/site-packages/torch/nn/modules/transformer.py:385: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  warnings.warn(
+WARNING:matplotlib:mkdir -p failed for path /home/sandbox/.config/matplotlib: [Errno 30] Read-only file system: '/home/sandbox/.config'
+WARNING:matplotlib:Matplotlib created a temporary cache directory at /tmp/matplotlib-kkogiwv8 because there was an issue with the default path (/home/sandbox/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.
+Traceback (most recent call last):
+  File ""/workspace/outputs/01-06/FOURTOPS/Q2/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_0056_2.py"", line 518, in <module>
+    _run(dryrun=""--dryrun"" in sys.argv)
+  File ""/workspace/outputs/01-06/FOURTOPS/Q2/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_0056_2.py"", line 501, in _run
+    plot_train_val(tr_loss, va_loss, f""{base} Loss"", os.path.join(SCRIPT_DIR, f""{base}_loss.png""))
+  File ""/workspace/utils/suffix_utils.py"", line 60, in plot_train_val
+    if len(train_series) == 0 or len(val_series) == 0:
+       ^^^^^^^^^^^^^^^^^
+TypeError: object of type 'numpy.float64' has no len()
+",820.0587693999987,-448
+C:\Users\yoris\projects\Benchmark\outputs\01-06\FOURTOPS\Q2\openai_gpt-5.1-codex-max\script_openai_gpt-5.1-codex-max_0100_1.py,True,0,"argv0=/usr/local/bin/train.sh
+argv1=outputs/01-06/FOURTOPS/Q2/openai_gpt-5.1-codex-max/script_openai_gpt-5.1-codex-max_0100_1.py
+argv2=
+#TRAIN_METRICS#{""epochs"": 12, ""train_loss"": [0.6171138740576619, 0.6038087770190705, 0.602097910319044, 0.6013298307497151, 0.5990714760680897, 0.5985852892234457, 0.5985054228572958, 0.5983248898519764, 0.5971098871256573, 0.5964865480584176, 0.5969400801606223, 0.596081236623908], ""val_loss"": [0.5986185568969481, 0.6034165851807103, 0.5980631230852789, 0.6137435433111381, 0.5938483225568015, 0.5933367243612496, 0.5928884842554665, 0.6044785019957322, 0.5922114157146299, 0.595135595573389, 0.5912088546224268, 0.5907320052500763], ""train_acc"": [0.6629147924537672, 0.6758794489710623, 0.6764587824892306, 0.6781554020781521, 0.6795954596804562, 0.6804768742473837, 0.6812424221106775, 0.6803941123162168, 0.6811265554070439, 0.6820079699739714, 0.6822107367053303, 0.6825873034921397], ""val_acc"": [0.6773264475121661, 0.6730559141920747, 0.677756811335121, 0.6644817426424339, 0.6831529115767868, 0.6822590790214189, 0.6834839606713675, 0.6726917601880359, 0.6857019896050585, 0.6827225477538319, 0.6861654583374714, 0.6866620319793425]}
+Hash manifest written â†’ openai_gpt-5.1-codex-max_0100_1_manifest.sha256
+","/workspace/outputs/01-06/FOURTOPS/Q2/openai_gpt-5.1-codex-max/script_openai_gpt-5.1-codex-max_0100_1.py:216: FutureWarning: `torch.cuda.amp.GradScaler(args...)` is deprecated. Please use `torch.amp.GradScaler('cuda', args...)` instead.
+  scaler = torch.cuda.amp.GradScaler(enabled=(device.type == ""cuda""))
+/workspace/outputs/01-06/FOURTOPS/Q2/openai_gpt-5.1-codex-max/script_openai_gpt-5.1-codex-max_0100_1.py:237: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  with torch.cuda.amp.autocast(enabled=(device.type == ""cuda"")):
+/opt/venv/lib/python3.12/site-packages/torch/nn/modules/transformer.py:508: UserWarning: The PyTorch API of nested tensors is in prototype stage and will change in the near future. We recommend specifying layout=torch.jagged when constructing a nested tensor, as this layout receives active development, has better operator coverage, and works with torch.compile. (Triggered internally at /pytorch/aten/src/ATen/NestedTensorImpl.cpp:178.)
+  output = torch._nested_tensor_from_mask(
+WARNING:matplotlib:mkdir -p failed for path /home/sandbox/.config/matplotlib: [Errno 30] Read-only file system: '/home/sandbox/.config'
+WARNING:matplotlib:Matplotlib created a temporary cache directory at /tmp/matplotlib-m0friade because there was an issue with the default path (/home/sandbox/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.
+",468.8194758000318,196
+C:\Users\yoris\projects\Benchmark\outputs\01-06\FOURTOPS\Q2\openai_gpt-5.2-pro\script_openai_gpt-5.2-pro_0112_1.py,True,0,"argv0=/usr/local/bin/train.sh
+argv1=outputs/01-06/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_0112_1.py
+argv2=
+#TRAIN_METRICS#{""epochs"": 12, ""train_loss"": [0.6931418104186788, 0.6928778622934048, 0.6928195724820992, 0.6927955024790664, 0.692765568356658, 0.6927247264518049, 0.6926991098387549, 0.6925965453778001, 0.6923715036963449, 0.6918081393573162, 0.6910599199016184, 0.6905379740209122], ""val_loss"": [0.6927751710304624, 0.69276247387172, 0.6927571013418389, 0.6927575521583247, 0.6927664041732271, 0.6929013195560189, 0.6926681180220831, 0.692674721075027, 0.6921197234879825, 0.6913323676443686, 0.6905763241844317, 0.6903642845192484], ""train_acc"": [0.5053898707672445, 0.5090438100282632, 0.5083113669374362, 0.5099831579470075, 0.5105335247892674, 0.5113114869422363, 0.5112866583628862, 0.513417778090434, 0.5152054358036391, 0.5217974236210827, 0.5292087545570788, 0.5330447700666647], ""val_acc"": [0.5105439136623962, 0.51047770384348, 0.5108087529380607, 0.511437746217764, 0.5121991591352998, 0.5133909358757904, 0.511437746217764, 0.5110735922137253, 0.5207733306849406, 0.5294799218724137, 0.5339821895587116, 0.5396762339855]}
+Hash manifest written â†’ openai_gpt-5.2-pro_0112_1_manifest.sha256
+","/opt/venv/lib/python3.12/site-packages/torch/nn/modules/transformer.py:385: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  warnings.warn(
+/workspace/outputs/01-06/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_0112_1.py:355: FutureWarning: `torch.cuda.amp.GradScaler(args...)` is deprecated. Please use `torch.amp.GradScaler('cuda', args...)` instead.
+  scaler = torch.cuda.amp.GradScaler(enabled=(device.type == ""cuda""))
+/workspace/outputs/01-06/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_0112_1.py:379: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  ctx = torch.cuda.amp.autocast(enabled=(device.type == ""cuda""))
+/workspace/outputs/01-06/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_0112_1.py:415: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  ctx = torch.cuda.amp.autocast(enabled=(device.type == ""cuda""))
+/workspace/outputs/01-06/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_0112_1.py:379: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  ctx = torch.cuda.amp.autocast(enabled=(device.type == ""cuda""))
+/workspace/outputs/01-06/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_0112_1.py:415: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  ctx = torch.cuda.amp.autocast(enabled=(device.type == ""cuda""))
+/workspace/outputs/01-06/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_0112_1.py:379: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  ctx = torch.cuda.amp.autocast(enabled=(device.type == ""cuda""))
+/workspace/outputs/01-06/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_0112_1.py:415: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  ctx = torch.cuda.amp.autocast(enabled=(device.type == ""cuda""))
+/workspace/outputs/01-06/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_0112_1.py:379: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  ctx = torch.cuda.amp.autocast(enabled=(device.type == ""cuda""))
+/workspace/outputs/01-06/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_0112_1.py:415: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  ctx = torch.cuda.amp.autocast(enabled=(device.type == ""cuda""))
+/workspace/outputs/01-06/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_0112_1.py:379: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  ctx = torch.cuda.amp.autocast(enabled=(device.type == ""cuda""))
+/workspace/outputs/01-06/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_0112_1.py:415: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  ctx = torch.cuda.amp.autocast(enabled=(device.type == ""cuda""))
+/workspace/outputs/01-06/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_0112_1.py:379: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  ctx = torch.cuda.amp.autocast(enabled=(device.type == ""cuda""))
+/workspace/outputs/01-06/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_0112_1.py:415: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  ctx = torch.cuda.amp.autocast(enabled=(device.type == ""cuda""))
+/workspace/outputs/01-06/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_0112_1.py:379: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  ctx = torch.cuda.amp.autocast(enabled=(device.type == ""cuda""))
+/workspace/outputs/01-06/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_0112_1.py:415: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  ctx = torch.cuda.amp.autocast(enabled=(device.type == ""cuda""))
+/workspace/outputs/01-06/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_0112_1.py:379: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  ctx = torch.cuda.amp.autocast(enabled=(device.type == ""cuda""))
+/workspace/outputs/01-06/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_0112_1.py:415: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  ctx = torch.cuda.amp.autocast(enabled=(device.type == ""cuda""))
+/workspace/outputs/01-06/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_0112_1.py:379: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  ctx = torch.cuda.amp.autocast(enabled=(device.type == ""cuda""))
+/workspace/outputs/01-06/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_0112_1.py:415: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  ctx = torch.cuda.amp.autocast(enabled=(device.type == ""cuda""))
+/workspace/outputs/01-06/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_0112_1.py:379: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  ctx = torch.cuda.amp.autocast(enabled=(device.type == ""cuda""))
+/workspace/outputs/01-06/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_0112_1.py:415: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  ctx = torch.cuda.amp.autocast(enabled=(device.type == ""cuda""))
+/workspace/outputs/01-06/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_0112_1.py:379: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  ctx = torch.cuda.amp.autocast(enabled=(device.type == ""cuda""))
+/workspace/outputs/01-06/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_0112_1.py:415: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  ctx = torch.cuda.amp.autocast(enabled=(device.type == ""cuda""))
+/workspace/outputs/01-06/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_0112_1.py:379: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  ctx = torch.cuda.amp.autocast(enabled=(device.type == ""cuda""))
+/workspace/outputs/01-06/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_0112_1.py:415: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  ctx = torch.cuda.amp.autocast(enabled=(device.type == ""cuda""))
+WARNING:matplotlib:mkdir -p failed for path /home/sandbox/.config/matplotlib: [Errno 30] Read-only file system: '/home/sandbox/.config'
+WARNING:matplotlib:Matplotlib created a temporary cache directory at /tmp/matplotlib-4xot1ha6 because there was an issue with the default path (/home/sandbox/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.
+",351.08581820013933,-32
+C:\Users\yoris\projects\Benchmark\outputs\01-06\FOURTOPS\Q2\x-ai_grok-code-fast-1\script_x-ai_grok-code-fast-1_2352_2.py,False,1,"argv0=/usr/local/bin/train.sh
+argv1=outputs/01-06/FOURTOPS/Q2/x-ai_grok-code-fast-1/script_x-ai_grok-code-fast-1_2352_2.py
+argv2=
+","WARNING:matplotlib:mkdir -p failed for path /home/sandbox/.config/matplotlib: [Errno 30] Read-only file system: '/home/sandbox/.config'
+WARNING:matplotlib:Matplotlib created a temporary cache directory at /tmp/matplotlib-zibq578d because there was an issue with the default path (/home/sandbox/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.
+Traceback (most recent call last):
+  File ""/workspace/outputs/01-06/FOURTOPS/Q2/x-ai_grok-code-fast-1/script_x-ai_grok-code-fast-1_2352_2.py"", line 325, in <module>
+    _run(dryrun=""--dryrun"" in sys.argv)
+  File ""/workspace/outputs/01-06/FOURTOPS/Q2/x-ai_grok-code-fast-1/script_x-ai_grok-code-fast-1_2352_2.py"", line 309, in _run
+    plot_train_val(tr_acc, va_acc, f""{base} Accuracy"", os.path.join(SCRIPT_DIR, f""{base}_accuracy.png""))
+  File ""/workspace/utils/suffix_utils.py"", line 60, in plot_train_val
+    if len(train_series) == 0 or len(val_series) == 0:
+       ^^^^^^^^^^^^^^^^^
+TypeError: object of type 'float' has no len()
+",10147.501137299929,-10948
