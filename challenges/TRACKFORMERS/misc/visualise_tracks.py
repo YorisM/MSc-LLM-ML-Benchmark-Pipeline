@@ -2,10 +2,7 @@
 # Run from repo root (PYTHONPATH configured like your harness does).
 #
 # Example:
-#   python challenges/TRACKFORMERS/visualise_tracks.py \
-#       --model-path outputs/22-10/TRACKFORMERS/Q1/<model>/<base>_model.pkl \
-#       --tag REDVID_10-50_linear_frac0.05 \
-#       --event-idx 0
+# python challenges/TRACKFORMERS/visualise_tracks.py --model-path "outputs/22-10/TRACKFORMERS/Q1/<model>/<base>_model.pkl" --tag REDVID_10-50_linear_frac0.05 --event-idx 0
 #
 # Notes:
 # - Assumes hit features are [r, theta, z, (optional) layer_id] per hit.
@@ -13,7 +10,7 @@
 
 from __future__ import annotations
 
-import sys, os, argparse, logging, torch
+import sys, os, subprocess, argparse, logging, torch
 from pathlib import Path
 
 os.environ.setdefault("MPLBACKEND", "Agg")
@@ -34,15 +31,12 @@ import numpy as np
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 from dataclasses import dataclass
 from challenges.TRACKFORMERS.evaluate_trackformers import load_TRACKFORMERS_test, DEFAULT_TAG, fit_accuracy
-from utils.llm_io import _initialize_artefacts, normalise_batch
+from utils.llm_io import _initialize_artefacts
 
 log = logging.getLogger("visualise_tracks")
 
 
-# ----------------------------
 # Helpers: robust event extraction
-# ----------------------------
-
 def _as_event_lists(batch_x: Any, batch_y: Any) -> Tuple[List[Any], List[Any]]:
     """
     Convert normalise_batch outputs into per-event lists.
@@ -114,10 +108,7 @@ def _to_numpy_1d_int(x: Any, expected_len: int) -> np.ndarray:
         raise ValueError(f"Pred labels length {arr.shape[0]} != N hits {expected_len}")
     return arr
 
-# ----------------------------
 # Helpers: hit feature extraction
-# ----------------------------
-
 @dataclass
 class HitView:
     r: np.ndarray
@@ -178,10 +169,7 @@ def extract_hits(x_event: Any, *, feature_order: Tuple[int, int, int, Optional[i
 
     return HitView(r=r, theta=th, z=zz, layer_id=lid)
 
-# ----------------------------
 # Cluster correctness logic
-# ----------------------------
-
 @dataclass
 class ClusterReport:
     pred_label: int
@@ -266,11 +254,7 @@ def fit_accuracy_hit_mask(pred_lbl: np.ndarray, true_tid: np.ndarray) -> Tuple[n
 
     return counted_mask, int(correct_hits), int(denom), reports
 
-
-# ----------------------------
 # Plotting
-# ----------------------------
-
 def plot_event(h: HitView, pred: np.ndarray, true: np.ndarray, counted: np.ndarray, *, title: str = "", max_clusters_legend: int = 12, out: Optional[str] = None) -> None:
     """
     Two projections:
@@ -313,17 +297,29 @@ def plot_event(h: HitView, pred: np.ndarray, true: np.ndarray, counted: np.ndarr
                 linewidths=0.0, alpha=0.9)
 
     # predicted noise: show as x markers
+    if wrong.any():
+        ax_xy.scatter(h.x[wrong], h.y[wrong], facecolors="none", edgecolors="black",
+                    s=np.asarray(s)[wrong] if np.ndim(s) else s, linewidths=0.8, alpha=0.9)
+        ax_zr.scatter(h.z[wrong], h.r[wrong], facecolors="none", edgecolors="black",
+                    s=np.asarray(s)[wrong] if np.ndim(s) else s, linewidths=0.8, alpha=0.9)
+
+    # predicted noise: show as x markers
     if pred_noise.any():
         ax_xy.scatter(h.x[pred_noise], h.y[pred_noise], marker="x", s=18, alpha=0.6)
         ax_zr.scatter(h.z[pred_noise], h.r[pred_noise], marker="x", s=18, alpha=0.6)
 
+    # axes/labels (must NOT be inside the pred_noise block)
+    ax_xy.set_title("XY: colour=pred cluster, outline=wrong")
+    ax_xy.set_xlabel("x")
+    ax_xy.set_ylabel("y")
+    ax_xy.axis("equal")
 
-        ax_zr.set_title("ZR: colour=pred cluster, outline=wrong")
-        ax_zr.set_xlabel("z")
-        ax_zr.set_ylabel("r")
+    ax_zr.set_title("ZR: colour=pred cluster, outline=wrong")
+    ax_zr.set_xlabel("z")
+    ax_zr.set_ylabel("r")
 
-        if title:
-            fig.suptitle(title)
+    if title:
+        fig.suptitle(title)
 
     # Minimal legend: show up to a few predicted clusters
     if len(uniq) > 0:
@@ -344,10 +340,70 @@ def plot_event(h: HitView, pred: np.ndarray, true: np.ndarray, counted: np.ndarr
     else:
         plt.show()
 
-# ----------------------------
-# Main: load one event, predict, summarise, plot
-# ----------------------------
+# Docker
+def _docker_viz_cmd(project_root: Path, artefact_pkl: Path, *, tag: str, event_idx: int, outdir: Optional[Path]) -> list[str]:
+    """
+    Build docker run command that executes visualise_tracks.py inside llm-evaluation-sandbox:latest for a single model.
+    """
 
+    artefact_dir        = artefact_pkl.parent                  # .../outputs/<DATE>/<C>/<Q>/<MODEL>
+    viz_script_py = project_root / "challenges/TRACKFORMERS/visualise_tracks.py"
+    viz_out = (outdir if outdir is not None else (artefact_dir / "viz"))
+    viz_out.mkdir(parents=True, exist_ok=True)
+
+    # Docker volumes    
+    data_test           = project_root / f"challenges/TRACKFORMERS/data/test"
+    evaluator_py        = project_root / f"challenges/TRACKFORMERS/evaluate_trackformers.py"
+    llm_io_py           = project_root / "utils/llm_io.py"
+    loaderspec_py       = project_root / "utils/loaderspec.py"
+    suffix_utils_py     = project_root / "utils/suffix_utils.py"
+    utils_challenge     = project_root / f"challenges/TRACKFORMERS/utils_trackformers.py"
+
+    # Build CMD
+    cmd = [
+        # args
+        "docker", "run", "--rm",
+        "--gpus", "all",
+        "--read-only",
+        "--cap-drop", "ALL",
+        "--network", "none",
+        "--security-opt", f"seccomp={project_root/'docker/seccomp_profile.json'}",
+        "--tmpfs", "/tmp:rw,noexec,nosuid",
+        "--tmpfs", "/dev/shm:rw",
+
+        # Force CUDA to run synchronously
+        "-e", "CUDA_LAUNCH_BLOCKING=1",
+
+        # Prevent Python/Matplotlib cache writes
+        "-e", "PYTHONDONTWRITEBYTECODE=1",
+        "-e", "MPLCONFIGDIR=/tmp/mplconfig",
+        "-e", "IN_LLM_SANDBOX=1",
+
+        # Mounts
+        "-v", f"{data_test}:/workspace/challenges/TRACKFORMERS/data/test:ro",
+        "-v", f"{evaluator_py}:/workspace/challenges/TRACKFORMERS/evaluate_trackformers.py:ro",
+        "-v", f"{utils_challenge}:/workspace/challenges/TRACKFORMERS/utils_trackformers.py:ro",
+        "-v", f"{llm_io_py}:/workspace/utils/llm_io.py:ro",
+        "-v", f"{loaderspec_py}:/workspace/utils/loaderspec.py:ro",
+        "-v", f"{suffix_utils_py}:/workspace/utils/suffix_utils.py:ro",
+        "-v", f"{artefact_dir}:/workspace/out:ro",
+        "-v", f"{viz_script_py}:/workspace/challenges/TRACKFORMERS/visualise_tracks.py:ro",
+        "-v", f"{viz_out}:/workspace/viz:rw",
+
+        # run python directly
+        "--entrypoint", "python",
+        "-w", "/workspace",
+        "llm-sandbox:latest",
+        "/workspace/challenges/TRACKFORMERS/misc/visualise_tracks.py",
+        "--model-path", f"/workspace/out/{artefact_pkl.name}",
+        "--tag", tag,
+        "--event-idx", str(event_idx),
+        "--out", f"/workspace/viz/event_{event_idx}.png",
+    ]
+
+    return cmd
+
+# Main: load one event, predict, summarise, plot
 def iter_events_from_loader(test_loader, device: torch.device) -> Iterable[Tuple[Any, Any]]:
     """
     Yield (x_event, y_event) one event at a time from a loader (supports ragged/padded/PyG).
@@ -395,10 +451,28 @@ def main():
     ap.add_argument("--layer-col", type=int, default=3, help="Set to -1 to disable layer extraction")
     ap.add_argument("--loglevel", type=str, default="INFO")
     ap.add_argument("--out", type=str, default=None, help="If set, save plot to this path (PNG) instead of showing.")
+    ap.add_argument("--outdir", type=str, default=None, help="Host output dir for plots (default: <modeldir>/viz)")
+
     args = ap.parse_args()
 
     logging.basicConfig(level=getattr(logging, args.loglevel.upper(), logging.INFO))
 
+    if os.environ.get("IN_LLM_SANDBOX") != "1":
+        artefact_pkl = Path(args.model_path).resolve()
+        outdir = Path(args.outdir).resolve() if args.outdir else None
+
+        cmd = _docker_viz_cmd(
+            project_root=repo_root.resolve(),
+            artefact_pkl=artefact_pkl,
+            tag=args.tag,
+            event_idx=int(args.event_idx),
+            outdir=outdir,
+        )
+        logging.info("Running visualisation in docker...")
+        subprocess.run(cmd, check=True)
+        return
+    
+    # Setup devide and model
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model, _preproc = _initialize_artefacts(args.model_path)
     model.to(device).eval()

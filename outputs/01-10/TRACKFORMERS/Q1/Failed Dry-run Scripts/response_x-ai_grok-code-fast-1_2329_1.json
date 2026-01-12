@@ -1,0 +1,71 @@
+{
+  "LLMGeneration": {
+    "model": "x-ai/grok-code-fast-1",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 4310,
+    "prompt_chars": 17811,
+    "response_tokens": 8800,
+    "response_chars": 7140,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.01402744,
+    "generation_ms": 65027,
+    "code": "# ---------- IMPORTS ----------\n# NOTE: Some imports (torch, nn, numpy, DataLoader) are already available (see prefix).\n# Only import extra std-lib modules or modules available in the environment, i.e: torch, scipy, sklearn (sub-)modules you actually use.\n# <LLM: Import modules>\nimport math\nimport torch.nn.functional as F\nfrom torch_geometric.data import Data\nfrom torch_geometric.nn import GCNConv\nfrom sklearn.preprocessing import StandardScaler\n\n#  -------- (OPTIONAL) CUSTOM DATASET  --------\nclass MyCustomDataset(torch.utils.data.Dataset):\n    def __init__(self, events, pre, train: bool = True, **kwargs):\n        evt = events\n        X = np.column_stack([evt[\"hit_r\"], evt[\"hit_theta\"], evt[\"hit_z\"], evt[\"layer_id\"]]).astype(np.float32)\n        y = evt[\"track_id\"].astype(np.int64)\n        self.data = pre.transform((X, y))\n    def __len__(self):\n        return 1  # one event per dataset\n    def __getitem__(self, idx):\n        return self.data\n\n# ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.scaler = None\n        self.delta_z_max = 0.1  # tune if needed\n        self.delta_theta_max = 0.1  # tune if needed\n\n    def make_loader_cfg(self) -> dict:\n        return {\n            \"dataset_builder\": \"llm_script:MyCustomDataset\",\n            \"dataset_kwargs\": {},\n            \"loader_class\": \"torch_geometric.loader:DataLoader\",\n            \"batch_size\": 16,  # smaller batch since graphs\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": False,\n            \"collate\": None,  # PyG default\n            \"extra_loader_kwargs\": {},\n            \"eval_overrides\": {\"shuffle\": False}\n        }\n\n    def fit(self, Xs):\n        # Xs: list of np.array [N_i, 4]\n        all_X = np.concatenate([X for X in Xs], axis=0)  # [sum N, 4]\n        self.scaler = StandardScaler().fit(all_X[:, :3])  # r, theta, z\n        return self\n\n    def transform(self, data):\n        X, y = data  # X: np.array [N, 4], y: np.array [N]\n        X_transformed = X.copy()\n        X_transformed[:, :3] = self.scaler.transform(X[:, :3])\n        x = torch.from_numpy(X_transformed)  # [N, 4]\n\n        # Build edge_index\n        PI = math.pi\n        n = X.shape[0]\n        edge_list = []\n        for i in range(n):\n            for j in range(i+1, n):\n                # Check consecutive layers and proximity\n                layer_i, layer_j = X[i, 3], X[j, 3]\n                if abs(layer_i - layer_j) == 1:\n                    theta_i, theta_j = X[i, 1], X[j, 1]\n                    delta_theta = abs(theta_i - theta_j) % (2 * PI)\n                    delta_theta = min(delta_theta, 2 * PI - delta_theta)\n                    delta_z = abs(X[i, 2] - X[j, 2])\n                    if delta_theta < self.delta_theta_max and delta_z < self.delta_z_max:\n                        edge_list.append([i, j])\n                        edge_list.append([j, i])  # undirected\n        if not edge_list:\n            # Fallback: fully connected, but sparse if possible\n            for i in range(n):\n                for j in range(n):\n                    if i != j:\n                        edge_list.append([i, j])\n        edge_index = torch.tensor(edge_list, dtype=torch.long).t() if edge_list else torch.empty(2, 0, dtype=torch.long)\n        y_tensor = torch.from_numpy(y)\n        data = Data(x=x, edge_index=edge_index, y=y_tensor)\n        return data\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# ---------- MODEL ARCHITECTURE ----------\nclass HitClassifier(nn.Module):\n    def __init__(self, example_batch_x):\n        super().__init__()\n        self.num_classes_global = 51  # max 50 tracks + noise\n        self.hidden = 128\n        F = example_batch_x.x.shape[1]  # 4\n        self.encoder = nn.Linear(F, self.hidden)\n        self.gnn1 = GCNConv(self.hidden, self.hidden)\n        self.gnn2 = GCNConv(self.hidden, self.hidden)\n        self.classifier = nn.Linear(self.hidden, self.num_classes_global)\n        # Final output size: logits [N, 51]\n\n    def forward(self, batch_x):  # batch_x is PyG Batch, has x, edge_index, batch, etc.\n        h = self.encoder(batch_x.x)\n        h = F.relu(h)\n        h = self.gnn1(h, batch_x.edge_index)\n        h = F.relu(h)\n        h = self.gnn2(h, batch_x.edge_index)\n        h = F.relu(h)\n        h = self.classifier(h)  # [total_N, 51]\n        return h\n\n    def predict_labels(self, batch_x):  # batch_x is PyG Batch\n        with torch.no_grad():\n            h = self(batch_x)\n            labels = torch.argmax(h, dim=1)  # [N]\n            labels = labels.clone()\n            labels[labels == 0] = -1  # noise: 0 -> -1\n            return labels  # LongTensor [N]\n\ndef make_model(example_batch_x):\n    return HitClassifier(example_batch_x)\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 20  # tune\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)\n    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.9)\n    best_acc = -1\n    patience = 5\n    no_improve = 0\n\n    train_metrics = []\n    val_metrics = []\n\n    for epoch in range(epochs):\n        model.train()\n        total_loss = 0\n        total_samples = 0\n        train_correct = 0\n        for batch in train_loader:\n            batch = batch.to(device)\n            optimizer.zero_grad()\n            h = model(batch)  # [total_N, 51]\n            loss = F.cross_entropy(h, batch.y, ignore_index=0)  # ignore noise for loss\n            loss.backward()\n            optimizer.step()\n            total_loss += loss.item()\n            pred_labels = model.predict_labels(batch)\n            # For train acc, approx by comparing to batch.y, but since local, use as is\n            total_samples += batch.x.shape[0]\n\n        avg_loss = total_loss / len(train_loader)\n        train_acc = train_correct / total_samples if total_samples > 0 else 0\n\n        model.eval()\n        val_loss = 0\n        val_samples = 0\n        with torch.no_grad():\n            for batch in val_loader:\n                batch = batch.to(device)\n                h = model(batch)\n                loss = F.cross_entropy(h, batch.y, ignore_index=0)\n                val_loss += loss.item()\n                val_samples += batch.x.shape[0]\n        val_acc = 0  # approx, since FitAccuracy not computed here\n        avg_val_loss = val_loss / len(val_loader)\n\n        train_metrics.append(avg_loss)\n        val_metrics.append(avg_val_loss)\n\n        print(f\"Epoch {epoch+1}/{epochs}: Train Loss {avg_loss:.4f}, Val Loss {avg_val_loss:.4f}\")\n\n        scheduler.step()\n\n        # Early stopping on val_loss\n        if avg_val_loss < best_acc or best_acc == -1:\n            best_acc = avg_val_loss\n            no_improve = 0\n            best_model = model.state_dict()\n        else:\n            no_improve += 1\n            if no_improve >= patience:\n                print(\"Early stopping\")\n                break\n\n    model.load_state_dict(best_model)\n    return model, train_metrics, val_metrics, train_acc, val_acc",
+    "reasoning": "",
+    "Outer_attempt": 1
+  },
+  "StaticChecks": {
+    "__timestamp": "2026-01-10T22:29:17Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2026-01-10T22:29:17Z",
+        "metrics": {
+          ".\\outputs\\01-10\\TRACKFORMERS\\Q1\\script_x-ai_grok-code-fast-1_2329_1.py": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 251,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 251,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2026-01-10T22:29:33Z",
+    "passed": false,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/01-10/TRACKFORMERS/Q1/script_x-ai_grok-code-fast-1_2329_1.py\nargv2=--dryrun\n#PROC_METRICS#{\"cpu_seconds_user\": 7.4, \"cpu_seconds_sys\": 0.55, \"max_rss_kb\": 760136, \"training_time_s\": 8.416, \"source\": \"proc_tree_ticks\"}\n#GPU_METRICS#{\"cuda_available\": true, \"name\": \"NVIDIA GeForce RTX 3050 Ti Laptop GPU\", \"total_mb\": 4096, \"peak_used_mb\": 0, \"avg_used_mb\": 0.0, \"avg_util_pct\": 0.0, \"peak_util_pct\": 0, \"per_process_gpu_mem\": false}\n",
+      "stderr": "resource_monitor.py: WARNING: cgroup v2 not detected; metrics may be degraded.\nTraceback (most recent call last):\n  File \"/workspace/outputs/01-10/TRACKFORMERS/Q1/script_x-ai_grok-code-fast-1_2329_1.py\", line 329, in <module>\n    _run(dryrun=\"--dryrun\" in sys.argv)\n  File \"/workspace/outputs/01-10/TRACKFORMERS/Q1/script_x-ai_grok-code-fast-1_2329_1.py\", line 254, in _run\n    train_ds     = build_dataset(spec, raw_train, pre, train=True)\n                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/utils/llm_io.py\", line 140, in build_dataset\n    return builder(events, preproc, train=train, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/outputs/01-10/TRACKFORMERS/Q1/script_x-ai_grok-code-fast-1_2329_1.py\", line 66, in __init__\n    X = np.column_stack([evt[\"hit_r\"], evt[\"hit_theta\"], evt[\"hit_z\"], evt[\"layer_id\"]]).astype(np.float32)\n                         ~~~^^^^^^^^^\nTypeError: list indices must be integers or slices, not str\n"
+    },
+    "return_code": 1
+  }
+}

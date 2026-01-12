@@ -1,0 +1,71 @@
+{
+  "LLMGeneration": {
+    "model": "mistralai/devstral-2512:free",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 4412,
+    "prompt_chars": 17811,
+    "response_tokens": 2253,
+    "response_chars": 9427,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0,
+    "generation_ms": 36264,
+    "code": "# ---------- IMPORTS ----------\nimport torch.nn.functional as F\nfrom torch_geometric.nn import GCNConv, global_mean_pool\nfrom torch_geometric.data import Data, Batch\nfrom sklearn.preprocessing import StandardScaler\nfrom sklearn.cluster import DBSCAN\nimport hdbscan\n\n# ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.scaler = StandardScaler()\n        self.layer_encoder = None\n        self.n_layers = None\n\n    def make_loader_cfg(self) -> dict:\n        return {\n            \"dataset_builder\": \"utils.llm_io:EventDataset\",\n            \"dataset_kwargs\": {},\n            \"loader_class\": \"torch_geometric.loader:DataLoader\",\n            \"batch_size\": 32,\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": False,\n            \"collate\": None,\n            \"extra_loader_kwargs\": {},\n            \"eval_overrides\": {\"shuffle\": False}\n        }\n\n    def fit(self, Xs):\n        # Collect all hits for scaling\n        all_hits = np.concatenate(Xs, axis=0)\n        self.scaler.fit(all_hits[:, :3])  # Scale r, theta, z\n\n        # Encode layer_id\n        unique_layers = np.unique(all_hits[:, 3])\n        self.n_layers = len(unique_layers)\n        self.layer_encoder = {l: i for i, l in enumerate(unique_layers)}\n        return self\n\n    def transform(self, X):\n        # X: [N_hits, 4] numpy array\n        X = X.numpy() if isinstance(X, torch.Tensor) else X\n        scaled = self.scaler.transform(X[:, :3])\n        layer_encoded = np.array([self.layer_encoder[l] for l in X[:, 3]], dtype=np.float32)\n        return torch.FloatTensor(np.column_stack([scaled, layer_encoded]))\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# ---------- MODEL ARCHITECTURE ----------\nclass HitClassifier(nn.Module):\n    def __init__(self, example_batch_x):\n        super().__init__()\n        # Determine input features\n        if isinstance(example_batch_x, list):\n            # Torch ragged lane\n            self.lane = \"torch_ragged_xy\"\n            self.input_dim = example_batch_x[0].shape[1]\n        else:\n            # PyG lane\n            self.lane = \"pyg_batch\"\n            self.input_dim = example_batch_x.x.shape[1]\n\n        # GNN layers\n        self.conv1 = GCNConv(self.input_dim, 64)\n        self.conv2 = GCNConv(64, 128)\n        self.conv3 = GCNConv(128, 64)\n        self.fc = nn.Linear(64, 32)\n\n        # Clustering head\n        self.cluster_head = nn.Linear(32, 16)\n\n        # Edge construction parameters\n        self.r_cutoff = 0.1\n        self.z_cutoff = 1.0\n        self.layer_cutoff = 2\n\n    def build_edges(self, x, batch=None):\n        # x: [N, 4] (r, theta, z, layer)\n        # Build edges based on spatial proximity and layer adjacency\n        r = x[:, 0]\n        z = x[:, 2]\n        layer = x[:, 3]\n\n        # Compute pairwise distances\n        r_diff = torch.abs(r.unsqueeze(1) - r.unsqueeze(0))\n        z_diff = torch.abs(z.unsqueeze(1) - z.unsqueeze(0))\n        layer_diff = torch.abs(layer.unsqueeze(1) - layer.unsqueeze(0))\n\n        # Create adjacency matrix\n        adj = (r_diff < self.r_cutoff) & (z_diff < self.z_cutoff) & (layer_diff < self.layer_cutoff)\n\n        # Remove self-loops\n        adj.fill_diagonal_(False)\n\n        # Convert to edge indices\n        edge_index = adj.nonzero().t().contiguous()\n\n        # For batched data, ensure edges stay within same event\n        if batch is not None:\n            same_event = (batch[edge_index[0]] == batch[edge_index[1]])\n            edge_index = edge_index[:, same_event]\n\n        return edge_index\n\n    def forward(self, batch_x):\n        if self.lane == \"torch_ragged_xy\":\n            # Convert to PyG format\n            xs, batch = [], []\n            for i, x in enumerate(batch_x):\n                xs.append(x)\n                batch.append(torch.full((x.shape[0],), i, dtype=torch.long))\n            x = torch.cat(xs, dim=0)\n            batch = torch.cat(batch, dim=0)\n        else:\n            x = batch_x.x\n            batch = batch_x.batch\n\n        # Build graph\n        edge_index = self.build_edges(x, batch)\n\n        # GNN forward pass\n        h = F.relu(self.conv1(x, edge_index))\n        h = F.relu(self.conv2(h, edge_index))\n        h = F.relu(self.conv3(h, edge_index))\n\n        # Global pooling for event-level features\n        event_features = global_mean_pool(h, batch)\n\n        # Combine node and event features\n        h = torch.cat([h, event_features[batch]], dim=1)\n        h = F.relu(self.fc(h))\n\n        # Clustering embedding\n        embeddings = self.cluster_head(h)\n        return embeddings\n\n    def predict_labels(self, batch_x):\n        with torch.no_grad():\n            embeddings = self.forward(batch_x)\n\n            if self.lane == \"torch_ragged_xy\":\n                # Split embeddings back into events\n                xs = batch_x\n                embeddings_list = []\n                start = 0\n                for x in xs:\n                    n = x.shape[0]\n                    embeddings_list.append(embeddings[start:start+n])\n                    start += n\n\n                # Cluster each event separately\n                all_labels = []\n                for emb in embeddings_list:\n                    emb_np = emb.cpu().numpy()\n                    clusterer = hdbscan.HDBSCAN(min_cluster_size=4, min_samples=1,\n                                              cluster_selection_epsilon=0.1,\n                                              metric='euclidean')\n                    labels = clusterer.fit_predict(emb_np)\n\n                    # Convert to torch and handle noise (-1)\n                    labels = torch.from_numpy(labels).to(emb.device)\n                    all_labels.append(labels)\n                return all_labels\n            else:\n                # Single batch clustering\n                emb_np = embeddings.cpu().numpy()\n                clusterer = hdbscan.HDBSCAN(min_cluster_size=4, min_samples=1,\n                                          cluster_selection_epsilon=0.1,\n                                          metric='euclidean')\n                labels = clusterer.fit_predict(emb_np)\n                return torch.from_numpy(labels).to(embeddings.device)\n\ndef make_model(example_batch_x):\n    return HitClassifier(example_batch_x)\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 50\n\ndef train_model(model, train_loader, val_loader, epochs):\n    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)\n    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=5)\n\n    # Loss function - we'll use a contrastive loss\n    def contrastive_loss(embeddings, batch):\n        # Create positive pairs (same track) and negative pairs (different tracks)\n        # This is a simplified version - in practice you'd need ground truth labels\n        # For this example, we'll use a basic clustering loss\n\n        # Normalize embeddings\n        embeddings = F.normalize(embeddings, p=2, dim=1)\n\n        # Compute similarity matrix\n        sim = torch.mm(embeddings, embeddings.t())\n\n        # Create target matrix (simplified)\n        # In practice, you'd use the ground truth to define positive/negative pairs\n        # Here we just encourage similar embeddings to be close\n        loss = -torch.log(torch.sigmoid(sim) + 1e-8).mean()\n        return loss\n\n    train_loss, val_loss = [], []\n    train_acc, val_acc = [], []\n\n    best_val_loss = float('inf')\n    best_model = None\n    patience = 10\n    patience_counter = 0\n\n    for epoch in range(epochs):\n        model.train()\n        epoch_train_loss = 0\n        for batch in train_loader:\n            optimizer.zero_grad()\n\n            if model.lane == \"torch_ragged_xy\":\n                Xs, ys = batch\n                Xs = [x.to(device) for x in Xs]\n                embeddings = model(Xs)\n                loss = contrastive_loss(embeddings, None)\n            else:\n                G = batch.to(device)\n                embeddings = model(G)\n                loss = contrastive_loss(embeddings, G.batch)\n\n            loss.backward()\n            optimizer.step()\n            epoch_train_loss += loss.item()\n\n        # Validation\n        model.eval()\n        epoch_val_loss = 0\n        with torch.no_grad():\n            for batch in val_loader:\n                if model.lane == \"torch_ragged_xy\":\n                    Xs, ys = batch\n                    Xs = [x.to(device) for x in Xs]\n                    embeddings = model(Xs)\n                    loss = contrastive_loss(embeddings, None)\n                else:\n                    G = batch.to(device)\n                    embeddings = model(G)\n                    loss = contrastive_loss(embeddings, G.batch)\n                epoch_val_loss += loss.item()\n\n        # Update learning rate\n        scheduler.step(epoch_val_loss)\n\n        # Store metrics\n        train_loss.append(epoch_train_loss / len(train_loader))\n        val_loss.append(epoch_val_loss / len(val_loader))\n\n        # Early stopping\n        if epoch_val_loss < best_val_loss:\n            best_val_loss = epoch_val_loss\n            best_model = model.state_dict()\n            patience_counter = 0\n        else:\n            patience_counter += 1\n            if patience_counter >= patience:\n                print(f\"Early stopping at epoch {epoch}\")\n                break\n\n    # Load best model\n    if best_model is not None:\n        model.load_state_dict(best_model)\n\n    return model, train_loss, val_loss, train_acc, val_acc",
+    "reasoning": "",
+    "Outer_attempt": 3
+  },
+  "StaticChecks": {
+    "__timestamp": "2026-01-10T22:20:54Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2026-01-10T22:20:54Z",
+        "metrics": {
+          ".\\outputs\\01-10\\TRACKFORMERS\\Q1\\script_mistralai_devstral-2512_free_2320_3.py": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 283,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 283,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2026-01-10T22:21:13Z",
+    "passed": false,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/01-10/TRACKFORMERS/Q1/script_mistralai_devstral-2512_free_2320_3.py\nargv2=--dryrun\n#PROC_METRICS#{\"cpu_seconds_user\": 8.17, \"cpu_seconds_sys\": 0.67, \"max_rss_kb\": 776376, \"training_time_s\": 10.939, \"source\": \"proc_tree_ticks\"}\n#GPU_METRICS#{\"cuda_available\": true, \"name\": \"NVIDIA GeForce RTX 3050 Ti Laptop GPU\", \"total_mb\": 4096, \"peak_used_mb\": 0, \"avg_used_mb\": 0.0, \"avg_util_pct\": 0.0, \"peak_util_pct\": 0, \"per_process_gpu_mem\": false}\n",
+      "stderr": "resource_monitor.py: WARNING: cgroup v2 not detected; metrics may be degraded.\nTraceback (most recent call last):\n  File \"/workspace/outputs/01-10/TRACKFORMERS/Q1/script_mistralai_devstral-2512_free_2320_3.py\", line 414, in <module>\n    _run(dryrun=\"--dryrun\" in sys.argv)\n  File \"/workspace/outputs/01-10/TRACKFORMERS/Q1/script_mistralai_devstral-2512_free_2320_3.py\", line 345, in _run\n    first_batch = next(iter(train_loader))\n                  ^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/torch/utils/data/dataloader.py\", line 708, in __next__\n    data = self._next_data()\n           ^^^^^^^^^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/torch/utils/data/dataloader.py\", line 764, in _next_data\n    data = self._dataset_fetcher.fetch(index)  # may raise StopIteration\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/torch/utils/data/_utils/fetch.py\", line 55, in fetch\n    return self.collate_fn(data)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/torch_geometric/loader/dataloader.py\", line 47, in __call__\n    return [self(s) for s in zip(*batch)]\n            ^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/torch_geometric/loader/dataloader.py\", line 33, in __call__\n    return default_collate(batch)\n           ^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/torch/utils/data/_utils/collate.py\", line 398, in default_collate\n    return collate(batch, collate_fn_map=default_collate_fn_map)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/torch/utils/data/_utils/collate.py\", line 155, in collate\n    return collate_fn_map[elem_type](batch, collate_fn_map=collate_fn_map)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/torch/utils/data/_utils/collate.py\", line 272, in collate_tensor_fn\n    return torch.stack(batch, 0, out=out)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nRuntimeError: stack expects each tensor to be equal size, but got [351, 4] at entry 0 and [390, 4] at entry 1\n"
+    },
+    "return_code": 1
+  }
+}

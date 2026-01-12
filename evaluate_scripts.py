@@ -39,6 +39,7 @@ def _docker_eval_cmd(project_root: Path,
     inside llm-evaluation-sandbox:latest for a single model.
     """
 
+    # Docker volumes
     artefact_dir        = artefact_pkl.parent                  # .../outputs/<DATE>/<C>/<Q>/<MODEL>
     data_test           = project_root / f"challenges/{challenge}/data/test"
     evaluator_py        = project_root / f"challenges/{challenge}/evaluate_{challenge.lower()}.py"
@@ -47,9 +48,11 @@ def _docker_eval_cmd(project_root: Path,
     suffix_utils_py     = project_root / "utils/suffix_utils.py"
     utils_challenge     = project_root / f"challenges/{challenge}/utils_{challenge.lower()}.py"
 
+    # logging
     logging.debug("Artefact folder: %s", artefact_dir)
     logging.debug("Data test folder: %s", data_test)
 
+    # Build CMD
     cmd = [
         # args
         "docker", "run", "--rm",
@@ -68,7 +71,11 @@ def _docker_eval_cmd(project_root: Path,
         # Force CUDA to run synchronously
         "-e", "CUDA_LAUNCH_BLOCKING=1",
 
-        # mounts
+        # Prevent Python/Matplotlib cache writes
+        "-e", "PYTHONDONTWRITEBYTECODE=1",
+        "-e", "MPLCONFIGDIR=/tmp/mplconfig",
+
+        # Mounts
         "-v", f"{data_test}:/workspace/challenges/{challenge}/data/test:ro",
         "-v", f"{evaluator_py}:/workspace/challenges/{challenge}/evaluate_{challenge.lower()}.py:ro",
         "-v", f"{utils_challenge}:/workspace/challenges/{challenge}/utils_{challenge.lower()}.py:ro",

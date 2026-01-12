@@ -1,0 +1,159 @@
+{
+  "LLMGeneration": {
+    "model": "openai/gpt-5.1-codex-max",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 4180,
+    "prompt_chars": 17811,
+    "response_tokens": 11489,
+    "response_chars": 9892,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.120115,
+    "generation_ms": 105669,
+    "code": "import torch\nfrom torch import nn\nfrom torch.utils.data import DataLoader\nimport numpy as np\nfrom sklearn.cluster import DBSCAN\nfrom sklearn.metrics import adjusted_rand_score\n\nclass MyPreprocessor:\n    def __init__(self):\n        self.mean = None\n        self.std = None\n\n    def make_loader_cfg(self) -> dict:\n        return {\n            \"dataset_builder\": \"utils.llm_io:EventDataset\",\n            \"dataset_kwargs\": {},\n\n            \"loader_class\": \"torch.utils.data:DataLoader\",\n            \"batch_size\": 64,\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": False,\n\n            \"collate\": \"ragged_xy\",\n            \"extra_loader_kwargs\": {},\n\n            \"eval_overrides\": {\"shuffle\": False}\n        }\n\n    def fit(self, Xs):\n        # Compute mean and std over all hits across events incrementally\n        total_count = 0\n        total_sum = None\n        total_sumsq = None\n        for X in Xs:\n            if isinstance(X, torch.Tensor):\n                x_np = X.cpu().numpy()\n            else:\n                x_np = np.asarray(X)\n            if total_sum is None:\n                total_sum = x_np.sum(axis=0, dtype=np.float64)\n                total_sumsq = np.square(x_np, dtype=np.float64).sum(axis=0)\n            else:\n                total_sum += x_np.sum(axis=0, dtype=np.float64)\n                total_sumsq += np.square(x_np, dtype=np.float64).sum(axis=0)\n            total_count += x_np.shape[0]\n        mean = total_sum / max(total_count, 1)\n        var = total_sumsq / max(total_count, 1) - mean**2\n        std = np.sqrt(np.clip(var, 1e-8, None))\n        self.mean = torch.from_numpy(mean.astype(np.float32))\n        self.std = torch.from_numpy(std.astype(np.float32))\n        return self\n\n    def transform(self, X):\n        # X: torch tensor [N_hits, 4]\n        if not isinstance(X, torch.Tensor):\n            X = torch.from_numpy(X)\n        if self.mean is not None and self.std is not None:\n            mean = self.mean.to(X.device)\n            std = self.std.to(X.device)\n            X = (X - mean) / std\n        return X.float()\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\nclass HitClassifier(nn.Module):\n    def __init__(self, example_batch_x):\n        super().__init__()\n        # Determine input dimension\n        in_dim = None\n        if isinstance(example_batch_x, list) and len(example_batch_x) > 0:\n            in_dim = example_batch_x[0].shape[1]\n        elif isinstance(example_batch_x, tuple) and len(example_batch_x) > 0:\n            if isinstance(example_batch_x[0], list) and len(example_batch_x[0]) > 0:\n                in_dim = example_batch_x[0][0].shape[1]\n            elif torch.is_tensor(example_batch_x[0]):\n                in_dim = example_batch_x[0].shape[1]\n        elif hasattr(example_batch_x, \"x\"):\n            in_dim = example_batch_x.x.shape[1]\n        else:\n            raise ValueError(\"Cannot infer input dimension from example_batch_x\")\n        hidden = 64\n        self.net = nn.Sequential(\n            nn.Linear(in_dim, hidden),\n            nn.ReLU(),\n            nn.Linear(hidden, hidden),\n            nn.ReLU(),\n            nn.Linear(hidden, 4)  # [sin_theta, cos_theta, slope, intercept]\n        )\n        self.dbscan_eps = 0.5\n        self.dbscan_min_samples = 2\n\n    def forward(self, batch_x):\n        # batch_x: list of [N_i, F]\n        if isinstance(batch_x, list):\n            return [self.net(x) for x in batch_x]\n        elif hasattr(batch_x, \"x\"):\n            return self.net(batch_x.x)\n        else:\n            return self.net(batch_x)\n\n    @torch.no_grad()\n    def predict_labels(self, batch_x):\n        self.eval()\n        preds = self.forward(batch_x)\n        labels_list = []\n        if isinstance(batch_x, list):\n            for p in preds:\n                p_np = p.detach().cpu().numpy()\n                # Features for clustering: [sin_theta, cos_theta, slope, intercept]\n                feat = p_np\n                # Standardize features per event\n                mean = feat.mean(axis=0, keepdims=True)\n                std = feat.std(axis=0, keepdims=True)\n                std[std < 1e-6] = 1.0\n                feat_std = (feat - mean) / std\n                db = DBSCAN(eps=self.dbscan_eps, min_samples=self.dbscan_min_samples)\n                lbl = db.fit_predict(feat_std)\n                # Post-process: invalidate small clusters (<4 hits)\n                lbl_out = lbl.copy()\n                for cid in np.unique(lbl):\n                    if cid == -1:\n                        continue\n                    mask = lbl == cid\n                    if mask.sum() < 4:\n                        lbl_out[mask] = -1\n                labels_list.append(torch.from_numpy(lbl_out.astype(np.int64)))\n        else:\n            # PyG batch not used in this implementation\n            p = preds\n            p_np = p.detach().cpu().numpy()\n            mean = p_np.mean(axis=0, keepdims=True)\n            std = p_np.std(axis=0, keepdims=True)\n            std[std < 1e-6] = 1.0\n            feat_std = (p_np - mean) / std\n            db = DBSCAN(eps=self.dbscan_eps, min_samples=self.dbscan_min_samples)\n            lbl = db.fit_predict(feat_std)\n            lbl_out = lbl.copy()\n            for cid in np.unique(lbl):\n                if cid == -1:\n                    continue\n                mask = lbl == cid\n                if mask.sum() < 4:\n                    lbl_out[mask] = -1\n            labels_list = torch.from_numpy(lbl_out.astype(np.int64))\n        return labels_list\n\ndef make_model(example_batch_x):\n    return HitClassifier(example_batch_x)\n\nEPOCHS = 10\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    model.to(device)\n    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)\n    train_loss_hist = []\n    val_loss_hist = []\n    train_acc_hist = []\n    val_acc_hist = []\n\n    def compute_targets(x, y):\n        # x: [N,F], y: [N]\n        target = torch.zeros((y.shape[0], 4), device=x.device, dtype=x.dtype)  # [N,4]\n        track_ids = torch.unique(y)\n        for tid in track_ids:\n            if tid <= 0:\n                continue\n            mask_tid = y == tid\n            if mask_tid.sum() == 0:\n                continue\n            r = x[mask_tid, 0]\n            theta = x[mask_tid, 1]\n            z = x[mask_tid, 2]\n            sin_mean = torch.sin(theta).mean()\n            cos_mean = torch.cos(theta).mean()\n            theta_avg = torch.atan2(sin_mean, cos_mean)\n            r_mean = r.mean()\n            z_mean = z.mean()\n            cov = ((r - r_mean) * (z - z_mean)).sum()\n            var_r = ((r - r_mean) ** 2).sum()\n            slope = cov / torch.clamp(var_r, min=1e-6)\n            intercept = z_mean - slope * r_mean\n            vec = torch.stack([torch.sin(theta_avg), torch.cos(theta_avg), slope, intercept])\n            target[mask_tid, :] = vec\n        return target  # [N,4]\n\n    @torch.no_grad()\n    def evaluate(loader):\n        model.eval()\n        total_sqerr = 0.0\n        total_hits = 0\n        ari_list = []\n        for Xs, ys in loader:\n            Xs = [x.to(device) for x in Xs]\n            ys = [y.to(device) for y in ys]\n            preds = model(Xs)\n            # Loss\n            for p, x, y in zip(preds, Xs, ys):\n                mask = y > 0\n                if mask.sum() == 0:\n                    continue\n                target = compute_targets(x, y)\n                diff = p[mask] - target[mask]  # [n_hits_masked,4]\n                total_sqerr += (diff * diff).sum().item()\n                total_hits += mask.sum().item()\n            # ARI\n            pred_labels_list = model.predict_labels(Xs)\n            for lbl_pred, y in zip(pred_labels_list, ys):\n                y_cpu = y.cpu().numpy()\n                lbl_pred_np = lbl_pred.cpu().numpy()\n                mask_true = y_cpu > 0\n                if mask_true.sum() < 2:\n                    continue\n                # Ensure labels for masked hits only\n                true_labels = y_cpu[mask_true]\n                pred_labels = lbl_pred_np[mask_true]\n                if len(np.unique(pred_labels)) < 2 or len(np.unique(true_labels)) < 2:\n                    ari = 0.0\n                else:\n                    ari = adjusted_rand_score(true_labels, pred_labels)\n                ari_list.append(ari)\n        avg_loss = total_sqerr / max(total_hits, 1)\n        avg_ari = float(np.mean(ari_list)) if len(ari_list) > 0 else 0.0\n        return avg_loss, avg_ari\n\n    for epoch in range(epochs):\n        model.train()\n        epoch_sqerr = 0.0\n        epoch_hits = 0\n        for Xs, ys in train_loader:\n            Xs = [x.to(device) for x in Xs]\n            ys = [y.to(device) for y in ys]\n            optimizer.zero_grad()\n            preds = model(Xs)\n            batch_sqerr = 0.0\n            batch_hits = 0\n            for p, x, y in zip(preds, Xs, ys):\n                mask = y > 0\n                if mask.sum() == 0:\n                    continue\n                target = compute_targets(x, y)\n                diff = p[mask] - target[mask]  # [n_mask,4]\n                batch_sqerr += (diff * diff).sum()\n                batch_hits += mask.sum()\n            if batch_hits == 0:\n                continue\n            loss = batch_sqerr / batch_hits\n            loss.backward()\n            optimizer.step()\n            epoch_sqerr += loss.item() * batch_hits.item()\n            epoch_hits += batch_hits.item()\n        epoch_loss = epoch_sqerr / max(epoch_hits, 1)\n        train_loss_hist.append(epoch_loss)\n        # Evaluate\n        val_loss, val_ari = evaluate(val_loader)\n        val_loss_hist.append(val_loss)\n        # For simplicity, we do not compute train ARI to save time; set to 0\n        train_acc_hist.append(0.0)\n        val_acc_hist.append(val_ari)\n        # Optional: early stopping could be implemented here\n\n    trained_model = model\n    return trained_model, train_loss_hist, val_loss_hist, train_acc_hist, val_acc_hist",
+    "reasoning": "",
+    "Outer_attempt": 3
+  },
+  "StaticChecks": {
+    "__timestamp": "2026-01-10T23:20:29Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2026-01-10T23:20:29Z",
+        "metrics": {
+          ".\\outputs\\01-10\\TRACKFORMERS\\Q1\\script_openai_gpt-5.1-codex-max_0020_3.py": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 334,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 334,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2026-01-10T23:20:50Z",
+    "passed": true,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/01-10/TRACKFORMERS/Q1/script_openai_gpt-5.1-codex-max_0020_3.py\nargv2=--dryrun\n#PROC_METRICS#{\"cpu_seconds_user\": 10.06, \"cpu_seconds_sys\": 0.84, \"max_rss_kb\": 1387036, \"training_time_s\": 12.253, \"source\": \"proc_tree_ticks\"}\n#GPU_METRICS#{\"cuda_available\": true, \"name\": \"NVIDIA GeForce RTX 3050 Ti Laptop GPU\", \"total_mb\": 4096, \"peak_used_mb\": 139, \"avg_used_mb\": 47.929, \"avg_util_pct\": 4.214, \"peak_util_pct\": 20, \"per_process_gpu_mem\": false}\nDry-run: skipping artefact manifest\n",
+      "stderr": "resource_monitor.py: WARNING: cgroup v2 not detected; metrics may be degraded.\n"
+    },
+    "return_code": 0
+  },
+  "Training": {
+    "__timestamp": "2026-01-11T11:17:10.080517+00:00",
+    "passed": true,
+    "resources": {
+      "wall_time_s": 3148.665,
+      "training_time_s": 3137.509,
+      "cpu_seconds_user": 2731.14,
+      "cpu_seconds_sys": 401.6,
+      "disk_read_mb": null,
+      "disk_write_mb": null,
+      "max_rss_kb": 1708696,
+      "proc_source": "proc_tree_ticks",
+      "cuda_available": true,
+      "gpu_name": "NVIDIA GeForce RTX 3050 Ti Laptop GPU",
+      "gpu_total_mb": 4096,
+      "per_process_gpu_mem": false,
+      "gpu_peak_alloc_mb": 147,
+      "gpu_avg_util_pct": 35.513,
+      "gpu_peak_util_pct": 53,
+      "gpu_avg_used_mb": 146.634
+    },
+    "metrics": {
+      "epochs": 10,
+      "train_loss": [
+        53.78656512550491,
+        42.158638330873515,
+        35.69099319099995,
+        31.331019768940504,
+        27.92966312787619,
+        25.458588853556375,
+        23.658263106727965,
+        22.37056210087637,
+        21.425825577247082,
+        20.667224427726456
+      ],
+      "val_loss": [
+        40.72216161176677,
+        32.44626392334129,
+        27.454101995661297,
+        23.640265341525026,
+        20.76038447780189,
+        18.66167302960077,
+        17.185302265655686,
+        16.074258476565717,
+        15.32989540842461,
+        14.679920803601037
+      ],
+      "train_acc": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "val_acc": [
+        0.05054247573543289,
+        0.07975486619139863,
+        0.04571646610369056,
+        0.035060888544620014,
+        0.03736040570307773,
+        0.04143632844877681,
+        0.04879807830026885,
+        0.053003610464879225,
+        0.058689318676232435,
+        0.06405761531700845
+      ]
+    },
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/01-10/TRACKFORMERS/Q1/openai_gpt-5.1-codex-max/script_openai_gpt-5.1-codex-max_0020_3.py\nargv2=\n#TRAIN_METRICS#{\"epochs\": 10, \"train_loss\": [53.78656512550491, 42.158638330873515, 35.69099319099995, 31.331019768940504, 27.92966312787619, 25.458588853556375, 23.658263106727965, 22.37056210087637, 21.425825577247082, 20.667224427726456], \"val_loss\": [40.72216161176677, 32.44626392334129, 27.454101995661297, 23.640265341525026, 20.76038447780189, 18.66167302960077, 17.185302265655686, 16.074258476565717, 15.32989540842461, 14.679920803601037], \"train_acc\": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], \"val_acc\": [0.05054247573543289, 0.07975486619139863, 0.04571646610369056, 0.035060888544620014, 0.03736040570307773, 0.04143632844877681, 0.04879807830026885, 0.053003610464879225, 0.058689318676232435, 0.06405761531700845]}\n#PROC_METRICS#{\"cpu_seconds_user\": 2731.14, \"cpu_seconds_sys\": 401.6, \"max_rss_kb\": 1708696, \"training_time_s\": 3137.509, \"source\": \"proc_tree_ticks\"}\n#GPU_METRICS#{\"cuda_available\": true, \"name\": \"NVIDIA GeForce RTX 3050 Ti Laptop GPU\", \"total_mb\": 4096, \"peak_used_mb\": 147, \"avg_used_mb\": 146.634, \"avg_util_pct\": 35.513, \"peak_util_pct\": 53, \"per_process_gpu_mem\": false}\nHash manifest written â†’ openai_gpt-5.1-codex-max_0020_3_manifest.sha256\n",
+      "stderr": "resource_monitor.py: WARNING: cgroup v2 not detected; metrics may be degraded.\n"
+    }
+  },
+  "Evaluation": {
+    "__timestamp": "2026-01-11T12:03:53Z",
+    "passed": true,
+    "metrics": {
+      "ok": true,
+      "load_s": 5.75,
+      "eval_s": 2.13,
+      "FitAccuracy": 0.1296794901942341
+    },
+    "runtime_s": 17.66
+  }
+}

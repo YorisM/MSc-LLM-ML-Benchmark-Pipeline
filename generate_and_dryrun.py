@@ -372,14 +372,15 @@ def script_dryrun(script_path):
     _, success, _, stdout, stderr, _, _ = run_single_script(script_path, dryrun=True, use_docker=True)
     return success, stdout, stderr
     
-def generate_and_dryrun():
+def generate_and_dryrun(*, challenges_override=None):
     # Compute run ID
     run_id = get_or_create_run_id()
     output_root = Path("outputs") / run_id
 
-    for challenge in config.challenges:
-        logging.info(f"--------------------------------------------------------------------------------------------------------\n------------------------------------ Executing challenge: {challenge.name} ---------------------------------\n--------------------------------------------------------------------------------------------------------")
+    challenges = challenges_override if challenges_override is not None else config.challenges
 
+    for challenge in challenges:
+        logging.info(f"--------------------------------------------------------------------------------------------------------\n------------------------------------ Executing challenge: {challenge.name} ---------------------------------\n--------------------------------------------------------------------------------------------------------")
         for question in tqdm(challenge.questions, desc=f"{challenge.name} questions", leave=False):
             # Set output dir
             output_dir = output_root / challenge.name / question.question_id

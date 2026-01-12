@@ -1,0 +1,102 @@
+{
+  "LLMGeneration": {
+    "model": "mistralai/mistral-large-2512",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 4412,
+    "prompt_chars": 17811,
+    "response_tokens": 2519,
+    "response_chars": 10491,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.0059845,
+    "generation_ms": 37941,
+    "code": "# ---------- IMPORTS ----------\nimport torch\nimport torch.nn as nn\nimport torch.nn.functional as F\nimport numpy as np\nfrom torch_geometric.data import Data\nfrom torch_geometric.nn import MessagePassing\nfrom torch_geometric.utils import add_self_loops, degree\nfrom sklearn.preprocessing import StandardScaler\nfrom scipy.spatial import KDTree\nfrom collections import defaultdict\n\n# ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.scaler = StandardScaler()\n        self.layer_mean = None\n        self.layer_std = None\n\n    def make_loader_cfg(self) -> dict:\n        return {\n            \"dataset_builder\": \"utils.llm_io:EventDataset\",\n            \"dataset_kwargs\": {},\n\n            \"loader_class\": \"torch_geometric.loader:DataLoader\",\n            \"batch_size\": 32,\n            \"shuffle\": True,\n            \"num_workers\": 4,\n            \"pin_memory\": True,\n\n            \"collate\": None,\n            \"extra_loader_kwargs\": {},\n\n            \"eval_overrides\": {\"shuffle\": False, \"batch_size\": 64}\n        }\n\n    def fit(self, Xs):\n        # Compute global statistics for normalization\n        all_X = np.concatenate(Xs, axis=0)\n        self.scaler.fit(all_X[:, :3])  # Only scale r, theta, z\n\n        # Compute layer statistics\n        layer_ids = all_X[:, 3]\n        self.layer_mean = np.mean(layer_ids)\n        self.layer_std = np.std(layer_ids)\n\n        return self\n\n    def transform(self, X):\n        # X shape: [N_hits, 4]\n        X = X.clone().detach()\n\n        # Normalize r, theta, z\n        X[:, :3] = torch.from_numpy(self.scaler.transform(X[:, :3].numpy())).float()\n\n        # Normalize layer_id\n        if self.layer_std > 0:\n            X[:, 3] = (X[:, 3] - self.layer_mean) / self.layer_std\n\n        # Create edge_index for PyG\n        coords = X[:, :3].numpy()\n        tree = KDTree(coords)\n        edge_index = tree.query_pairs(r=0.5, output_type='ndarray').T\n        edge_index = torch.from_numpy(edge_index).long()\n\n        # Create PyG Data object\n        data = Data(x=X, edge_index=edge_index)\n        return data\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# ---------- MODEL ARCHITECTURE ----------\nclass EdgeConv(MessagePassing):\n    def __init__(self, in_channels, out_channels):\n        super().__init__(aggr='max')\n        self.mlp = nn.Sequential(\n            nn.Linear(2 * in_channels, out_channels),\n            nn.BatchNorm1d(out_channels),\n            nn.ReLU(),\n            nn.Linear(out_channels, out_channels)\n        )\n\n    def forward(self, x, edge_index):\n        return self.propagate(edge_index, x=x)\n\n    def message(self, x_i, x_j):\n        tmp = torch.cat([x_i, x_j - x_i], dim=1)\n        return self.mlp(tmp)\n\nclass HitClassifier(nn.Module):\n    def __init__(self, example_batch_x):\n        super().__init__()\n        num_features = example_batch_x.x.shape[1]\n\n        # Graph layers\n        self.conv1 = EdgeConv(num_features, 64)\n        self.conv2 = EdgeConv(64, 128)\n        self.conv3 = EdgeConv(128, 256)\n\n        # Attention mechanism\n        self.attention = nn.Sequential(\n            nn.Linear(256, 128),\n            nn.Tanh(),\n            nn.Linear(128, 1)\n        )\n\n        # Output layers\n        self.fc1 = nn.Linear(256, 128)\n        self.fc2 = nn.Linear(128, 64)\n        self.fc3 = nn.Linear(64, 32)\n\n        # Track embedding\n        self.track_embedding = nn.Linear(32, 32)\n\n        # Final classification\n        self.classifier = nn.Linear(32, 1)  # Will use sigmoid for binary classification\n\n    def forward(self, data):\n        x, edge_index = data.x, data.edge_index\n\n        # Graph convolutions\n        x = F.relu(self.conv1(x, edge_index))\n        x = F.relu(self.conv2(x, edge_index))\n        x = F.relu(self.conv3(x, edge_index))\n\n        # Attention\n        attn_weights = F.softmax(self.attention(x), dim=0)\n        x = x * attn_weights\n\n        # MLP\n        x = F.relu(self.fc1(x))\n        x = F.relu(self.fc2(x))\n        x = F.relu(self.fc3(x))\n\n        return x\n\n    def predict_labels(self, data):\n        with torch.no_grad():\n            embeddings = self.forward(data)  # [N_hits, 32]\n\n            # Simple clustering using embeddings\n            # First, try to find clusters using distance threshold\n            coords = data.x[:, :3].cpu().numpy()\n            embeddings_np = embeddings.cpu().numpy()\n\n            # Use HDBSCAN for clustering\n            try:\n                import hdbscan\n                clusterer = hdbscan.HDBSCAN(\n                    min_cluster_size=4,\n                    min_samples=2,\n                    cluster_selection_epsilon=0.5,\n                    metric='euclidean'\n                )\n                labels = clusterer.fit_predict(embeddings_np)\n                labels = torch.from_numpy(labels).to(data.x.device)\n\n                # Convert noise (-1) to new cluster IDs\n                max_label = labels.max()\n                noise_mask = (labels == -1)\n                if noise_mask.any():\n                    labels[noise_mask] = torch.arange(\n                        max_label + 1,\n                        max_label + 1 + noise_mask.sum(),\n                        device=labels.device\n                    )\n            except:\n                # Fallback to simple distance-based clustering\n                from sklearn.cluster import DBSCAN\n                clustering = DBSCAN(eps=0.5, min_samples=4).fit(embeddings_np)\n                labels = torch.from_numpy(clustering.labels_).to(data.x.device)\n\n                # Convert noise (-1) to new cluster IDs\n                max_label = labels.max()\n                noise_mask = (labels == -1)\n                if noise_mask.any():\n                    labels[noise_mask] = torch.arange(\n                        max_label + 1,\n                        max_label + 1 + noise_mask.sum(),\n                        device=labels.device\n                    )\n\n            return labels\n\ndef make_model(example_batch_x):\n    return HitClassifier(example_batch_x)\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 20\n\ndef train_model(model, train_loader, val_loader, epochs):\n    device = torch.device(\"cuda\" if torch.cuda.is_available() else \"cpu\")\n    model = model.to(device)\n    optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-4)\n    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', patience=3, factor=0.5)\n\n    best_val_acc = 0\n    train_losses = []\n    val_losses = []\n    train_accs = []\n    val_accs = []\n\n    for epoch in range(epochs):\n        model.train()\n        total_loss = 0\n        total_correct = 0\n        total_samples = 0\n\n        for batch in train_loader:\n            batch = batch.to(device)\n            optimizer.zero_grad()\n\n            # Forward pass\n            embeddings = model(batch)\n\n            # Create target embeddings for contrastive learning\n            # We'll use the true track IDs to create positive pairs\n            track_ids = batch.y\n            unique_tracks = torch.unique(track_ids)\n\n            # Create positive pairs within each track\n            pos_pairs = []\n            for track in unique_tracks:\n                if track == 0:  # Skip noise\n                    continue\n                mask = (track_ids == track)\n                if mask.sum() >= 2:\n                    indices = torch.where(mask)[0]\n                    for i in range(len(indices)):\n                        for j in range(i+1, len(indices)):\n                            pos_pairs.append((indices[i], indices[j]))\n\n            if len(pos_pairs) == 0:\n                continue\n\n            # Sample negative pairs\n            neg_pairs = []\n            for _ in range(len(pos_pairs)):\n                i, j = torch.randint(0, len(track_ids), (2,))\n                while track_ids[i] == track_ids[j] and track_ids[i] != 0:\n                    i, j = torch.randint(0, len(track_ids), (2,))\n                neg_pairs.append((i, j))\n\n            # Compute contrastive loss\n            pos_pairs = torch.tensor(pos_pairs, device=device)\n            neg_pairs = torch.tensor(neg_pairs, device=device)\n\n            pos_emb_i = embeddings[pos_pairs[:, 0]]\n            pos_emb_j = embeddings[pos_pairs[:, 1]]\n            neg_emb_i = embeddings[neg_pairs[:, 0]]\n            neg_emb_j = embeddings[neg_pairs[:, 1]]\n\n            pos_sim = F.cosine_similarity(pos_emb_i, pos_emb_j)\n            neg_sim = F.cosine_similarity(neg_emb_i, neg_emb_j)\n\n            loss = F.relu(neg_sim - pos_sim + 0.5).mean()\n\n            loss.backward()\n            optimizer.step()\n\n            total_loss += loss.item()\n\n        # Validation\n        model.eval()\n        val_loss = 0\n        val_correct = 0\n        val_samples = 0\n\n        with torch.no_grad():\n            for batch in val_loader:\n                batch = batch.to(device)\n                embeddings = model(batch)\n\n                # Simple validation metric: fraction of hits with correct nearest neighbor\n                track_ids = batch.y\n                unique_tracks = torch.unique(track_ids)\n\n                correct = 0\n                total = 0\n\n                for track in unique_tracks:\n                    if track == 0:\n                        continue\n                    mask = (track_ids == track)\n                    if mask.sum() < 2:\n                        continue\n\n                    track_emb = embeddings[mask]\n                    dist_matrix = torch.cdist(track_emb, track_emb)\n                    np.fill_diagonal(dist_matrix.cpu().numpy(), np.inf)\n                    min_indices = dist_matrix.argmin(dim=1)\n\n                    # Check if nearest neighbor is from same track\n                    correct += (track_ids[mask][min_indices] == track).sum().item()\n                    total += len(min_indices)\n\n                if total > 0:\n                    val_correct += correct\n                    val_samples += total\n\n        train_loss = total_loss / len(train_loader)\n        val_acc = val_correct / val_samples if val_samples > 0 else 0\n\n        train_losses.append(train_loss)\n        val_accs.append(val_acc)\n\n        scheduler.step(val_acc)\n\n        if val_acc > best_val_acc:\n            best_val_acc = val_acc\n            best_model = model.state_dict()\n\n        print(f\"Epoch {epoch+1}/{epochs} - Loss: {train_loss:.4f} - Val Acc: {val_acc:.4f}\")\n\n    # Load best model\n    model.load_state_dict(best_model)\n\n    return model, train_losses, [0]*len(train_losses), [0]*len(train_losses), val_accs",
+    "reasoning": "",
+    "Outer_attempt": 4
+  },
+  "StaticChecks": {
+    "__timestamp": "2026-01-10T22:27:01Z",
+    "PyLint": {
+      "passed": false,
+      "messages": [
+        {
+          "type": "error",
+          "module": "script_mistralai_mistral-large-2512_2326_4",
+          "obj": "train_model",
+          "line": 305,
+          "column": 22,
+          "endLine": 305,
+          "endColumn": 63,
+          "path": "outputs\\01-10\\TRACKFORMERS\\Q1\\script_mistralai_mistral-large-2512_2326_4.py",
+          "symbol": "not-callable",
+          "message": "F.cosine_similarity is not callable",
+          "message-id": "E1102"
+        },
+        {
+          "type": "error",
+          "module": "script_mistralai_mistral-large-2512_2326_4",
+          "obj": "train_model",
+          "line": 306,
+          "column": 22,
+          "endLine": 306,
+          "endColumn": 63,
+          "path": "outputs\\01-10\\TRACKFORMERS\\Q1\\script_mistralai_mistral-large-2512_2326_4.py",
+          "symbol": "not-callable",
+          "message": "F.cosine_similarity is not callable",
+          "message-id": "E1102"
+        },
+        {
+          "type": "error",
+          "module": "script_mistralai_mistral-large-2512_2326_4",
+          "obj": "train_model",
+          "line": 368,
+          "column": 26,
+          "endLine": 368,
+          "endColumn": 36,
+          "path": "outputs\\01-10\\TRACKFORMERS\\Q1\\script_mistralai_mistral-large-2512_2326_4.py",
+          "symbol": "possibly-used-before-assignment",
+          "message": "Possibly using variable 'best_model' before assignment",
+          "message-id": "E0606"
+        }
+      ]
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2026-01-10T22:27:01Z",
+        "metrics": {
+          ".\\outputs\\01-10\\TRACKFORMERS\\Q1\\script_mistralai_mistral-large-2512_2326_4.py": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 321,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 321,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  }
+}

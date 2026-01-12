@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+# utils.resource_monitor.py
 
 """
 Run a command while collecting container-accurate CPU/memory (via cgroups)
@@ -11,17 +11,12 @@ Designed to be called from train.sh so suffix scripts remain untouched.
 """
 
 from __future__ import annotations
-import argparse
-import json
-import os
-import subprocess
-import sys
-import threading
-import time
+import os, sys, json, argparse, subprocess, threading, time
 from typing import Any, Dict, Optional, Tuple
 
 
 CGROUP_ROOT = "/sys/fs/cgroup"
+_CLK_TCK = os.sysconf(os.sysconf_names["SC_CLK_TCK"])
 
 
 def _file_exists(p: str) -> bool:
@@ -197,16 +192,91 @@ def _pump(src, dst):
     except Exception:
         pass
 
-def main() -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--interval", type=float, default=0.5, help="sampling interval seconds")
-    ap.add_argument("--", dest="cmd", nargs=argparse.REMAINDER)
-    args = ap.parse_args()
+def _read_proc_stat(pid: int):
+    # /proc/<pid>/stat: utime is field 14, stime is field 15 (1-indexed)
+    try:
+        with open(f"/proc/{pid}/stat", "r") as f:
+            s = f.read().strip()
+        # comm is inside parentheses and may contain spaces
+        rparen = s.rfind(")")
+        rest = s[rparen+2:].split()
+        utime = int(rest[11])  # 14th field overall
+        stime = int(rest[12])  # 15th field overall
+        return utime, stime
+    except Exception:
+        return None
 
-    cmd = args.cmd
-    if not cmd:
-        print("resource_monitor.py: missing command after --", file=sys.stderr)
-        return 2
+def _read_proc_rss_kb(pid: int):
+    try:
+        with open(f"/proc/{pid}/status", "r") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    return int(line.split()[1])  # already kB
+    except Exception:
+        pass
+    return None
+
+def _read_children_pids(pid: int) -> list[int]:
+    # /proc/<pid>/task/<pid>/children contains space-separated child PIDs
+    try:
+        with open(f"/proc/{pid}/task/{pid}/children", "r") as f:
+            txt = f.read().strip()
+        if not txt:
+            return []
+        return [int(x) for x in txt.split()]
+    except Exception:
+        return []
+    
+def _collect_proc_tree_ticks(root_pid: int) -> tuple[dict[int, tuple[int, int]], int | None]:
+    """
+    Return (ticks_map, rss_kb_sum) for root + descendants currently visible.
+    ticks_map: pid -> (uticks, sticks) in clock ticks.
+    rss_kb_sum: sum of VmRSS over tree or None if nothing readable.
+    """
+    seen: set[int] = set()
+    stack: list[int] = [root_pid]
+    ticks: dict[int, tuple[int, int]] = {}
+
+    rss_kb_sum = 0
+    rss_seen_any = False
+
+    while stack:
+        pid = stack.pop()
+        if pid in seen:
+            continue
+        seen.add(pid)
+
+        st = _read_proc_stat(pid)
+        if st is not None:
+            ticks[pid] = st  # (uticks, sticks)
+
+        rk = _read_proc_rss_kb(pid)
+        if rk is not None:
+            rss_kb_sum += rk
+            rss_seen_any = True
+
+        stack.extend(_read_children_pids(pid))
+
+    return ticks, (rss_kb_sum if rss_seen_any else None)
+
+def main() -> int:
+    def _parse_args():
+        ap = argparse.ArgumentParser()
+        ap.add_argument("--interval", type=float, default=0.5, help="Sampling interval seconds")
+        # Everything after options is the command to run
+        ap.add_argument("cmd", nargs=argparse.REMAINDER, help="Command to execute")
+        args = ap.parse_args()
+
+        cmd = list(args.cmd)
+        # Be tolerant if caller includes an explicit '--'
+        if cmd and cmd[0] == "--":
+            cmd = cmd[1:]
+        if not cmd:
+            ap.error("missing command to run (e.g. ... -- python -u script.py)")
+
+        return args.interval, cmd
+    
+    interval, cmd = _parse_args()
 
     # --- baseline cgroup stats (preferred: container-wide, includes workers)
     use_cgv2 = _is_cgroup_v2()
@@ -265,10 +335,32 @@ def main() -> int:
     proc_mem_sum = 0.0
     proc_mem_cnt = 0
 
+    peak_rss_kb = 0
+    peak_rss_valid = False
+
+    cpu_max_ticks: dict[int, tuple[int, int]] = {}
+
     try:
         while True:
             rc = p.poll()
-            # sample memory peak (cgroup)
+
+            # ---- sample proc tree (CPU ticks + RSS) ----
+            ticks_now, rss_kb = _collect_proc_tree_ticks(p.pid)
+
+            # update per-pid max ticks so we don't lose CPU time after PIDs exit
+            for pid, (u, s) in ticks_now.items():
+                prev = cpu_max_ticks.get(pid)
+                if prev is None:
+                    cpu_max_ticks[pid] = (u, s)
+                else:
+                    pu, ps = prev
+                    cpu_max_ticks[pid] = (max(pu, u), max(ps, s))
+
+            if rss_kb is not None:
+                peak_rss_kb = max(peak_rss_kb, rss_kb)
+                peak_rss_valid = True
+
+            # ---- sample cgroup memory peak (if available) ----
             if use_cgv2 and mem_peak_file is None:
                 try:
                     cur = _read_mem_current_v2()
@@ -277,7 +369,7 @@ def main() -> int:
                 except Exception:
                     pass
 
-            # sample GPU (best-effort)
+            # ---- sample GPU (best-effort) ----
             ug, _um, mu = _gpu_util_and_mem_used()
             if ug is not None:
                 util_sum += ug
@@ -296,12 +388,15 @@ def main() -> int:
                     proc_mem_cnt += 1
                     proc_mem_peak = pm if proc_mem_peak is None else max(proc_mem_peak, pm)
 
+            # ---- exit condition ----
             if rc is not None:
                 break
-            time.sleep(args.interval)
+
+            time.sleep(interval)
     finally:
         t_out.join(timeout=5)
         t_err.join(timeout=5)
+
 
     duration = time.perf_counter() - t0
 
@@ -313,30 +408,35 @@ def main() -> int:
     def _delta_usec(k: str) -> float:
         return max(0, cpu1.get(k, 0) - cpu0.get(k, 0)) / 1e6
 
-    cpu_user_s = _delta_usec("user_usec") if use_cgv2 else None
-    cpu_sys_s = _delta_usec("system_usec") if use_cgv2 else None
+    total_uticks = 0
+    total_sticks = 0
+    for (u, s) in cpu_max_ticks.values():
+        total_uticks += u
+        total_sticks += s
 
-    # IO deltas in MB
-    disk_read_mb = max(0, io_r1 - io_r0) / 1e6
-    disk_write_mb = max(0, io_w1 - io_w0) / 1e6
-
-    max_rss_kb = int(mem_peak_bytes // 1024) if mem_peak_bytes else None
+    cpu_user_s_ptree = total_uticks / _CLK_TCK if cpu_max_ticks else None
+    cpu_sys_s_ptree = total_sticks / _CLK_TCK if cpu_max_ticks else None
 
     proc_metrics = {
-        "cpu_seconds_user": round(cpu_user_s, 3) if cpu_user_s is not None else None,
-        "cpu_seconds_sys": round(cpu_sys_s, 3) if cpu_sys_s is not None else None,
-        "disk_read_mb": round(disk_read_mb, 3),
-        "disk_write_mb": round(disk_write_mb, 3),
-        "max_rss_kb": max_rss_kb,
+        "cpu_seconds_user": round(cpu_user_s_ptree, 3) if cpu_user_s_ptree is not None else None,
+        "cpu_seconds_sys": round(cpu_sys_s_ptree, 3) if cpu_sys_s_ptree is not None else None,
+        "max_rss_kb": int(peak_rss_kb) if peak_rss_valid else None,
         "training_time_s": round(duration, 3),
-        "source": "cgroup_v2" if use_cgv2 else "unknown",
+        "source": "proc_tree_ticks",
     }
-    print("#PROC_METRICS#" + json.dumps(proc_metrics))
+
+    try:
+        print("#PROC_METRICS#" + json.dumps(proc_metrics), flush=True)
+    except Exception as e:
+        print(f"resource_monitor.py: WARNING: failed to emit CPU metrics: {e}", file=sys.stderr, flush=True)
 
     avg_util = (util_sum / util_cnt) if util_cnt else None
     avg_mem_used = (mem_used_sum / mem_used_cnt) if mem_used_cnt else None
     avg_proc_used = (proc_mem_sum / proc_mem_cnt) if proc_mem_cnt else None
 
+    per_process_gpu_mem = (proc_mem_cnt > 0)
+
+    # note: peak_used_mb is per-process if host PID mapping succeeds; otherwise device-level memory.used peak
     gpu_metrics = {
         "cuda_available": bool(cuda_available),
         "name": gpu_info.get("name"),
@@ -347,10 +447,14 @@ def main() -> int:
         "avg_used_mb": round(avg_proc_used, 3) if avg_proc_used is not None else (round(avg_mem_used, 3) if avg_mem_used is not None else None),
         "avg_util_pct": round(avg_util, 3) if avg_util is not None else None,
         "peak_util_pct": util_peak,
-        "note": "peak_used_mb is per-process if host PID mapping succeeds; otherwise device-level memory.used peak.",
+        "per_process_gpu_mem": bool(per_process_gpu_mem)
     }
-    print("#GPU_METRICS#" + json.dumps(gpu_metrics))
 
+    try:
+        print("#GPU_METRICS#" + json.dumps(gpu_metrics), flush=True)
+    except Exception as e:
+        print(f"resource_monitor.py: WARNING: failed to emit GPU metrics: {e}", file=sys.stderr, flush=True)
+    # ALWAYS exit with child rc
     return int(p.returncode or 0)
 
 

@@ -1,0 +1,167 @@
+script,success,return_code,stdout,stderr,duration_s,max_rss_kb
+C:\Users\yoris\projects\Benchmark\outputs\01-10\FOURTOPS\Q2\anthropic_claude-sonnet-4.5\script_anthropic_claude-sonnet-4.5_2255_1.py,True,0,"argv0=/usr/local/bin/train.sh
+argv1=outputs/01-10/FOURTOPS/Q2/anthropic_claude-sonnet-4.5/script_anthropic_claude-sonnet-4.5_2255_1.py
+argv2=
+Epoch 1/30 - Train Loss: 0.5838, Val Loss: 0.5296, Train Acc: 0.6925, Val Acc: 0.7405, Val AUC: 0.8170, Best AUC: 0.8170
+Epoch 2/30 - Train Loss: 0.5391, Val Loss: 0.5378, Train Acc: 0.7319, Val Acc: 0.7241, Val AUC: 0.8213, Best AUC: 0.8213
+Epoch 3/30 - Train Loss: 0.5318, Val Loss: 0.5240, Train Acc: 0.7375, Val Acc: 0.7491, Val AUC: 0.8238, Best AUC: 0.8238
+Epoch 4/30 - Train Loss: 0.5285, Val Loss: 0.5148, Train Acc: 0.7402, Val Acc: 0.7494, Val AUC: 0.8267, Best AUC: 0.8267
+Epoch 5/30 - Train Loss: 0.5252, Val Loss: 0.5207, Train Acc: 0.7420, Val Acc: 0.7479, Val AUC: 0.8238, Best AUC: 0.8267
+Epoch 6/30 - Train Loss: 0.5222, Val Loss: 0.5090, Train Acc: 0.7432, Val Acc: 0.7511, Val AUC: 0.8289, Best AUC: 0.8289
+Epoch 7/30 - Train Loss: 0.5212, Val Loss: 0.5167, Train Acc: 0.7441, Val Acc: 0.7511, Val AUC: 0.8294, Best AUC: 0.8294
+Epoch 8/30 - Train Loss: 0.5197, Val Loss: 0.5117, Train Acc: 0.7453, Val Acc: 0.7545, Val AUC: 0.8315, Best AUC: 0.8315
+Epoch 9/30 - Train Loss: 0.5174, Val Loss: 0.5092, Train Acc: 0.7467, Val Acc: 0.7528, Val AUC: 0.8329, Best AUC: 0.8329
+Epoch 10/30 - Train Loss: 0.5154, Val Loss: 0.5137, Train Acc: 0.7478, Val Acc: 0.7432, Val AUC: 0.8309, Best AUC: 0.8329
+Epoch 11/30 - Train Loss: 0.5133, Val Loss: 0.5135, Train Acc: 0.7488, Val Acc: 0.7507, Val AUC: 0.8333, Best AUC: 0.8333
+Epoch 12/30 - Train Loss: 0.5117, Val Loss: 0.5049, Train Acc: 0.7499, Val Acc: 0.7554, Val AUC: 0.8341, Best AUC: 0.8341
+Epoch 13/30 - Train Loss: 0.5106, Val Loss: 0.5035, Train Acc: 0.7510, Val Acc: 0.7547, Val AUC: 0.8347, Best AUC: 0.8347
+Epoch 14/30 - Train Loss: 0.5085, Val Loss: 0.5008, Train Acc: 0.7507, Val Acc: 0.7544, Val AUC: 0.8360, Best AUC: 0.8360
+Epoch 15/30 - Train Loss: 0.5067, Val Loss: 0.5015, Train Acc: 0.7524, Val Acc: 0.7576, Val AUC: 0.8362, Best AUC: 0.8362
+Epoch 16/30 - Train Loss: 0.5050, Val Loss: 0.4998, Train Acc: 0.7533, Val Acc: 0.7586, Val AUC: 0.8365, Best AUC: 0.8365
+Epoch 17/30 - Train Loss: 0.5031, Val Loss: 0.4973, Train Acc: 0.7544, Val Acc: 0.7591, Val AUC: 0.8381, Best AUC: 0.8381
+Epoch 18/30 - Train Loss: 0.5011, Val Loss: 0.4964, Train Acc: 0.7553, Val Acc: 0.7599, Val AUC: 0.8394, Best AUC: 0.8394
+Epoch 19/30 - Train Loss: 0.4998, Val Loss: 0.4992, Train Acc: 0.7560, Val Acc: 0.7531, Val AUC: 0.8389, Best AUC: 0.8394
+Epoch 20/30 - Train Loss: 0.4980, Val Loss: 0.4942, Train Acc: 0.7579, Val Acc: 0.7603, Val AUC: 0.8398, Best AUC: 0.8398
+Epoch 21/30 - Train Loss: 0.4960, Val Loss: 0.4948, Train Acc: 0.7585, Val Acc: 0.7590, Val AUC: 0.8400, Best AUC: 0.8400
+Epoch 22/30 - Train Loss: 0.4942, Val Loss: 0.4956, Train Acc: 0.7595, Val Acc: 0.7585, Val AUC: 0.8405, Best AUC: 0.8405
+Epoch 23/30 - Train Loss: 0.4925, Val Loss: 0.4930, Train Acc: 0.7603, Val Acc: 0.7611, Val AUC: 0.8405, Best AUC: 0.8405
+Epoch 24/30 - Train Loss: 0.4912, Val Loss: 0.4932, Train Acc: 0.7606, Val Acc: 0.7612, Val AUC: 0.8411, Best AUC: 0.8411
+Epoch 25/30 - Train Loss: 0.4891, Val Loss: 0.4924, Train Acc: 0.7625, Val Acc: 0.7617, Val AUC: 0.8414, Best AUC: 0.8414
+Epoch 26/30 - Train Loss: 0.4881, Val Loss: 0.4927, Train Acc: 0.7628, Val Acc: 0.7612, Val AUC: 0.8415, Best AUC: 0.8415
+Epoch 27/30 - Train Loss: 0.4869, Val Loss: 0.4920, Train Acc: 0.7635, Val Acc: 0.7622, Val AUC: 0.8416, Best AUC: 0.8416
+Epoch 28/30 - Train Loss: 0.4861, Val Loss: 0.4925, Train Acc: 0.7638, Val Acc: 0.7612, Val AUC: 0.8411, Best AUC: 0.8416
+Epoch 29/30 - Train Loss: 0.4854, Val Loss: 0.4922, Train Acc: 0.7644, Val Acc: 0.7618, Val AUC: 0.8413, Best AUC: 0.8416
+Epoch 30/30 - Train Loss: 0.4853, Val Loss: 0.4921, Train Acc: 0.7646, Val Acc: 0.7615, Val AUC: 0.8414, Best AUC: 0.8416
+#TRAIN_METRICS#{""epochs"": 30, ""train_loss"": [0.5838494272431931, 0.5390583680186295, 0.5318467107182695, 0.5285118186260297, 0.5251568120339666, 0.5221813918689263, 0.5211501159406402, 0.5196937383980574, 0.517407351670271, 0.5153973439359982, 0.5132857894461088, 0.5117224377129586, 0.5106117053465028, 0.5085051164373934, 0.5066670376570961, 0.5049961466128658, 0.5031365180963242, 0.5011463672874875, 0.4998391196955825, 0.4979790498659865, 0.4959703186459212, 0.49418680940780374, 0.492549970166845, 0.49116966946054974, 0.4891292696697026, 0.48812583726106845, 0.4868541065453393, 0.48609349173341976, 0.48538583964632936, 0.48532225948555163], ""val_loss"": [0.5295746116319787, 0.537774711763444, 0.5240017282503832, 0.5147525035040963, 0.5207437925906713, 0.5090197171375477, 0.5166518317041786, 0.511734211393946, 0.5092432498004478, 0.5136682954467775, 0.513545124770813, 0.5049061438499585, 0.5034664691502846, 0.5007823492724787, 0.5014914440734584, 0.499845740614153, 0.4972522772246038, 0.49638184722037293, 0.49917652522649003, 0.4942058495111418, 0.4948493869713821, 0.49557143685186844, 0.49298323984751025, 0.49317779155194585, 0.49242769266132264, 0.49274771214005064, 0.49195063959685187, 0.4925379689950457, 0.4921829562592176, 0.4920951595389508], ""train_acc"": [0.6924856304597011, 0.7318637573089131, 0.7375412257869625, 0.740185469487745, 0.7419855414906251, 0.7431524847200784, 0.7440835564457061, 0.7453125711235346, 0.7467484906292804, 0.7477995671551, 0.7487678817497527, 0.7499182725929727, 0.7510065919878175, 0.7506962347459416, 0.752392854334863, 0.7532659927086739, 0.7543915549725437, 0.755330902891288, 0.7560343793062068, 0.7579461799161622, 0.7585130991446555, 0.7595062423186583, 0.7602800663750688, 0.7606442188722031, 0.7624939480337835, 0.762812581468776, 0.7635243340768113, 0.7637684817737537, 0.7643767819678304, 0.7645588582163976], ""val_acc"": [0.7404906147581687, 0.7241367894858808, 0.7490978912172676, 0.7494289403118483, 0.7478730095673188, 0.7510510808752938, 0.75111729069421, 0.7544939914589334, 0.7527725361671136, 0.7432383222431886, 0.750653821961797, 0.7554209289237593, 0.7546595160062237, 0.7543615718211011, 0.7575727480385341, 0.7585990002317343, 0.7591286787830636, 0.7598900917005992, 0.7531035852616943, 0.7603204555235541, 0.7589631542357732, 0.7584996855033601, 0.7610818684410898, 0.7612142880789221, 0.7617108617207932, 0.7612142880789221, 0.7622074353626643, 0.761181183169464, 0.7618101764491674, 0.7615453371735028]}
+#PROC_METRICS#{""cpu_seconds_user"": 2151.62, ""cpu_seconds_sys"": 78.99, ""max_rss_kb"": 1776340, ""training_time_s"": 1861.526, ""source"": ""proc_tree_ticks""}
+#GPU_METRICS#{""cuda_available"": true, ""name"": ""NVIDIA GeForce RTX 3050 Ti Laptop GPU"", ""total_mb"": 4096, ""peak_used_mb"": 511, ""avg_used_mb"": 508.638, ""avg_util_pct"": 88.372, ""peak_util_pct"": 96, ""per_process_gpu_mem"": false}
+Hash manifest written â†’ anthropic_claude-sonnet-4.5_2255_1_manifest.sha256
+","resource_monitor.py: WARNING: cgroup v2 not detected; metrics may be degraded.
+/opt/venv/lib/python3.12/site-packages/torch/nn/modules/transformer.py:508: UserWarning: The PyTorch API of nested tensors is in prototype stage and will change in the near future. We recommend specifying layout=torch.jagged when constructing a nested tensor, as this layout receives active development, has better operator coverage, and works with torch.compile. (Triggered internally at /pytorch/aten/src/ATen/NestedTensorImpl.cpp:178.)
+  output = torch._nested_tensor_from_mask(
+",1868.1280733999956,1776340
+C:\Users\yoris\projects\Benchmark\outputs\01-10\FOURTOPS\Q2\google_gemini-3-pro-preview\script_google_gemini-3-pro-preview_2301_2.py,True,0,"argv0=/usr/local/bin/train.sh
+argv1=outputs/01-10/FOURTOPS/Q2/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_2301_2.py
+argv2=
+Starting training on cuda:0 for 20 epochs.
+Epoch 01: T_Loss=0.6476 T_Acc=0.6145 | V_Loss=0.5824 V_Acc=0.6913 V_AUC=0.7583
+Epoch 02: T_Loss=0.5734 T_Acc=0.7004 | V_Loss=0.5429 V_Acc=0.7269 V_AUC=0.7994
+Epoch 03: T_Loss=0.5594 T_Acc=0.7121 | V_Loss=0.5357 V_Acc=0.7345 V_AUC=0.8061
+Epoch 04: T_Loss=0.5473 T_Acc=0.7216 | V_Loss=0.5295 V_Acc=0.7384 V_AUC=0.8145
+Epoch 05: T_Loss=0.5356 T_Acc=0.7319 | V_Loss=0.5128 V_Acc=0.7499 V_AUC=0.8264
+Epoch 06: T_Loss=0.5269 T_Acc=0.7385 | V_Loss=0.5119 V_Acc=0.7494 V_AUC=0.8265
+Epoch 07: T_Loss=0.5212 T_Acc=0.7419 | V_Loss=0.5065 V_Acc=0.7541 V_AUC=0.8310
+Epoch 08: T_Loss=0.5191 T_Acc=0.7440 | V_Loss=0.5098 V_Acc=0.7511 V_AUC=0.8280
+Epoch 09: T_Loss=0.5169 T_Acc=0.7443 | V_Loss=0.5075 V_Acc=0.7526 V_AUC=0.8325
+Epoch 10: T_Loss=0.5144 T_Acc=0.7467 | V_Loss=0.5027 V_Acc=0.7572 V_AUC=0.8340
+Epoch 11: T_Loss=0.5127 T_Acc=0.7479 | V_Loss=0.5040 V_Acc=0.7543 V_AUC=0.8332
+Epoch 12: T_Loss=0.5092 T_Acc=0.7495 | V_Loss=0.5010 V_Acc=0.7575 V_AUC=0.8355
+Epoch 13: T_Loss=0.5082 T_Acc=0.7512 | V_Loss=0.5064 V_Acc=0.7554 V_AUC=0.8354
+Epoch 14: T_Loss=0.5052 T_Acc=0.7525 | V_Loss=0.4978 V_Acc=0.7588 V_AUC=0.8374
+Epoch 15: T_Loss=0.5028 T_Acc=0.7539 | V_Loss=0.4988 V_Acc=0.7595 V_AUC=0.8368
+Epoch 16: T_Loss=0.5007 T_Acc=0.7548 | V_Loss=0.4956 V_Acc=0.7610 V_AUC=0.8388
+Epoch 17: T_Loss=0.4987 T_Acc=0.7563 | V_Loss=0.4951 V_Acc=0.7599 V_AUC=0.8390
+Epoch 18: T_Loss=0.4973 T_Acc=0.7568 | V_Loss=0.4963 V_Acc=0.7617 V_AUC=0.8387
+Epoch 19: T_Loss=0.4958 T_Acc=0.7583 | V_Loss=0.4948 V_Acc=0.7614 V_AUC=0.8394
+Epoch 20: T_Loss=0.4951 T_Acc=0.7585 | V_Loss=0.4951 V_Acc=0.7609 V_AUC=0.8394
+#TRAIN_METRICS#{""epochs"": 20, ""train_loss"": [0.6476456950360985, 0.573363325870002, 0.559434657618389, 0.5473277140968572, 0.535569984772716, 0.5268658471265734, 0.5211962863658681, 0.5191144530493571, 0.5169228120628329, 0.5143877967074839, 0.512675113444934, 0.5091895487872324, 0.5081668082147515, 0.5052386041991983, 0.5027852891896966, 0.5007330941946844, 0.4987480846650053, 0.49729514220237553, 0.4958042108007802, 0.49506193488494554], ""val_loss"": [0.5823924164196331, 0.5429142265609175, 0.5357181172241152, 0.5294783682841651, 0.5128385236784438, 0.5118853439975173, 0.506503723402674, 0.5098344400788023, 0.5074551895482303, 0.5026773710808798, 0.5039517827196115, 0.5009701703680178, 0.5063946258052126, 0.49784168979793036, 0.49875488195060347, 0.4955618058525826, 0.4950585035286511, 0.4963408772829853, 0.4948164264868178, 0.49508774811143286], ""train_acc"": [0.6144907865280128, 0.7003769805964652, 0.7120588271806735, 0.7216426588098007, 0.7319258287572882, 0.7384516070297984, 0.7419317462353666, 0.7439759659351891, 0.7443194279495318, 0.7466946953740219, 0.7479402624380838, 0.7494754962612298, 0.7512093587191764, 0.752463201976355, 0.7538867071924257, 0.7548012265318199, 0.7563199079687325, 0.7568454462316424, 0.7583186086064132, 0.7584882705653053], ""val_acc"": [0.6912636143940146, 0.7269176018803588, 0.7345317310557156, 0.7384381103717681, 0.7498593041348032, 0.7493627304929321, 0.7540636276359785, 0.7510841857847519, 0.7526401165292813, 0.7572085940344954, 0.7542953620021849, 0.7575396431290761, 0.7553547191048432, 0.7587976296884829, 0.7594597278776443, 0.7610487635316318, 0.7599231966100572, 0.7617439666302512, 0.7614460224451286, 0.7608501340748833]}
+#PROC_METRICS#{""cpu_seconds_user"": 577.83, ""cpu_seconds_sys"": 27.04, ""max_rss_kb"": 3918664, ""training_time_s"": 532.927, ""source"": ""proc_tree_ticks""}
+#GPU_METRICS#{""cuda_available"": true, ""name"": ""NVIDIA GeForce RTX 3050 Ti Laptop GPU"", ""total_mb"": 4096, ""peak_used_mb"": 851, ""avg_used_mb"": 836.62, ""avg_util_pct"": 92.762, ""peak_util_pct"": 99, ""per_process_gpu_mem"": false}
+Hash manifest written â†’ google_gemini-3-pro-preview_2301_2_manifest.sha256
+","resource_monitor.py: WARNING: cgroup v2 not detected; metrics may be degraded.
+/opt/venv/lib/python3.12/site-packages/torch/nn/modules/transformer.py:508: UserWarning: The PyTorch API of nested tensors is in prototype stage and will change in the near future. We recommend specifying layout=torch.jagged when constructing a nested tensor, as this layout receives active development, has better operator coverage, and works with torch.compile. (Triggered internally at /pytorch/aten/src/ATen/NestedTensorImpl.cpp:178.)
+  output = torch._nested_tensor_from_mask(
+",540.8121764000025,3918664
+C:\Users\yoris\projects\Benchmark\outputs\01-10\FOURTOPS\Q2\openai_gpt-5.1-codex-max\script_openai_gpt-5.1-codex-max_2305_2.py,True,0,"argv0=/usr/local/bin/train.sh
+argv1=outputs/01-10/FOURTOPS/Q2/openai_gpt-5.1-codex-max/script_openai_gpt-5.1-codex-max_2305_2.py
+argv2=
+#TRAIN_METRICS#{""epochs"": 12, ""train_loss"": [0.5543345294390023, 0.5349395516314782, 0.5299861810585106, 0.5264213062001815, 0.5245506867874968, 0.5234534378812564, 0.522037987011135, 0.5205869422786601, 0.519923914579008, 0.5192836099217989, 0.5184835781428325, 0.5177786955785308], ""val_loss"": [0.5272360615599738, 0.5219971543016344, 0.5204647096498534, 0.5187800305915825, 0.5182761393770362, 0.5188199689021495, 0.5146353271814421, 0.5164218732434359, 0.5165487976593882, 0.5139906003986882, 0.515817754769525, 0.5150169166007298], ""train_acc"": [0.7202895012352218, 0.7353107917420145, 0.7389895595823833, 0.7409592935441556, 0.7415096603864154, 0.7423290035049678, 0.7438766516177888, 0.7442035612458981, 0.7446215089982909, 0.7448449662124416, 0.7450270424610088, 0.745821557000211], ""val_acc"": [0.7405237196676268, 0.7441983646174728, 0.7468467573741185, 0.7450259873539246, 0.7470122819214089, 0.7468798622835766, 0.7481047439335253, 0.7482040586618995, 0.748402688118648, 0.7479061144767769, 0.7471447015592413, 0.7489323666699772]}
+#PROC_METRICS#{""cpu_seconds_user"": 71.87, ""cpu_seconds_sys"": 4.04, ""max_rss_kb"": 1385796, ""training_time_s"": 73.193, ""source"": ""proc_tree_ticks""}
+#GPU_METRICS#{""cuda_available"": true, ""name"": ""NVIDIA GeForce RTX 3050 Ti Laptop GPU"", ""total_mb"": 4096, ""peak_used_mb"": 139, ""avg_used_mb"": 123.444, ""avg_util_pct"": 24.38, ""peak_util_pct"": 55, ""per_process_gpu_mem"": false}
+Hash manifest written â†’ openai_gpt-5.1-codex-max_2305_2_manifest.sha256
+","resource_monitor.py: WARNING: cgroup v2 not detected; metrics may be degraded.
+",80.9733036999969,1385796
+C:\Users\yoris\projects\Benchmark\outputs\01-10\FOURTOPS\Q2\openai_gpt-5.2-pro\script_openai_gpt-5.2-pro_2317_1.py,True,0,"argv0=/usr/local/bin/train.sh
+argv1=outputs/01-10/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2317_1.py
+argv2=
+#TRAIN_METRICS#{""epochs"": 15, ""train_loss"": [0.6235252896463057, 0.5957048922098765, 0.5819753767277832, 0.5702768473597716, 0.5627493593433077, 0.5573292300879884, 0.5539257982660326, 0.5500354788020586, 0.5475273912810436, 0.545270955068996, 0.5433069138716008, 0.5417731325420974, 0.5406443026698957, 0.5403044077785999, 0.5401146891368116], ""val_loss"": [0.5944645485914456, 0.5733587176843895, 0.560356610720786, 0.5544619759496078, 0.5471666770271525, 0.5435755059029805, 0.5446498461002808, 0.5367206268748282, 0.5350389799678023, 0.5365509723454391, 0.5324446541371063, 0.5317577363485202, 0.531266032937117, 0.5309232635018479, 0.5309594703805116], ""train_acc"": [0.6546799803026604, 0.6849998137856549, 0.6964954460247376, 0.7069482779311173, 0.7132547370860352, 0.7163500333116773, 0.7193336009302441, 0.7223254447419276, 0.7238027452132568, 0.7249821027323852, 0.7267863128318236, 0.728180851371986, 0.7279449798681602, 0.7288181182419711, 0.7294346946291644], ""val_acc"": [0.6854371503293939, 0.7031482768894627, 0.7164233455821498, 0.7213228721819446, 0.7259575595060748, 0.7298308339126692, 0.7252954613169132, 0.7330420101301023, 0.7362531863475353, 0.7341675770516768, 0.7369152845366967, 0.7366835501704903, 0.7370808090839872, 0.736551130532658, 0.7364518158042838]}
+#PROC_METRICS#{""cpu_seconds_user"": 248.5, ""cpu_seconds_sys"": 25.07, ""max_rss_kb"": 1901276, ""training_time_s"": 244.251, ""source"": ""proc_tree_ticks""}
+#GPU_METRICS#{""cuda_available"": true, ""name"": ""NVIDIA GeForce RTX 3050 Ti Laptop GPU"", ""total_mb"": 4096, ""peak_used_mb"": 339, ""avg_used_mb"": 325.173, ""avg_util_pct"": 48.355, ""peak_util_pct"": 76, ""per_process_gpu_mem"": false}
+Hash manifest written â†’ openai_gpt-5.2-pro_2317_1_manifest.sha256
+","resource_monitor.py: WARNING: cgroup v2 not detected; metrics may be degraded.
+/opt/venv/lib/python3.12/site-packages/torch/nn/modules/transformer.py:385: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  warnings.warn(
+/workspace/outputs/01-10/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2317_1.py:528: FutureWarning: `torch.cuda.amp.GradScaler(args...)` is deprecated. Please use `torch.amp.GradScaler('cuda', args...)` instead.
+  scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
+/workspace/outputs/01-10/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2317_1.py:551: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  with torch.cuda.amp.autocast(enabled=use_amp):
+/workspace/outputs/01-10/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2317_1.py:585: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  with torch.cuda.amp.autocast(enabled=use_amp):
+/workspace/outputs/01-10/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2317_1.py:551: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  with torch.cuda.amp.autocast(enabled=use_amp):
+/workspace/outputs/01-10/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2317_1.py:585: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  with torch.cuda.amp.autocast(enabled=use_amp):
+/workspace/outputs/01-10/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2317_1.py:551: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  with torch.cuda.amp.autocast(enabled=use_amp):
+/workspace/outputs/01-10/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2317_1.py:585: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  with torch.cuda.amp.autocast(enabled=use_amp):
+/workspace/outputs/01-10/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2317_1.py:551: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  with torch.cuda.amp.autocast(enabled=use_amp):
+/workspace/outputs/01-10/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2317_1.py:585: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  with torch.cuda.amp.autocast(enabled=use_amp):
+/workspace/outputs/01-10/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2317_1.py:551: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  with torch.cuda.amp.autocast(enabled=use_amp):
+/workspace/outputs/01-10/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2317_1.py:585: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  with torch.cuda.amp.autocast(enabled=use_amp):
+/workspace/outputs/01-10/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2317_1.py:551: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  with torch.cuda.amp.autocast(enabled=use_amp):
+/workspace/outputs/01-10/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2317_1.py:585: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  with torch.cuda.amp.autocast(enabled=use_amp):
+/workspace/outputs/01-10/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2317_1.py:551: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  with torch.cuda.amp.autocast(enabled=use_amp):
+/workspace/outputs/01-10/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2317_1.py:585: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  with torch.cuda.amp.autocast(enabled=use_amp):
+/workspace/outputs/01-10/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2317_1.py:551: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  with torch.cuda.amp.autocast(enabled=use_amp):
+/workspace/outputs/01-10/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2317_1.py:585: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  with torch.cuda.amp.autocast(enabled=use_amp):
+/workspace/outputs/01-10/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2317_1.py:551: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  with torch.cuda.amp.autocast(enabled=use_amp):
+/workspace/outputs/01-10/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2317_1.py:585: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  with torch.cuda.amp.autocast(enabled=use_amp):
+/workspace/outputs/01-10/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2317_1.py:551: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  with torch.cuda.amp.autocast(enabled=use_amp):
+/workspace/outputs/01-10/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2317_1.py:585: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  with torch.cuda.amp.autocast(enabled=use_amp):
+/workspace/outputs/01-10/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2317_1.py:551: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  with torch.cuda.amp.autocast(enabled=use_amp):
+/workspace/outputs/01-10/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2317_1.py:585: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  with torch.cuda.amp.autocast(enabled=use_amp):
+/workspace/outputs/01-10/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2317_1.py:551: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  with torch.cuda.amp.autocast(enabled=use_amp):
+/workspace/outputs/01-10/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2317_1.py:585: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  with torch.cuda.amp.autocast(enabled=use_amp):
+/workspace/outputs/01-10/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2317_1.py:551: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  with torch.cuda.amp.autocast(enabled=use_amp):
+/workspace/outputs/01-10/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2317_1.py:585: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  with torch.cuda.amp.autocast(enabled=use_amp):
+/workspace/outputs/01-10/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2317_1.py:551: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  with torch.cuda.amp.autocast(enabled=use_amp):
+/workspace/outputs/01-10/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2317_1.py:585: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  with torch.cuda.amp.autocast(enabled=use_amp):
+/workspace/outputs/01-10/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2317_1.py:551: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  with torch.cuda.amp.autocast(enabled=use_amp):
+/workspace/outputs/01-10/FOURTOPS/Q2/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_2317_1.py:585: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  with torch.cuda.amp.autocast(enabled=use_amp):
+",252.16335029999755,1901276
+C:\Users\yoris\projects\Benchmark\outputs\01-10\FOURTOPS\Q2\x-ai_grok-code-fast-1\script_x-ai_grok-code-fast-1_2201_1.py,True,0,"argv0=/usr/local/bin/train.sh
+argv1=outputs/01-10/FOURTOPS/Q2/x-ai_grok-code-fast-1/script_x-ai_grok-code-fast-1_2201_1.py
+argv2=
+#TRAIN_METRICS#{""epochs"": 20, ""train_loss"": [1.0715970489859186, 0.6931675144093851, 0.6931570791738721, 0.6931481443957639, 0.6931546877891142, 0.6931535222571931, 0.6931503190698362, 0.6931453517271136, 0.6931435248082594, 0.6931438708869989, 0.6931411762480686, 0.6931360765777416, 0.6931404247032432, 0.6931401862382939, 0.6931356223872257, 0.6931376470649369, 0.693136123361531, 0.6931334549994345, 0.6931322008060451, 0.6931286585048451], ""val_loss"": [0.694309977221545, 0.6942786677305884, 0.6943507075061129, 0.6932667477225525, 0.693119539614289, 0.6931037643552714, 0.6930823075178186, 0.6930878632184737, 0.693101611334553, 0.6930855057479237, 0.693085652893869, 0.6930860654775083, 0.693082958032655, 0.6930816132293721, 0.693081399239088, 0.6930823774048418, 0.6930902365713618, 0.693088120149675, 0.6930816256092689, 0.6930896127204631], ""train_acc"": [0.5011441836983824, 0.5017442076993425, 0.5027083841974369, 0.5020255982653099, 0.5018559363064178, 0.502758041356137, 0.5025883793972449, 0.5011731503742909, 0.5025014793695196, 0.501595236223242, 0.501702826733759, 0.5028697699632123, 0.5031594367222965, 0.5031925414947632, 0.5031925414947632, 0.5026214841697116, 0.5028697699632123, 0.5031925414947632, 0.5031925414947632, 0.5031925414947632], ""val_acc"": [0.5031284139437878, 0.5031284139437878, 0.496805376237296, 0.503194623762704, 0.4968715860562121, 0.4968715860562121, 0.503194623762704, 0.503194623762704, 0.4968715860562121, 0.503194623762704, 0.503194623762704, 0.503194623762704, 0.503194623762704, 0.503194623762704, 0.503194623762704, 0.503194623762704, 0.503194623762704, 0.503194623762704, 0.503194623762704, 0.503194623762704]}
+#PROC_METRICS#{""cpu_seconds_user"": 4659.6, ""cpu_seconds_sys"": 350.26, ""max_rss_kb"": 3192184, ""training_time_s"": 5009.803, ""source"": ""proc_tree_ticks""}
+#GPU_METRICS#{""cuda_available"": true, ""name"": ""NVIDIA GeForce RTX 3050 Ti Laptop GPU"", ""total_mb"": 4096, ""peak_used_mb"": 159, ""avg_used_mb"": 138.823, ""avg_util_pct"": 31.474, ""peak_util_pct"": 70, ""per_process_gpu_mem"": false}
+Hash manifest written â†’ x-ai_grok-code-fast-1_2201_1_manifest.sha256
+","resource_monitor.py: WARNING: cgroup v2 not detected; metrics may be degraded.
+/workspace/outputs/01-10/FOURTOPS/Q2/x-ai_grok-code-fast-1/script_x-ai_grok-code-fast-1_2201_1.py:211: UserWarning: To copy construct from a tensor, it is recommended to use sourceTensor.clone().detach() or sourceTensor.clone().detach().requires_grad_(True), rather than torch.tensor(sourceTensor).
+  data = torch_geometric.data.Data(x=node_features.clone().detach(), edge_index=edge_index.clone().detach(), edge_attr=edge_attr.clone().detach(), y=torch.tensor(y_i, dtype=torch.long))
+",5018.9183204,3192184

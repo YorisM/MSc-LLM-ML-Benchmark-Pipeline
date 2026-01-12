@@ -1,0 +1,24 @@
+{
+  "dataset": {
+    "builder": "llm_script:GraphDataset",
+    "expects_train_flag": true,
+    "kwargs": {
+      "k": 10
+    }
+  },
+  "eval_overrides": {
+    "batch_size": 1,
+    "shuffle": false
+  },
+  "loader": {
+    "batch_size": 32,
+    "class": "torch_geometric.loader:DataLoader",
+    "collate": null,
+    "extra_kwargs": {},
+    "num_workers": 0,
+    "pin_memory": false,
+    "shuffle": true
+  },
+  "schema_version": 1,
+  "script_module": "llm_script"
+}

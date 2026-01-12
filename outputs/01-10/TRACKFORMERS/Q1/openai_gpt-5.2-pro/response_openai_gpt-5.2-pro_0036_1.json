@@ -1,0 +1,143 @@
+{
+  "LLMGeneration": {
+    "model": "openai/gpt-5.2-pro",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 4180,
+    "prompt_chars": 17811,
+    "response_tokens": 17243,
+    "response_chars": 17953,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 2.984604,
+    "generation_ms": 924629,
+    "code": "import math\nimport copy\nimport numpy as np\nimport torch\nfrom torch import nn\nfrom torch.nn.utils import clip_grad_norm_\nfrom sklearn.cluster import DBSCAN\nfrom sklearn.neighbors import NearestNeighbors\n\n\nclass MyPreprocessor:\n    def __init__(self):\n        # Global normalization stats (python floats; picklable)\n        self.r_mean = 0.0\n        self.r_std = 1.0\n        self.z_mean = 0.0\n        self.z_std = 1.0\n        self.slope_mean = 0.0\n        self.slope_std = 1.0\n        self.layer_mean = 0.0\n        self.layer_std = 1.0\n\n    def make_loader_cfg(self) -> dict:\n        return {\n            \"dataset_builder\": \"utils.llm_io:EventDataset\",\n            \"dataset_kwargs\": {},\n            \"loader_class\": \"torch.utils.data:DataLoader\",\n            \"batch_size\": 32,\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": False,\n            \"collate\": \"ragged_xy\",\n            \"extra_loader_kwargs\": {},\n            \"eval_overrides\": {\"shuffle\": False},\n        }\n\n    def fit(self, Xs):\n        # Xs: list[Tensor], each [N_i, 4] with cols [r, theta, z, layer_id]\n        n = 0\n        sum_r = 0.0\n        sum_z = 0.0\n        sum_slope = 0.0\n        sum_layer = 0.0\n        sumsq_r = 0.0\n        sumsq_z = 0.0\n        sumsq_slope = 0.0\n        sumsq_layer = 0.0\n\n        for X in Xs:\n            Xd = X.double()\n            r = Xd[:, 0]  # [N]\n            z = Xd[:, 2]  # [N]\n            layer = Xd[:, 3]  # [N]\n            slope = z / (r + 1e-3)  # [N]\n\n            n_i = int(r.numel())\n            if n_i == 0:\n                continue\n\n            sum_r += float(r.sum().item())\n            sum_z += float(z.sum().item())\n            sum_slope += float(slope.sum().item())\n            sum_layer += float(layer.sum().item())\n\n            sumsq_r += float((r * r).sum().item())\n            sumsq_z += float((z * z).sum().item())\n            sumsq_slope += float((slope * slope).sum().item())\n            sumsq_layer += float((layer * layer).sum().item())\n\n            n += n_i\n\n        if n <= 1:\n            return self\n\n        def mean_std(sum1, sumsq1):\n            mu = sum1 / n\n            var = max(1e-12, sumsq1 / n - mu * mu)\n            return float(mu), float(math.sqrt(var))\n\n        self.r_mean, self.r_std = mean_std(sum_r, sumsq_r)\n        self.z_mean, self.z_std = mean_std(sum_z, sumsq_z)\n        self.slope_mean, self.slope_std = mean_std(sum_slope, sumsq_slope)\n        self.layer_mean, self.layer_std = mean_std(sum_layer, sumsq_layer)\n\n        # Prevent pathological tiny std\n        self.r_std = max(self.r_std, 1e-6)\n        self.z_std = max(self.z_std, 1e-6)\n        self.slope_std = max(self.slope_std, 1e-6)\n        self.layer_std = max(self.layer_std, 1e-6)\n        return self\n\n    def transform(self, X):\n        # X: torch.FloatTensor [N_hits, 4] raw -> torch.FloatTensor [N_hits, 7]\n        # Columns: 0 sin(theta), 1 cos(theta), 2 slope_norm, 3 r_norm, 4 z_norm, 5 layer_norm, 6 layer_raw\n        if not torch.is_tensor(X):\n            X = torch.as_tensor(X, dtype=torch.float32)\n\n        r = X[:, 0]  # [N]\n        theta = X[:, 1]  # [N]\n        z = X[:, 2]  # [N]\n        layer = X[:, 3]  # [N]\n\n        sin_t = torch.sin(theta)  # [N]\n        cos_t = torch.cos(theta)  # [N]\n        slope = z / (r + 1e-3)  # [N]\n\n        slope_norm = (slope - self.slope_mean) / self.slope_std  # [N]\n        r_norm = (r - self.r_mean) / self.r_std  # [N]\n        z_norm = (z - self.z_mean) / self.z_std  # [N]\n        layer_norm = (layer - self.layer_mean) / self.layer_std  # [N]\n        layer_raw = layer  # [N]\n\n        out = torch.stack(\n            [sin_t, cos_t, slope_norm, r_norm, z_norm, layer_norm, layer_raw], dim=1\n        )  # [N, 7]\n        return out.float()\n\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n\ndef _cluster_event_dbscan(P_np, layer_raw_np):\n    \"\"\"\n    P_np: np.ndarray [N, 3] (sin, cos, slope_norm-like)\n    layer_raw_np: np.ndarray [N] raw layer id (float->int)\n    returns labels np.int64 [N] with noise = -1\n    \"\"\"\n    N = P_np.shape[0]\n    if N == 0:\n        return np.zeros((0,), dtype=np.int64)\n    if N < 4:\n        return -np.ones((N,), dtype=np.int64)\n\n    # Adaptive epsilon from kNN distances (robust to global scaling)\n    k = min(6, max(2, N - 1))\n    try:\n        nnbrs = NearestNeighbors(n_neighbors=k, algorithm=\"auto\", metric=\"euclidean\")\n        nnbrs.fit(P_np)\n        dists, _ = nnbrs.kneighbors(P_np, return_distance=True)  # [N, k]\n        # Use distance to (k-1)-th neighbor (excluding self at 0)\n        dk = dists[:, -1]\n        med = float(np.median(dk))\n        eps = 1.35 * med\n    except Exception:\n        eps = 0.12\n\n    eps = float(np.clip(eps, 0.05, 0.35))\n\n    # DBSCAN clustering\n    db = DBSCAN(eps=eps, min_samples=2, metric=\"euclidean\")\n    labels = db.fit_predict(P_np).astype(np.int64)  # [N], noise=-1\n\n    # Filter tiny clusters (<4 hits) as noise\n    for lab in np.unique(labels):\n        if lab < 0:\n            continue\n        idx = np.where(labels == lab)[0]\n        if idx.size < 4:\n            labels[idx] = -1\n\n    # Enforce max 1 hit per layer within a cluster (keep closest to centroid)\n    # This reduces impurity when two tracks overlap in parameter space.\n    layer_int = layer_raw_np.astype(np.int64, copy=False)\n    for lab in np.unique(labels):\n        if lab < 0:\n            continue\n        idx = np.where(labels == lab)[0]\n        if idx.size < 4:\n            labels[idx] = -1\n            continue\n\n        centroid = P_np[idx].mean(axis=0, keepdims=True)  # [1,3]\n        d = np.linalg.norm(P_np[idx] - centroid, axis=1)  # [n_c]\n        layers = layer_int[idx]  # [n_c]\n\n        # For each layer keep the min-distance hit\n        keep_mask = np.zeros(idx.size, dtype=bool)\n        for L in np.unique(layers):\n            j = np.where(layers == L)[0]\n            if j.size == 1:\n                keep_mask[j[0]] = True\n            else:\n                best = j[np.argmin(d[j])]\n                keep_mask[best] = True\n\n        drop = idx[~keep_mask]\n        if drop.size > 0:\n            labels[drop] = -1\n\n        # Re-check size after dropping duplicates\n        idx2 = np.where(labels == lab)[0]\n        if idx2.size < 4:\n            labels[idx2] = -1\n\n    # Optional: assign some noise hits to nearest cluster if very close and layer not used\n    # (helps recall without strongly hurting purity)\n    labs = [l for l in np.unique(labels) if l >= 0]\n    if len(labs) > 0:\n        centroids = {}\n        used_layers = {}\n        layer_owner = {}  # (lab, layer) -> (idx, dist)\n        for lab in labs:\n            idx = np.where(labels == lab)[0]\n            if idx.size == 0:\n                continue\n            c = P_np[idx].mean(axis=0)  # [3]\n            centroids[lab] = c\n            used_layers[lab] = set(layer_int[idx].tolist())\n            # store current best per (lab, layer)\n            for ii in idx:\n                L = int(layer_int[ii])\n                dist = float(np.linalg.norm(P_np[ii] - c))\n                key = (lab, L)\n                if key not in layer_owner or dist < layer_owner[key][1]:\n                    layer_owner[key] = (int(ii), dist)\n\n        noise_idx = np.where(labels < 0)[0]\n        assign_thr = 0.75 * eps\n        for ii in noise_idx:\n            p = P_np[ii]\n            L = int(layer_int[ii])\n            # find nearest centroid\n            best_lab = None\n            best_dist = None\n            for lab, c in centroids.items():\n                dist = float(np.linalg.norm(p - c))\n                if best_dist is None or dist < best_dist:\n                    best_dist = dist\n                    best_lab = lab\n            if best_lab is None or best_dist is None:\n                continue\n            if best_dist > assign_thr:\n                continue\n\n            # layer conflict resolution\n            key = (best_lab, L)\n            if key not in layer_owner:\n                labels[ii] = best_lab\n                used_layers[best_lab].add(L)\n                layer_owner[key] = (int(ii), best_dist)\n            else:\n                # Replace existing hit at same layer if this one is closer\n                existing_idx, existing_dist = layer_owner[key]\n                if best_dist < existing_dist:\n                    labels[existing_idx] = -1\n                    labels[ii] = best_lab\n                    layer_owner[key] = (int(ii), best_dist)\n\n    # Reindex cluster labels to 0..K-1 for cleanliness (not required, but stable)\n    labs = sorted([l for l in np.unique(labels) if l >= 0])\n    if len(labs) > 0:\n        remap = {old: new for new, old in enumerate(labs)}\n        for old, new in remap.items():\n            labels[labels == old] = new\n\n    return labels.astype(np.int64)\n\n\ndef _fitaccuracy_counts(y_true_t, y_pred_t):\n    \"\"\"\n    Returns (correct_hits, total_truth_hits) per FitAccuracy definition.\n    y_true_t: torch.LongTensor [N], truth track_id (0=noise)\n    y_pred_t: torch.LongTensor [N], pred cluster id (-1=noise)\n    \"\"\"\n    y_true = y_true_t.detach().cpu().numpy().astype(np.int64, copy=False)\n    y_pred = y_pred_t.detach().cpu().numpy().astype(np.int64, copy=False)\n\n    truth_mask = y_true > 0\n    total_truth = int(truth_mask.sum())\n    if total_truth == 0:\n        return 0, 0\n\n    # truth track sizes\n    truth_ids, truth_counts = np.unique(y_true[truth_mask], return_counts=True)\n    truth_size = {int(t): int(c) for t, c in zip(truth_ids, truth_counts)}\n\n    correct = 0\n    pred_labels = np.unique(y_pred)\n    for plab in pred_labels:\n        if plab < 0:\n            continue\n        idx = np.where(y_pred == plab)[0]\n        if idx.size < 4:\n            continue\n\n        # purity: include all hits in predicted cluster (including truth noise)\n        y_t = y_true[idx]\n        y_t_pos = y_t[y_t > 0]\n        if y_t_pos.size == 0:\n            continue\n\n        tids, cnts = np.unique(y_t_pos, return_counts=True)\n        j = int(np.argmax(cnts))\n        match_tid = int(tids[j])\n        match_cnt = int(cnts[j])\n\n        purity = match_cnt / float(idx.size)\n        coverage = match_cnt / float(truth_size.get(match_tid, 10**9))\n\n        if purity >= 0.5 and coverage >= 0.5:\n            correct += match_cnt\n\n    return int(correct), int(total_truth)\n\n\nclass HitClassifier(nn.Module):\n    def __init__(self, example_batch_x):\n        super().__init__()\n        # example_batch_x: list of [N_i, F]\n        if isinstance(example_batch_x, (list, tuple)):\n            F = int(example_batch_x[0].shape[1])\n        else:\n            F = int(example_batch_x.shape[1])\n\n        self.F = F\n\n        # Simple linear projection, initialized to copy first 3 engineered features:\n        # 0 sin(theta), 1 cos(theta), 2 slope_norm\n        self.proj = nn.Linear(F, 3, bias=True)\n        with torch.no_grad():\n            self.proj.weight.zero_()\n            self.proj.bias.zero_()\n            if F >= 3:\n                self.proj.weight[0, 0] = 1.0\n                self.proj.weight[1, 1] = 1.0\n                self.proj.weight[2, 2] = 1.0\n\n    def forward(self, batch_x):\n        # batch_x: list length B, each FloatTensor [N_i, F]\n        if not isinstance(batch_x, (list, tuple)):\n            raise TypeError(\"Expected batch_x to be a list of per-event tensors [N_i, F].\")\n\n        sizes = [int(x.shape[0]) for x in batch_x]\n        if len(sizes) == 0:\n            return []\n\n        x_cat = torch.cat(batch_x, dim=0)  # [sumN, F]\n        out_cat = self.proj(x_cat)  # [sumN, 3]\n        outs = list(out_cat.split(sizes, dim=0))  # list of [N_i, 3]\n        return outs\n\n    def predict_labels(self, batch_x):\n        # batch_x: list length B, each FloatTensor [N_i, F]\n        self.eval()\n        with torch.no_grad():\n            outs = self.forward(batch_x)  # list of [N_i, 3] on device\n\n        labels_out = []\n        for x, p in zip(batch_x, outs):\n            # x: [N, F], p: [N, 3]\n            N = int(x.shape[0])\n            if N == 0:\n                labels_out.append(torch.zeros((0,), dtype=torch.int64))\n                continue\n\n            # Use raw layer id for duplicate-layer cleanup\n            if x.shape[1] >= 7:\n                layer_raw = x[:, 6]  # [N]\n            else:\n                layer_raw = torch.zeros((N,), device=x.device, dtype=x.dtype)\n\n            P_np = p.detach().cpu().numpy().astype(np.float32, copy=False)  # [N, 3]\n            layer_np = layer_raw.detach().cpu().numpy().astype(np.float32, copy=False)  # [N]\n            lab_np = _cluster_event_dbscan(P_np, layer_np)  # [N] int64, noise=-1\n            labels_out.append(torch.from_numpy(lab_np.astype(np.int64)))\n\n        return labels_out\n\n\ndef make_model(example_batch_x):\n    return HitClassifier(example_batch_x)\n\n\nEPOCHS = 6\n\n\ndef _compute_batch_loss(Xs, ys, outs):\n    # Xs: list of [N_i, F], ys: list of [N_i], outs: list of [N_i, 3]\n    # Targets derived per truth track: mean(sin,cos,slope_norm) from input features cols [0,1,2]\n    total_loss = None\n    n_events = 0\n    smooth_l1 = nn.SmoothL1Loss(reduction=\"mean\")\n\n    for x, y, out in zip(Xs, ys, outs):\n        # x: [N, F], y: [N], out: [N, 3]\n        if x.numel() == 0:\n            continue\n        mask = y > 0\n        if int(mask.sum().item()) < 4:\n            continue\n\n        # Build target [N, 3]\n        target = torch.zeros_like(out)  # [N, 3]\n        tids = torch.unique(y[mask])\n        for tid in tids.tolist():\n            idx = (y == tid)\n            if int(idx.sum().item()) == 0:\n                continue\n            mean_sin = x[idx, 0].mean()\n            mean_cos = x[idx, 1].mean()\n            norm = torch.sqrt(mean_sin * mean_sin + mean_cos * mean_cos + 1e-12)\n            mean_sin = mean_sin / norm\n            mean_cos = mean_cos / norm\n            mean_slope = x[idx, 2].mean()\n            target[idx, 0] = mean_sin\n            target[idx, 1] = mean_cos\n            target[idx, 2] = mean_slope\n\n        data_loss = smooth_l1(out[mask], target[mask])\n        circle_pen = ((out[mask, 0] ** 2 + out[mask, 1] ** 2 - 1.0) ** 2).mean()\n\n        loss_evt = data_loss + 0.05 * circle_pen\n        if total_loss is None:\n            total_loss = loss_evt\n        else:\n            total_loss = total_loss + loss_evt\n        n_events += 1\n\n    if total_loss is None:\n        # Return a differentiable zero on correct device\n        dev = Xs[0].device if len(Xs) > 0 else torch.device(\"cpu\")\n        return torch.zeros((), device=dev, requires_grad=True)\n\n    return total_loss / float(max(1, n_events))\n\n\ndef _eval_fitaccuracy(model, loader, max_batches=10):\n    model.eval()\n    total_correct = 0\n    total_truth = 0\n    with torch.no_grad():\n        for b, batch in enumerate(loader):\n            Xs, ys = batch\n            Xs = [x.to(device) for x in Xs]\n            preds = model.predict_labels(Xs)  # list of [N_i] on CPU\n            for y_t, y_p in zip(ys, preds):\n                c, t = _fitaccuracy_counts(y_t, y_p)\n                total_correct += c\n                total_truth += t\n            if max_batches is not None and (b + 1) >= max_batches:\n                break\n    if total_truth == 0:\n        return 0.0\n    return float(total_correct) / float(total_truth)\n\n\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    model = model.to(device)\n\n    params = [p for p in model.parameters() if p.requires_grad]\n    if len(params) == 0:\n        # No trainable params: still provide metrics arrays\n        train_loss_hist, val_loss_hist = [], []\n        train_acc_hist, val_acc_hist = [], []\n        for _ in range(int(epochs)):\n            train_loss_hist.append(0.0)\n            val_loss_hist.append(0.0)\n            train_acc_hist.append(_eval_fitaccuracy(model, train_loader, max_batches=5))\n            val_acc_hist.append(_eval_fitaccuracy(model, val_loader, max_batches=10))\n        return model, train_loss_hist, val_loss_hist, train_acc_hist, val_acc_hist\n\n    opt = torch.optim.AdamW(params, lr=2e-3, weight_decay=1e-4)\n    sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=max(1, epochs))\n\n    train_loss_hist, val_loss_hist = [], []\n    train_acc_hist, val_acc_hist = [], []\n\n    best_state = copy.deepcopy(model.state_dict())\n    best_val = float(\"inf\")\n    patience = 3\n    bad = 0\n\n    for ep in range(int(epochs)):\n        model.train()\n        running = 0.0\n        nb = 0\n\n        for Xs, ys in train_loader:\n            Xs = [x.to(device) for x in Xs]\n            ys = [y.to(device) for y in ys]\n\n            opt.zero_grad(set_to_none=True)\n            outs = model(Xs)  # list of [N_i, 3]\n            loss = _compute_batch_loss(Xs, ys, outs)\n            loss.backward()\n            clip_grad_norm_(params, 1.0)\n            opt.step()\n\n            running += float(loss.item())\n            nb += 1\n\n        sched.step()\n\n        tr_loss = running / float(max(1, nb))\n        train_loss_hist.append(tr_loss)\n\n        model.eval()\n        with torch.no_grad():\n            vrunning = 0.0\n            vnb = 0\n            for Xs, ys in val_loader:\n                Xs = [x.to(device) for x in Xs]\n                ys = [y.to(device) for y in ys]\n                outs = model(Xs)\n                vloss = _compute_batch_loss(Xs, ys, outs)\n                vrunning += float(vloss.item())\n                vnb += 1\n            va_loss = vrunning / float(max(1, vnb))\n            val_loss_hist.append(va_loss)\n\n        # FitAccuracy proxy on limited batches for speed\n        tr_acc = _eval_fitaccuracy(model, train_loader, max_batches=6)\n        va_acc = _eval_fitaccuracy(model, val_loader, max_batches=12)\n        train_acc_hist.append(tr_acc)\n        val_acc_hist.append(va_acc)\n\n        # Early stopping on val loss (stable)\n        if va_loss + 1e-6 < best_val:\n            best_val = va_loss\n            best_state = copy.deepcopy(model.state_dict())\n            bad = 0\n        else:\n            bad += 1\n            if bad >= patience:\n                break\n\n    model.load_state_dict(best_state)\n    return model, train_loss_hist, val_loss_hist, train_acc_hist, val_acc_hist",
+    "reasoning": "",
+    "Outer_attempt": 1
+  },
+  "StaticChecks": {
+    "__timestamp": "2026-01-10T23:36:24Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2026-01-10T23:36:24Z",
+        "metrics": {
+          ".\\outputs\\01-10\\TRACKFORMERS\\Q1\\script_openai_gpt-5.2-pro_0036_1.py": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 507,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 507,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2026-01-10T23:36:49Z",
+    "passed": true,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/01-10/TRACKFORMERS/Q1/script_openai_gpt-5.2-pro_0036_1.py\nargv2=--dryrun\n#PROC_METRICS#{\"cpu_seconds_user\": 11.78, \"cpu_seconds_sys\": 0.95, \"max_rss_kb\": 1503448, \"training_time_s\": 15.566, \"source\": \"proc_tree_ticks\"}\n#GPU_METRICS#{\"cuda_available\": true, \"name\": \"NVIDIA GeForce RTX 3050 Ti Laptop GPU\", \"total_mb\": 4096, \"peak_used_mb\": 135, \"avg_used_mb\": 57.222, \"avg_util_pct\": 2.611, \"peak_util_pct\": 18, \"per_process_gpu_mem\": false}\nDry-run: skipping artefact manifest\n",
+      "stderr": "resource_monitor.py: WARNING: cgroup v2 not detected; metrics may be degraded.\n"
+    },
+    "return_code": 0
+  },
+  "Training": {
+    "__timestamp": "2026-01-11T11:49:23.913443+00:00",
+    "passed": true,
+    "resources": {
+      "wall_time_s": 1933.85,
+      "training_time_s": 1922.366,
+      "cpu_seconds_user": 1699.82,
+      "cpu_seconds_sys": 218.03,
+      "disk_read_mb": null,
+      "disk_write_mb": null,
+      "max_rss_kb": 1856912,
+      "proc_source": "proc_tree_ticks",
+      "cuda_available": true,
+      "gpu_name": "NVIDIA GeForce RTX 3050 Ti Laptop GPU",
+      "gpu_total_mb": 4096,
+      "per_process_gpu_mem": false,
+      "gpu_peak_alloc_mb": 135,
+      "gpu_avg_util_pct": 34.463,
+      "gpu_peak_util_pct": 42,
+      "gpu_avg_used_mb": 134.457
+    },
+    "metrics": {
+      "epochs": 6,
+      "train_loss": [
+        0.010888262495398522,
+        0.010352235620841383,
+        0.010304002594202756,
+        0.01030014550499618,
+        0.010299567578360438,
+        0.010298844203352928
+      ],
+      "val_loss": [
+        0.010625028342474252,
+        0.010480698256287724,
+        0.010467223532032222,
+        0.010465520317666233,
+        0.010464307240908965,
+        0.010462789883604273
+      ],
+      "train_acc": [
+        0.30189716367748215,
+        0.29530273981074895,
+        0.289084348218313,
+        0.3001303581013726,
+        0.2860086357094159,
+        0.29670551044443066
+      ],
+      "val_acc": [
+        0.3051461259889742,
+        0.30046363573455126,
+        0.29993310728207967,
+        0.29708055574777603,
+        0.29708055574777603,
+        0.2984722318332449
+      ]
+    },
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/01-10/TRACKFORMERS/Q1/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_0036_1.py\nargv2=\n#TRAIN_METRICS#{\"epochs\": 6, \"train_loss\": [0.010888262495398522, 0.010352235620841383, 0.010304002594202756, 0.01030014550499618, 0.010299567578360438, 0.010298844203352928], \"val_loss\": [0.010625028342474252, 0.010480698256287724, 0.010467223532032222, 0.010465520317666233, 0.010464307240908965, 0.010462789883604273], \"train_acc\": [0.30189716367748215, 0.29530273981074895, 0.289084348218313, 0.3001303581013726, 0.2860086357094159, 0.29670551044443066], \"val_acc\": [0.3051461259889742, 0.30046363573455126, 0.29993310728207967, 0.29708055574777603, 0.29708055574777603, 0.2984722318332449]}\n#PROC_METRICS#{\"cpu_seconds_user\": 1699.82, \"cpu_seconds_sys\": 218.03, \"max_rss_kb\": 1856912, \"training_time_s\": 1922.366, \"source\": \"proc_tree_ticks\"}\n#GPU_METRICS#{\"cuda_available\": true, \"name\": \"NVIDIA GeForce RTX 3050 Ti Laptop GPU\", \"total_mb\": 4096, \"peak_used_mb\": 135, \"avg_used_mb\": 134.457, \"avg_util_pct\": 34.463, \"peak_util_pct\": 42, \"per_process_gpu_mem\": false}\nHash manifest written â†’ openai_gpt-5.2-pro_0036_1_manifest.sha256\n",
+      "stderr": "resource_monitor.py: WARNING: cgroup v2 not detected; metrics may be degraded.\n"
+    }
+  },
+  "Evaluation": {
+    "__timestamp": "2026-01-11T12:04:21Z",
+    "passed": true,
+    "metrics": {
+      "ok": true,
+      "load_s": 5.69,
+      "eval_s": 13.04,
+      "FitAccuracy": 0.29560151436768095
+    },
+    "runtime_s": 28.42
+  }
+}

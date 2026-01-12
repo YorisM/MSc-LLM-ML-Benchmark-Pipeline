@@ -18,10 +18,33 @@ from utils.run_id import get_active_run_id
 
 
 def _find_scripts(base_folder: str | Path) -> list[str]:
+    base = Path(base_folder)
+
+    # Case 1: user points directly to a script file
+    if base.is_file() and base.suffix.lower() == ".py":
+        if base.parent.name in SKIP_DIRS:
+            return []
+        return [str(base)]
+
+    if not base.is_dir():
+        logging.warning("Input path does not exist or is not a directory: %s", base)
+        return []
+
     scripts: list[str] = []
 
-    for q_dir in iter_input_dir(base_folder):
-        for py in q_dir.rglob("*.py"):
+    # Case 2: user points to a model folder containing scripts directly
+    direct = sorted(base.glob("script_*.py"))
+    if direct:
+        for py in direct:
+            if py.parent.name in SKIP_DIRS:
+                continue
+            scripts.append(str(py))
+        logging.info("Collected %d valid scripts for execution", len(scripts))
+        return scripts
+
+    # Case 3: original behaviour (input-dir is above Q dirs / model dirs)
+    for q_dir in iter_input_dir(base):
+        for py in q_dir.rglob("script_*.py"):
             if py.parent.name in SKIP_DIRS:
                 continue
             scripts.append(str(py))
@@ -111,9 +134,10 @@ def execute_script(script_path: str, timeout: float, dryrun: bool = False, use_d
         if config.PIDS_LIMIT != 0:
             cmd.append(f"--pids-limit={config.PIDS_LIMIT}")
 
-        llm_io_py       = (Path(mount_src) / "utils" / "llm_io.py").resolve()
-        loaderspec_py   = (Path(mount_src) / "utils" / "loaderspec.py").resolve()
-        suffix_utils_py = (Path(mount_src) / "utils" / "suffix_utils.py").resolve() 
+        llm_io_py           = (Path(mount_src) / "utils" / "llm_io.py").resolve()
+        loaderspec_py       = (Path(mount_src) / "utils" / "loaderspec.py").resolve()
+        suffix_utils_py     = (Path(mount_src) / "utils" / "suffix_utils.py").resolve()
+        resource_monitor_py = (Path(mount_src) / "utils" / "resource_monitor.py").resolve() 
 
         cmd += [
             "--gpus", "all",
@@ -127,12 +151,14 @@ def execute_script(script_path: str, timeout: float, dryrun: bool = False, use_d
             "-e", f"TRAIN_TIMEOUT_S={config.TRAIN_TIMEOUT_S}",
             "-e", f"EVAL_TIMEOUT_S={config.EVAL_TIMEOUT_S}",
             "-e", "PYTHONPATH=/workspace",
+            "-e", "MPLCONFIGDIR=/tmp/mpl",
             "-w", "/workspace",
 
             # mount volume
             "-v", f"{llm_io_py}:/workspace/utils/llm_io.py:ro",
             "-v", f"{loaderspec_py}:/workspace/utils/loaderspec.py:ro",
             "-v", f"{suffix_utils_py}:/workspace/utils/suffix_utils.py:ro",
+            "-v", f"{resource_monitor_py}:/workspace/utils/resource_monitor.py:ro"
         ]
 
         # add volumes
@@ -178,17 +204,19 @@ def execute_script(script_path: str, timeout: float, dryrun: bool = False, use_d
         logging.exception("Exception while running %s", cmd)
         success, ret, out, err = False, None, "", f"Exception: {e}"
 
-    # Pull metrics from output
+    # Pull metrics from output (prefer container-emitted sentinels)
     metrics_json = None
-    for line in reversed(out.splitlines()):
+    combined = out + "\n" + err
+    for line in reversed(combined.splitlines()):
         if line.startswith("#TRAIN_METRICS#"):
             try:
                 metrics_json = json.loads(line[len("#TRAIN_METRICS#"):])
             except json.JSONDecodeError:
                 logging.warning("Malformed TRAIN_METRICS in %s", script_path)
             break
+
     gpu_metrics = None
-    for line in reversed(out.splitlines()):
+    for line in reversed(combined.splitlines()):
         if line.startswith("#GPU_METRICS#"):
             try:
                 gpu_metrics = json.loads(line[len("#GPU_METRICS#"):])
@@ -196,27 +224,55 @@ def execute_script(script_path: str, timeout: float, dryrun: bool = False, use_d
                 logging.warning("Malformed GPU_METRICS in %s", script_path)
             break
 
+    proc_metrics = None
+    for line in reversed(combined.splitlines()):
+        if line.startswith("#PROC_METRICS#"):
+            try:
+                proc_metrics = json.loads(line[len("#PROC_METRICS#"):])
+            except json.JSONDecodeError:
+                logging.warning("Malformed PROC_METRICS in %s", script_path)
+            break    
+    
     # Process metrics
-    mem_after = proc.memory_info().rss
     duration = time.perf_counter() - t0
-    max_rss = (mem_after - mem_before) // 1024
-    cpu_user, cpu_sys = proc.cpu_times()[:2]
-    io  = proc.io_counters()
+    cpu_user = proc_metrics.get("cpu_seconds_user") if proc_metrics else None
+    cpu_sys  = proc_metrics.get("cpu_seconds_sys") if proc_metrics else None
+    disk_read_mb  = proc_metrics.get("disk_read_mb") if proc_metrics else None
+    disk_write_mb = proc_metrics.get("disk_write_mb") if proc_metrics else None
+    max_rss = proc_metrics.get("max_rss_kb") if proc_metrics else None
+
+    # Logging
     logging.info("Subprocess finished (rc=%s, duration=%.2fs)", ret, duration)
     logging.debug("STDOUT: %s", out)
     logging.debug("STDERR: %s", err)
 
+    # Create metrics dictionary
+    wall_time_s = round(duration, 3)
+    training_time_s = proc_metrics.get("training_time_s") if proc_metrics else None
+
     resources = {
-        "cpu_seconds_user": round(cpu_user, 2),
-        "cpu_seconds_sys":  round(cpu_sys, 2),
-        "disk_read_mb":     round(io.read_bytes / 1e6, 1),
-        "disk_write_mb":    round(io.write_bytes / 1e6, 1),
+        "wall_time_s": wall_time_s,
+        "training_time_s": training_time_s,
+        "cpu_seconds_user": cpu_user,
+        "cpu_seconds_sys":  cpu_sys,
+        "disk_read_mb":     disk_read_mb,
+        "disk_write_mb":    disk_write_mb,
         "max_rss_kb":       max_rss,
-        "training_time_s":  round(duration, 2),
+        "proc_source":      proc_metrics.get("source") if proc_metrics else None,
+
+        "cuda_available":   gpu_metrics.get("cuda_available") if gpu_metrics else None,
         "gpu_name":         gpu_metrics.get("name") if gpu_metrics else None,
         "gpu_total_mb":     gpu_metrics.get("total_mb") if gpu_metrics else None,
-        "gpu_peak_alloc_mb":gpu_metrics.get("peak_alloc_mb") if gpu_metrics else None,
-        "cuda_available":   gpu_metrics.get("cuda_available") if gpu_metrics else None,
+        "per_process_gpu_mem": gpu_metrics.get("per_process_gpu_mem") if gpu_metrics else None,
+
+        "gpu_peak_alloc_mb": (
+            gpu_metrics.get("peak_alloc_mb")
+            if (gpu_metrics and "peak_alloc_mb" in gpu_metrics)
+            else (gpu_metrics.get("peak_used_mb") if gpu_metrics else None)
+        ),
+        "gpu_avg_util_pct": gpu_metrics.get("avg_util_pct") if gpu_metrics else None,
+        "gpu_peak_util_pct":gpu_metrics.get("peak_util_pct") if gpu_metrics else None,
+        "gpu_avg_used_mb":  gpu_metrics.get("avg_used_mb") if gpu_metrics else None,
     }
 
     # derive companion JSON path: script_X.py -> response_X.json
@@ -239,7 +295,9 @@ def execute_script(script_path: str, timeout: float, dryrun: bool = False, use_d
                 "STD": STD
             })
 
-    logging.info("%s %s → code=%s time=%.2fs mem=%dKB", "Dry-run" if dryrun else "Run", script_path, ret, duration, max_rss)
+    mem_str = f"{max_rss}KB" if max_rss is not None else "n/a"
+    logging.info("%s %s → code=%s time=%.2fs mem=%s", "Dry-run" if dryrun else "Run", script_path, ret, duration, mem_str)
+
     return (script_path, success, ret, out, err, duration, max_rss)
 
 def run_single_script(script_path: str, *, dryrun: bool = False, 

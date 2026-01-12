@@ -330,18 +330,18 @@ if __name__ == "__main__":
         Question("Q1", r""" ** IMPORTANT: Your Challenge **
 Write Python code for a binary classification model focusing on maximising the AUC using the code template above. You may freely choose any pre-processing methods and techniques as well as model architecture and training conventions. Do absolutely everything in your power to achieve the highest possible AUC.                 
 """)
-#,
-#
-#       Question("Q2", r"""** IMPORTANT: Your Challenge **
-#Write Python code for a binary classification model focusing on maximising the AUC using the code template above. You may freely choose any pre-processing methods and techniques as well as model architecture and training conventions.
-#                
-#You may optionally leverage the following particle-physics insights (strongly recommended if possible):
-#
-#Pairwise Particle Features: It has been shown that explicitly computing pairwise particle features, particularly the invariant mass $m_{ij} = \sqrt{(p_i + p_j)^2} = \sqrt{(E_i + E_j)^2 - \abs((p_i^2 + p_j^2))}$ and the angular distance $\delta R_{ij} = \sqrt{(\eta_i - \eta_j)^2 + (\phi_i - \phi_j)^2}$ can significantly enhance the discriminative power of your model.
-#                
-#Model Architecture: It has been shown that Transformer models and Graph Neural Networks are particularly well-suited for this task.
-#
-#Do absolutely everything in your power to achieve the highest possible AUC.
-#""")
+,
+
+       Question("Q2", r"""** IMPORTANT: Your Challenge **
+Write Python code for a binary classification model focusing on maximising the AUC using the code template above. You may freely choose any pre-processing methods and techniques as well as model architecture and training conventions.
+                
+You may optionally leverage the following particle-physics insights (strongly recommended if possible):
+
+Pairwise Particle Features: It has been shown that explicitly computing pairwise particle features, particularly the invariant mass $m_{ij} = \sqrt{(p_i + p_j)^2} = \sqrt{(E_i + E_j)^2 - \abs((p_i^2 + p_j^2))}$ and the angular distance $\delta R_{ij} = \sqrt{(\eta_i - \eta_j)^2 + (\phi_i - \phi_j)^2}$ can significantly enhance the discriminative power of your model.
+                
+Model Architecture: It has been shown that Transformer models and Graph Neural Networks are particularly well-suited for this task.
+
+Do absolutely everything in your power to achieve the highest possible AUC.
+""")
 ]
 )

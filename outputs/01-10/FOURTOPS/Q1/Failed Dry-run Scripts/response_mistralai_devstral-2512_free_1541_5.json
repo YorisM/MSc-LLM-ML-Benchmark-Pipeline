@@ -1,0 +1,71 @@
+{
+  "LLMGeneration": {
+    "model": "mistralai/devstral-2512:free",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 4169,
+    "prompt_chars": 15798,
+    "response_tokens": 1994,
+    "response_chars": 7245,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0,
+    "generation_ms": 30897,
+    "code": "# ---------- IMPORTS ----------\nfrom sklearn.preprocessing import StandardScaler\nfrom torch.nn import Linear, ReLU, Dropout, BatchNorm1d, Sequential, Sigmoid\nfrom torch.optim import Adam\nfrom torch.nn import BCEWithLogitsLoss\nfrom torch.nn.functional import binary_cross_entropy_with_logits\nimport torch.nn.functional as F\n\n# ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.scaler = StandardScaler()\n        self.mask = None\n\n    def make_loader_cfg(self) -> dict:\n        return {\n            \"dataset_builder\": \"llm_script:FourTopsDataset\",\n            \"dataset_kwargs\": {},\n            \"loader_class\": \"torch.utils.data:DataLoader\",\n            \"batch_size\": 1024,\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": True,\n            \"collate\": None,\n            \"extra_loader_kwargs\": {},\n            \"eval_overrides\": {\"shuffle\": False, \"batch_size\": 1024}\n        }\n\n    def fit(self, X, y=None):\n        # Create mask for non-zero objects (first feature of each object is obj_id)\n        obj_mask = X[:, 2::5] != 0  # Shape: [n_samples, 18]\n        self.mask = obj_mask\n        # Flatten and scale only non-zero object features\n        flat_X = X.reshape(X.shape[0], -1)\n        self.scaler.fit(flat_X)\n        return self\n\n    def transform(self, X):\n        # Apply scaling\n        flat_X = X.reshape(X.shape[0], -1)\n        scaled = self.scaler.transform(flat_X)\n        # Reshape back and apply mask to zero out padded objects\n        scaled = scaled.reshape(X.shape)\n        if self.mask is not None:\n            scaled[:, 2::5] = X[:, 2::5]  # Preserve obj_id\n            scaled[:, 3::5][~self.mask] = 0\n            scaled[:, 4::5][~self.mask] = 0\n            scaled[:, 5::5][~self.mask] = 0\n            scaled[:, 6::5][~self.mask] = 0\n        return scaled\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# ---------- MODEL ARCHITECTURE ----------\nclass BinaryClassifier(nn.Module):\n    def __init__(self, sample_object):\n        super().__init__()\n        # Extract dimensions from sample\n        n_features = sample_object.shape[1]  # 92\n        # Global features (E_T_miss, phi_Et_miss) + object features\n        self.global_proj = Linear(2, 32)\n        self.obj_proj = Linear(4, 32)  # E, pT, eta, phi (skip obj_id)\n        self.attention = nn.MultiheadAttention(embed_dim=32, num_heads=4, batch_first=True)\n        self.post_attn = Sequential(\n            Linear(32, 64),\n            ReLU(),\n            BatchNorm1d(64),\n            Dropout(0.3),\n            Linear(64, 32),\n            ReLU(),\n            BatchNorm1d(32),\n            Dropout(0.2)\n        )\n        self.classifier = Sequential(\n            Linear(64, 128),\n            ReLU(),\n            BatchNorm1d(128),\n            Dropout(0.4),\n            Linear(128, 64),\n            ReLU(),\n            BatchNorm1d(64),\n            Dropout(0.3),\n            Linear(64, 1)\n        )\n\n    def forward(self, batch_x):\n        # batch_x: [B, 92]\n        B = batch_x.shape[0]\n        # Extract global features\n        global_feat = batch_x[:, :2]  # [B, 2]\n        global_embed = self.global_proj(global_feat)  # [B, 32]\n\n        # Extract object features (skip obj_id)\n        obj_feats = batch_x[:, 2:].reshape(B, 18, 5)  # [B, 18, 5]\n        obj_ids = obj_feats[:, :, 0]  # [B, 18]\n        obj_kin = obj_feats[:, :, 1:]  # [B, 18, 4]\n        obj_embed = self.obj_proj(obj_kin)  # [B, 18, 32]\n\n        # Mask out padded objects\n        mask = (obj_ids == 0)  # [B, 18]\n        obj_embed[mask] = 0\n\n        # Attention over objects\n        attn_out, _ = self.attention(\n            global_embed.unsqueeze(1),  # query [B,1,32]\n            obj_embed,  # key/value [B,18,32]\n            obj_embed,\n            key_padding_mask=mask\n        )\n        attn_out = attn_out.squeeze(1)  # [B, 32]\n\n        # Combine global and attention features\n        combined = torch.cat([global_embed, attn_out], dim=1)  # [B, 64]\n        features = self.post_attn(combined)  # [B, 32]\n\n        # Classifier\n        logits = self.classifier(features)  # [B, 1]\n        return logits.squeeze(1)\n\ndef make_model(example_object):\n    return BinaryClassifier(example_object)\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 50\n\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    device = torch.device(\"cuda\" if torch.cuda.is_available() else \"cpu\")\n    model = model.to(device)\n    optimizer = Adam(model.parameters(), lr=1e-3, weight_decay=1e-5)\n    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=5, verbose=False)\n    criterion = BCEWithLogitsLoss()\n\n    best_val_auc = 0\n    best_model = None\n\n    train_loss_history = []\n    val_loss_history = []\n    train_acc_history = []\n    val_acc_history = []\n\n    for epoch in range(epochs):\n        model.train()\n        total_loss = 0\n        correct = 0\n        total = 0\n        for X_batch, y_batch in train_loader:\n            X_batch, y_batch = X_batch.to(device), y_batch.to(device).float()\n            optimizer.zero_grad()\n            outputs = model(X_batch)\n            loss = criterion(outputs, y_batch)\n            loss.backward()\n            optimizer.step()\n            total_loss += loss.item() * X_batch.size(0)\n            preds = (outputs > 0).float()\n            correct += (preds == y_batch).sum().item()\n            total += y_batch.size(0)\n        train_loss = total_loss / total\n        train_acc = correct / total\n        train_loss_history.append(train_loss)\n        train_acc_history.append(train_acc)\n\n        # Validation\n        model.eval()\n        val_loss = 0\n        correct = 0\n        total = 0\n        all_preds = []\n        all_labels = []\n        with torch.no_grad():\n            for X_batch, y_batch in val_loader:\n                X_batch, y_batch = X_batch.to(device), y_batch.to(device).float()\n                outputs = model(X_batch)\n                loss = criterion(outputs, y_batch)\n                val_loss += loss.item() * X_batch.size(0)\n                preds = (outputs > 0).float()\n                correct += (preds == y_batch).sum().item()\n                total += y_batch.size(0)\n                all_preds.extend(outputs.cpu().numpy())\n                all_labels.extend(y_batch.cpu().numpy())\n        val_loss = val_loss / total\n        val_acc = correct / total\n        val_loss_history.append(val_loss)\n        val_acc_history.append(val_acc)\n\n        # Calculate AUC\n        from sklearn.metrics import roc_auc_score\n        try:\n            val_auc = roc_auc_score(all_labels, all_preds)\n            scheduler.step(val_auc)\n        except:\n            val_auc = 0\n\n        if val_auc > best_val_auc:\n            best_val_auc = val_auc\n            best_model = model.state_dict()\n            torch.save(best_model, 'best_model.pth')\n\n        print(f\"Epoch {epoch+1}/{epochs} - Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}, Train Acc: {train_acc:.4f}, Val Acc: {val_acc:.4f}, Val AUC: {val_auc:.4f}\")\n\n    # Load best model\n    if best_model is not None:\n        model.load_state_dict(best_model)\n\n    return model, train_loss_history, val_loss_history, train_acc_history, val_acc_history",
+    "reasoning": "",
+    "Outer_attempt": 5
+  },
+  "StaticChecks": {
+    "__timestamp": "2026-01-10T14:41:59Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2026-01-10T14:41:59Z",
+        "metrics": {
+          ".\\outputs\\01-10\\FOURTOPS\\Q1\\script_mistralai_devstral-2512_free_1541_5.py": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 258,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 258,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2026-01-10T14:42:31Z",
+    "passed": false,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/01-10/FOURTOPS/Q1/script_mistralai_devstral-2512_free_1541_5.py\nargv2=--dryrun\n#PROC_METRICS#{\"cpu_seconds_user\": 12.51, \"cpu_seconds_sys\": 1.26, \"max_rss_kb\": 808244, \"training_time_s\": 18.661, \"source\": \"proc_tree_ticks\"}\n#GPU_METRICS#{\"cuda_available\": true, \"name\": \"NVIDIA GeForce RTX 3050 Ti Laptop GPU\", \"total_mb\": 4096, \"peak_used_mb\": 0, \"avg_used_mb\": 0.0, \"avg_util_pct\": 0.0, \"peak_util_pct\": 0, \"per_process_gpu_mem\": false}\n",
+      "stderr": "resource_monitor.py: WARNING: cgroup v2 not detected; metrics may be degraded.\nTraceback (most recent call last):\n  File \"/workspace/outputs/01-10/FOURTOPS/Q1/script_mistralai_devstral-2512_free_1541_5.py\", line 341, in <module>\n    _run(dryrun=\"--dryrun\" in sys.argv)\n  File \"/workspace/outputs/01-10/FOURTOPS/Q1/script_mistralai_devstral-2512_free_1541_5.py\", line 283, in _run\n    train_ds     = build_dataset(spec, (X_train, Y_train), pre, train=True)\n                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/utils/llm_io.py\", line 140, in build_dataset\n    return builder(events, preproc, train=train, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/outputs/01-10/FOURTOPS/Q1/script_mistralai_devstral-2512_free_1541_5.py\", line 43, in __init__\n    X2 = pre.transform(X) if pre is not None else X\n         ^^^^^^^^^^^^^^^^\n  File \"/workspace/outputs/01-10/FOURTOPS/Q1/script_mistralai_devstral-2512_free_1541_5.py\", line 102, in transform\n    scaled[:, 3::5][~self.mask] = 0\n    ~~~~~~~~~~~~~~~^^^^^^^^^^^^\nIndexError: boolean index did not match indexed array along axis 0; size of axis is 400 but size of corresponding boolean axis is 241657\n"
+    },
+    "return_code": 1
+  }
+}

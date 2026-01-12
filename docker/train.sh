@@ -44,7 +44,7 @@ if (( PIDS_LIMIT > 0 )); then
 fi
 
 # ───────────────  run user script  ────────────────
-timeout --signal=KILL "${TIMEOUT}s" python "$PY" $DRY
+python -u /workspace/utils/resource_monitor.py --interval 0.5 -- python -u "$PY" $DRY
 python_rc=$?
 
 #   If user code crashed, propagate failure to container exit-code

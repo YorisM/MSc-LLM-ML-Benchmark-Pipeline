@@ -27,7 +27,14 @@ logging.basicConfig(
 
 # Models
 models = [
-    "google/gemini-3-pro-preview"
+    "mistralai/devstral-2512:free",
+    "mistralai/mistral-large-2512",
+    "x-ai/grok-code-fast-1",
+    "deepseek/deepseek-v3.2",
+    "anthropic/claude-sonnet-4.5",
+    "google/gemini-3-pro-preview",
+    "openai/gpt-5.1-codex-max",
+    "openai/gpt-5.2-pro"
     ]
 
 """
@@ -67,7 +74,7 @@ models = ["openai/o4-mini-high-2025-04-16",
 
 # All the challenges in the pipeline
 # Currently implemented: trackformers_challenge, fourtop_challenge   
-challenges = [fourtop_challenge]
+challenges = [fourtop_challenge, trackformers_challenge]
 
 # Number of attempts to retrieve correct response
 num_attempts = 5

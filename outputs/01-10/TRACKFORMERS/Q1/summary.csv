@@ -1,0 +1,378 @@
+script,success,return_code,stdout,stderr,duration_s,max_rss_kb
+C:\Users\yoris\projects\Benchmark\outputs\01-10\TRACKFORMERS\Q1\anthropic_claude-sonnet-4.5\script_anthropic_claude-sonnet-4.5_0010_1.py,True,0,"argv0=/usr/local/bin/train.sh
+argv1=outputs/01-10/TRACKFORMERS/Q1/anthropic_claude-sonnet-4.5/script_anthropic_claude-sonnet-4.5_0010_1.py
+argv2=
+Epoch 1/20: Train Loss=0.7646, Val Loss=0.6673
+Epoch 2/20: Train Loss=0.7548, Val Loss=0.6643
+Epoch 3/20: Train Loss=0.7538, Val Loss=0.6548
+Epoch 4/20: Train Loss=0.7532, Val Loss=0.6571
+Epoch 5/20: Train Loss=0.7529, Val Loss=0.6526
+Epoch 6/20: Train Loss=0.7528, Val Loss=0.6487
+Epoch 7/20: Train Loss=0.7526, Val Loss=0.6477
+Epoch 8/20: Train Loss=0.7525, Val Loss=0.6450
+Epoch 9/20: Train Loss=0.7524, Val Loss=0.6452
+Epoch 10/20: Train Loss=0.7523, Val Loss=0.6475
+Epoch 11/20: Train Loss=0.7521, Val Loss=0.6425
+Epoch 12/20: Train Loss=0.7520, Val Loss=0.6433
+Epoch 13/20: Train Loss=0.7521, Val Loss=0.6409
+Epoch 14/20: Train Loss=0.7521, Val Loss=0.6421
+Epoch 15/20: Train Loss=0.7520, Val Loss=0.6431
+Epoch 16/20: Train Loss=0.7520, Val Loss=0.6379
+Epoch 17/20: Train Loss=0.7520, Val Loss=0.6388
+Epoch 18/20: Train Loss=0.7519, Val Loss=0.6387
+Epoch 19/20: Train Loss=0.7519, Val Loss=0.6377
+Epoch 20/20: Train Loss=0.7518, Val Loss=0.6367
+#TRAIN_METRICS#{""epochs"": 20, ""train_loss"": [0.7646397738456726, 0.7548269410133361, 0.7537540349960327, 0.7532192578315735, 0.7529005875587463, 0.7527813134193421, 0.75259148645401, 0.7525011234283447, 0.7524100232124329, 0.7523283882141113, 0.7521187925338745, 0.7520475192070007, 0.7520515141487122, 0.7520868473052978, 0.7519982905387879, 0.751983711719513, 0.7520025830268859, 0.7518825926780701, 0.7518651785850525, 0.7518354659080505], ""val_loss"": [0.66727259580791, 0.6643271136581897, 0.6548494750112295, 0.6570934784710407, 0.6526351837813854, 0.6486879589557648, 0.6477046406120062, 0.6449730917364359, 0.6452061917930841, 0.6474621666669845, 0.6425286275893449, 0.6433264407217503, 0.6409243229627609, 0.6420831479430199, 0.6430526039749384, 0.6378763344287872, 0.6388406136035919, 0.6386755079627037, 0.6377094092965127, 0.6366808175444603], ""train_acc"": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], ""val_acc"": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]}
+#PROC_METRICS#{""cpu_seconds_user"": 36397.86, ""cpu_seconds_sys"": 28.84, ""max_rss_kb"": 1900568, ""training_time_s"": 26026.487, ""source"": ""proc_tree_ticks""}
+#GPU_METRICS#{""cuda_available"": true, ""name"": ""NVIDIA GeForce RTX 3050 Ti Laptop GPU"", ""total_mb"": 4096, ""peak_used_mb"": 3941, ""avg_used_mb"": 3876.1, ""avg_util_pct"": 95.266, ""peak_util_pct"": 100, ""per_process_gpu_mem"": false}
+Hash manifest written â†’ anthropic_claude-sonnet-4.5_0010_1_manifest.sha256
+","resource_monitor.py: WARNING: cgroup v2 not detected; metrics may be degraded.
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+",26035.580616999992,1900568
+C:\Users\yoris\projects\Benchmark\outputs\01-10\TRACKFORMERS\Q1\google_gemini-3-pro-preview\script_google_gemini-3-pro-preview_0013_1.py,True,0,"argv0=/usr/local/bin/train.sh
+argv1=outputs/01-10/TRACKFORMERS/Q1/google_gemini-3-pro-preview/script_google_gemini-3-pro-preview_0013_1.py
+argv2=
+Epoch 1/15 | Train Loss: 0.0598 | Val Loss: 0.0295
+Epoch 2/15 | Train Loss: 0.0257 | Val Loss: 0.0186
+Epoch 3/15 | Train Loss: 0.0182 | Val Loss: 0.0137
+Epoch 4/15 | Train Loss: 0.0144 | Val Loss: 0.0112
+Epoch 5/15 | Train Loss: 0.0123 | Val Loss: 0.0099
+Epoch 6/15 | Train Loss: 0.0109 | Val Loss: 0.0089
+Epoch 7/15 | Train Loss: 0.0100 | Val Loss: 0.0083
+Epoch 8/15 | Train Loss: 0.0093 | Val Loss: 0.0077
+Epoch 9/15 | Train Loss: 0.0088 | Val Loss: 0.0075
+Epoch 10/15 | Train Loss: 0.0087 | Val Loss: 0.0074
+Epoch 11/15 | Train Loss: 0.0085 | Val Loss: 0.0073
+Epoch 12/15 | Train Loss: 0.0084 | Val Loss: 0.0072
+Epoch 13/15 | Train Loss: 0.0083 | Val Loss: 0.0071
+Epoch 14/15 | Train Loss: 0.0083 | Val Loss: 0.0071
+Epoch 15/15 | Train Loss: 0.0082 | Val Loss: 0.0071
+#TRAIN_METRICS#{""epochs"": 15, ""train_loss"": 0.00824101272597909, ""val_loss"": 0.007080305896466598, ""train_acc"": null, ""val_acc"": null}
+#PROC_METRICS#{""cpu_seconds_user"": 3540.11, ""cpu_seconds_sys"": 561.15, ""max_rss_kb"": 1870416, ""training_time_s"": 4105.087, ""source"": ""proc_tree_ticks""}
+#GPU_METRICS#{""cuda_available"": true, ""name"": ""NVIDIA GeForce RTX 3050 Ti Laptop GPU"", ""total_mb"": 4096, ""peak_used_mb"": 335, ""avg_used_mb"": 333.82, ""avg_util_pct"": 20.596, ""peak_util_pct"": 100, ""per_process_gpu_mem"": false}
+Hash manifest written â†’ google_gemini-3-pro-preview_0013_1_manifest.sha256
+","resource_monitor.py: WARNING: cgroup v2 not detected; metrics may be degraded.
+/opt/venv/lib/python3.12/site-packages/torch/nn/modules/transformer.py:508: UserWarning: The PyTorch API of nested tensors is in prototype stage and will change in the near future. We recommend specifying layout=torch.jagged when constructing a nested tensor, as this layout receives active development, has better operator coverage, and works with torch.compile. (Triggered internally at /pytorch/aten/src/ATen/NestedTensorImpl.cpp:178.)
+  output = torch._nested_tensor_from_mask(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.
+  warnings.warn(
+",4118.827758200001,1870416
+C:\Users\yoris\projects\Benchmark\outputs\01-10\TRACKFORMERS\Q1\mistralai_mistral-large-2512\script_mistralai_mistral-large-2512_2327_5.py,True,0,"argv0=/usr/local/bin/train.sh
+argv1=outputs/01-10/TRACKFORMERS/Q1/mistralai_mistral-large-2512/script_mistralai_mistral-large-2512_2327_5.py
+argv2=
+Epoch 1/20, Train Loss: 3.6248, Val Loss: 0.9896
+Epoch 2/20, Train Loss: 0.9491, Val Loss: 0.7210
+Epoch 3/20, Train Loss: 0.7563, Val Loss: 0.6667
+Epoch 4/20, Train Loss: 0.6626, Val Loss: 0.5924
+Epoch 5/20, Train Loss: 0.6168, Val Loss: 0.5363
+Epoch 6/20, Train Loss: 0.5552, Val Loss: 0.5050
+Epoch 7/20, Train Loss: 0.5411, Val Loss: 0.4992
+Epoch 8/20, Train Loss: 0.5309, Val Loss: 0.5146
+Epoch 9/20, Train Loss: 0.5210, Val Loss: 0.4747
+Epoch 10/20, Train Loss: 0.5043, Val Loss: 0.4529
+Epoch 11/20, Train Loss: 0.4980, Val Loss: 0.4732
+Epoch 12/20, Train Loss: 0.4948, Val Loss: 0.4683
+Epoch 13/20, Train Loss: 0.4921, Val Loss: 0.4592
+Epoch 14/20, Train Loss: 0.4842, Val Loss: 0.4507
+Epoch 15/20, Train Loss: 0.4838, Val Loss: 0.4543
+Epoch 16/20, Train Loss: 0.4802, Val Loss: 0.4436
+Epoch 17/20, Train Loss: 0.4788, Val Loss: 0.4571
+Epoch 18/20, Train Loss: 0.4753, Val Loss: 0.4483
+Epoch 19/20, Train Loss: 0.4743, Val Loss: 0.4379
+Epoch 20/20, Train Loss: 0.4735, Val Loss: 0.4650
+#TRAIN_METRICS#{""epochs"": 20, ""train_loss"": [3.6247557940483093, 0.9490889983177185, 0.7562765650749207, 0.6625822710990906, 0.6167947359085083, 0.5551684181690216, 0.5411423568725586, 0.5308654470443726, 0.5210214347839356, 0.5043281445503235, 0.4980014867782593, 0.49484458899497985, 0.4921357536315918, 0.4841651155948639, 0.48382730889320374, 0.4801887331008911, 0.47876864886283876, 0.4753106698989868, 0.4742916247844696, 0.47351614117622376], ""val_loss"": [0.9896012768149376, 0.7210167087614536, 0.6666603274643421, 0.5923614166676998, 0.5362850427627563, 0.5049678273499012, 0.49917967431247234, 0.5146153271198273, 0.4747096672654152, 0.4529297985136509, 0.47318844124674797, 0.4683408495038748, 0.459153825417161, 0.45066387951374054, 0.4543440267443657, 0.4436426777392626, 0.45711320638656616, 0.44831785559654236, 0.43786328844726086, 0.4650397840887308], ""train_acc"": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], ""val_acc"": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]}
+#PROC_METRICS#{""cpu_seconds_user"": 919.77, ""cpu_seconds_sys"": 220.43, ""max_rss_kb"": 5935032, ""training_time_s"": 946.425, ""source"": ""proc_tree_ticks""}
+#GPU_METRICS#{""cuda_available"": true, ""name"": ""NVIDIA GeForce RTX 3050 Ti Laptop GPU"", ""total_mb"": 4096, ""peak_used_mb"": 371, ""avg_used_mb"": 365.512, ""avg_util_pct"": 26.362, ""peak_util_pct"": 80, ""per_process_gpu_mem"": false}
+Hash manifest written â†’ mistralai_mistral-large-2512_2327_5_manifest.sha256
+","resource_monitor.py: WARNING: cgroup v2 not detected; metrics may be degraded.
+",957.5202411000064,5935032
+C:\Users\yoris\projects\Benchmark\outputs\01-10\TRACKFORMERS\Q1\openai_gpt-5.1-codex-max\script_openai_gpt-5.1-codex-max_0020_3.py,True,0,"argv0=/usr/local/bin/train.sh
+argv1=outputs/01-10/TRACKFORMERS/Q1/openai_gpt-5.1-codex-max/script_openai_gpt-5.1-codex-max_0020_3.py
+argv2=
+#TRAIN_METRICS#{""epochs"": 10, ""train_loss"": [53.78656512550491, 42.158638330873515, 35.69099319099995, 31.331019768940504, 27.92966312787619, 25.458588853556375, 23.658263106727965, 22.37056210087637, 21.425825577247082, 20.667224427726456], ""val_loss"": [40.72216161176677, 32.44626392334129, 27.454101995661297, 23.640265341525026, 20.76038447780189, 18.66167302960077, 17.185302265655686, 16.074258476565717, 15.32989540842461, 14.679920803601037], ""train_acc"": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], ""val_acc"": [0.05054247573543289, 0.07975486619139863, 0.04571646610369056, 0.035060888544620014, 0.03736040570307773, 0.04143632844877681, 0.04879807830026885, 0.053003610464879225, 0.058689318676232435, 0.06405761531700845]}
+#PROC_METRICS#{""cpu_seconds_user"": 2731.14, ""cpu_seconds_sys"": 401.6, ""max_rss_kb"": 1708696, ""training_time_s"": 3137.509, ""source"": ""proc_tree_ticks""}
+#GPU_METRICS#{""cuda_available"": true, ""name"": ""NVIDIA GeForce RTX 3050 Ti Laptop GPU"", ""total_mb"": 4096, ""peak_used_mb"": 147, ""avg_used_mb"": 146.634, ""avg_util_pct"": 35.513, ""peak_util_pct"": 53, ""per_process_gpu_mem"": false}
+Hash manifest written â†’ openai_gpt-5.1-codex-max_0020_3_manifest.sha256
+","resource_monitor.py: WARNING: cgroup v2 not detected; metrics may be degraded.
+",3148.664749100004,1708696
+C:\Users\yoris\projects\Benchmark\outputs\01-10\TRACKFORMERS\Q1\openai_gpt-5.2-pro\script_openai_gpt-5.2-pro_0036_1.py,True,0,"argv0=/usr/local/bin/train.sh
+argv1=outputs/01-10/TRACKFORMERS/Q1/openai_gpt-5.2-pro/script_openai_gpt-5.2-pro_0036_1.py
+argv2=
+#TRAIN_METRICS#{""epochs"": 6, ""train_loss"": [0.010888262495398522, 0.010352235620841383, 0.010304002594202756, 0.01030014550499618, 0.010299567578360438, 0.010298844203352928], ""val_loss"": [0.010625028342474252, 0.010480698256287724, 0.010467223532032222, 0.010465520317666233, 0.010464307240908965, 0.010462789883604273], ""train_acc"": [0.30189716367748215, 0.29530273981074895, 0.289084348218313, 0.3001303581013726, 0.2860086357094159, 0.29670551044443066], ""val_acc"": [0.3051461259889742, 0.30046363573455126, 0.29993310728207967, 0.29708055574777603, 0.29708055574777603, 0.2984722318332449]}
+#PROC_METRICS#{""cpu_seconds_user"": 1699.82, ""cpu_seconds_sys"": 218.03, ""max_rss_kb"": 1856912, ""training_time_s"": 1922.366, ""source"": ""proc_tree_ticks""}
+#GPU_METRICS#{""cuda_available"": true, ""name"": ""NVIDIA GeForce RTX 3050 Ti Laptop GPU"", ""total_mb"": 4096, ""peak_used_mb"": 135, ""avg_used_mb"": 134.457, ""avg_util_pct"": 34.463, ""peak_util_pct"": 42, ""per_process_gpu_mem"": false}
+Hash manifest written â†’ openai_gpt-5.2-pro_0036_1_manifest.sha256
+","resource_monitor.py: WARNING: cgroup v2 not detected; metrics may be degraded.
+",1933.8503646000026,1856912
+C:\Users\yoris\projects\Benchmark\outputs\01-10\TRACKFORMERS\Q1\x-ai_grok-code-fast-1\script_x-ai_grok-code-fast-1_2329_2.py,True,0,"argv0=/usr/local/bin/train.sh
+argv1=outputs/01-10/TRACKFORMERS/Q1/x-ai_grok-code-fast-1/script_x-ai_grok-code-fast-1_2329_2.py
+argv2=
+Epoch 1: Train Loss 246.4378, Train Acc 0.0229, Val Loss 241.3200, Val Acc 0.0237
+Epoch 2: Train Loss 245.5838, Train Acc 0.0229, Val Loss 241.3495, Val Acc 0.0253
+Epoch 3: Train Loss 245.5037, Train Acc 0.0226, Val Loss 241.3135, Val Acc 0.0234
+Epoch 4: Train Loss 245.4609, Train Acc 0.0229, Val Loss 241.3415, Val Acc 0.0233
+Epoch 5: Train Loss 245.4252, Train Acc 0.0232, Val Loss 241.3200, Val Acc 0.0244
+Epoch 6: Train Loss 245.3905, Train Acc 0.0232, Val Loss 241.2828, Val Acc 0.0233
+Epoch 7: Train Loss 245.3737, Train Acc 0.0231, Val Loss 241.2880, Val Acc 0.0241
+Epoch 8: Train Loss 245.3744, Train Acc 0.0234, Val Loss 241.2918, Val Acc 0.0225
+Epoch 9: Train Loss 245.3674, Train Acc 0.0231, Val Loss 241.2837, Val Acc 0.0232
+Epoch 10: Train Loss 245.3589, Train Acc 0.0235, Val Loss 241.2769, Val Acc 0.0251
+#TRAIN_METRICS#{""epochs"": 10, ""train_loss"": [246.43776618109808, 245.5838365100679, 245.50370800684368, 245.46093241373697, 245.42520904541016, 245.390496511308, 245.37366231282553, 245.37440757145959, 245.36736636691623, 245.35886928013392], ""val_loss"": [241.32003021240234, 241.3495044708252, 241.31352424621582, 241.3415126800537, 241.3200168609619, 241.2827548980713, 241.2880153656006, 241.29179573059082, 241.28368377685547, 241.27691268920898], ""train_acc"": [0.02290405524537173, 0.022928298560094033, 0.022620481927710843, 0.022934910373200116, 0.023186893917131943, 0.023169262415515722, 0.023053188363208934, 0.02341536879224214, 0.0231090214516603, 0.02349911842491919], ""val_acc"": [0.023738767631949063, 0.025298205763447948, 0.023373917955900266, 0.023273878528596564, 0.024380196901131624, 0.023273878528596564, 0.02409773263580352, 0.022450024421389606, 0.023156185084709856, 0.025068703547868866]}
+#PROC_METRICS#{""cpu_seconds_user"": 438.17, ""cpu_seconds_sys"": 53.54, ""max_rss_kb"": 1350020, ""training_time_s"": 496.878, ""source"": ""proc_tree_ticks""}
+#GPU_METRICS#{""cuda_available"": true, ""name"": ""NVIDIA GeForce RTX 3050 Ti Laptop GPU"", ""total_mb"": 4096, ""peak_used_mb"": 557, ""avg_used_mb"": 547.195, ""avg_util_pct"": 34.566, ""peak_util_pct"": 65, ""per_process_gpu_mem"": false}
+Hash manifest written â†’ x-ai_grok-code-fast-1_2329_2_manifest.sha256
+","resource_monitor.py: WARNING: cgroup v2 not detected; metrics may be degraded.
+",507.10590079998656,1350020

@@ -1,0 +1,89 @@
+{
+  "LLMGeneration": {
+    "model": "mistralai/devstral-2512:free",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 4321,
+    "prompt_chars": 16421,
+    "response_tokens": 2125,
+    "response_chars": 8514,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0,
+    "generation_ms": 47083,
+    "code": "# ---------- IMPORTS ----------\nimport math\nfrom sklearn.preprocessing import StandardScaler\nfrom torch_geometric.data import Data\nfrom torch_geometric.nn import TransformerConv, global_mean_pool\nfrom torch.nn import Linear, ReLU, Dropout, BatchNorm1d, Sequential, Sigmoid\nfrom torch.optim import Adam\nfrom torch.optim.lr_scheduler import ReduceLROnPlateau\nfrom sklearn.metrics import roc_auc_score\n\n# ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.scaler = StandardScaler()\n        self.global_scaler = StandardScaler()\n        self.obj_scaler = StandardScaler()\n\n    def make_loader_cfg(self) -> dict:\n        return {\n            \"dataset_builder\": \"llm_script:FourTopsDataset\",\n            \"dataset_kwargs\": {},\n            \"loader_class\": \"torch_geometric.loader:DataLoader\",\n            \"batch_size\": 512,\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": False,\n            \"collate\": None,\n            \"extra_loader_kwargs\": {},\n            \"eval_overrides\": {\"shuffle\": False, \"batch_size\": 512}\n        }\n\n    def fit(self, X, y=None):\n        # Separate global and object features\n        global_features = X[:, :2]  # E_T_miss, phi_Et_miss\n        obj_features = X[:, 2:].reshape(-1, 18, 5)[:, :, 1:]  # Skip obj_id, keep E, pT, eta, phi\n\n        # Flatten object features for scaling\n        obj_flat = obj_features.reshape(-1, 4)\n        self.global_scaler.fit(global_features)\n        self.obj_scaler.fit(obj_flat)\n        return self\n\n    def transform(self, X):\n        # Apply scaling\n        global_features = X[:, :2]\n        obj_features = X[:, 2:].reshape(-1, 18, 5)\n\n        # Scale global features\n        global_scaled = self.global_scaler.transform(global_features)\n\n        # Extract and scale object features (skip obj_id)\n        obj_ids = obj_features[:, :, 0].long()\n        obj_kin = obj_features[:, :, 1:].reshape(-1, 4)\n        obj_kin_scaled = self.obj_scaler.transform(obj_kin).reshape(-1, 18, 4)\n\n        # Create PyG Data objects\n        data_list = []\n        for i in range(X.shape[0]):\n            # Get non-zero objects (non-padded)\n            mask = obj_ids[i] != 0\n            num_objects = mask.sum().item()\n\n            if num_objects == 0:\n                # Handle empty events (shouldn't happen but just in case)\n                x = torch.zeros(1, 4)\n                edge_index = torch.empty((2, 0), dtype=torch.long)\n            else:\n                # Object features (E, pT, eta, phi)\n                x = torch.tensor(obj_kin_scaled[i][mask], dtype=torch.float32)\n\n                # Create complete graph edges\n                edges = []\n                for src in range(num_objects):\n                    for dst in range(num_objects):\n                        if src != dst:\n                            edges.append([src, dst])\n                edge_index = torch.tensor(edges, dtype=torch.long).t().contiguous()\n\n            # Global features\n            global_feat = torch.tensor(global_scaled[i], dtype=torch.float32)\n\n            # Create Data object\n            data = Data(\n                x=x,\n                edge_index=edge_index,\n                global_feat=global_feat,\n                y=torch.tensor([int(y[i])], dtype=torch.long) if y is not None else torch.tensor([0], dtype=torch.long)\n            )\n            data_list.append(data)\n\n        return data_list\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# ---------- MODEL ARCHITECTURE ----------\nclass BinaryClassifier(nn.Module):\n    def __init__(self, sample_object):\n        super().__init__()\n        # Extract dimensions from sample\n        num_node_features = sample_object.x.shape[1]  # Should be 4 (E, pT, eta, phi)\n        num_global_features = sample_object.global_feat.shape[0]  # Should be 2\n\n        # Node feature processing\n        self.node_encoder = Sequential(\n            Linear(num_node_features, 64),\n            ReLU(),\n            BatchNorm1d(64),\n            Dropout(0.2)\n        )\n\n        # Graph layers\n        self.conv1 = TransformerConv(64, 64, heads=4, dropout=0.2)\n        self.conv2 = TransformerConv(64*4, 64, heads=4, dropout=0.2)\n        self.conv3 = TransformerConv(64*4, 64, heads=4, dropout=0.2)\n\n        # Global feature processing\n        self.global_encoder = Sequential(\n            Linear(num_global_features, 32),\n            ReLU(),\n            BatchNorm1d(32),\n            Dropout(0.2)\n        )\n\n        # Combined processing\n        self.combined = Sequential(\n            Linear(64 + 32, 128),\n            ReLU(),\n            BatchNorm1d(128),\n            Dropout(0.3),\n            Linear(128, 64),\n            ReLU(),\n            BatchNorm1d(64),\n            Dropout(0.3),\n            Linear(64, 1)\n        )\n\n    def forward(self, data):\n        # Process node features\n        x = self.node_encoder(data.x)\n\n        # Graph convolutions\n        x = self.conv1(x, data.edge_index)\n        x = ReLU()(x)\n        x = self.conv2(x, data.edge_index)\n        x = ReLU()(x)\n        x = self.conv3(x, data.edge_index)\n        x = ReLU()(x)\n\n        # Global pooling\n        x = global_mean_pool(x, data.batch)\n\n        # Process global features\n        global_feat = self.global_encoder(data.global_feat)\n\n        # Combine features\n        combined = torch.cat([x, global_feat], dim=1)\n        out = self.combined(combined)\n\n        return out.squeeze(-1)\n\ndef make_model(example_object):\n    return BinaryClassifier(example_object)\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 50\n\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    device = torch.device(\"cuda\" if torch.cuda.is_available() else \"cpu\")\n    model = model.to(device)\n\n    criterion = nn.BCEWithLogitsLoss()\n    optimizer = Adam(model.parameters(), lr=0.001, weight_decay=1e-5)\n    scheduler = ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=5, verbose=True)\n\n    best_auc = 0\n    best_model = None\n\n    train_loss_history = []\n    val_loss_history = []\n    train_acc_history = []\n    val_acc_history = []\n\n    for epoch in range(epochs):\n        # Training phase\n        model.train()\n        train_loss = 0\n        train_preds = []\n        train_targets = []\n\n        for data in train_loader:\n            data = data.to(device)\n            optimizer.zero_grad()\n\n            out = model(data)\n            loss = criterion(out, data.y.float())\n\n            loss.backward()\n            optimizer.step()\n\n            train_loss += loss.item() * data.num_graphs\n            train_preds.append(out.detach().cpu())\n            train_targets.append(data.y.float().detach().cpu())\n\n        # Validation phase\n        model.eval()\n        val_loss = 0\n        val_preds = []\n        val_targets = []\n\n        with torch.no_grad():\n            for data in val_loader:\n                data = data.to(device)\n                out = model(data)\n                loss = criterion(out, data.y.float())\n\n                val_loss += loss.item() * data.num_graphs\n                val_preds.append(out.detach().cpu())\n                val_targets.append(data.y.float().detach().cpu())\n\n        # Calculate metrics\n        train_preds = torch.cat(train_preds)\n        train_targets = torch.cat(train_targets)\n        val_preds = torch.cat(val_preds)\n        val_targets = torch.cat(val_targets)\n\n        train_auc = roc_auc_score(train_targets, torch.sigmoid(train_preds))\n        val_auc = roc_auc_score(val_targets, torch.sigmoid(val_preds))\n\n        train_loss = train_loss / len(train_loader.dataset)\n        val_loss = val_loss / len(val_loader.dataset)\n\n        train_loss_history.append(train_loss)\n        val_loss_history.append(val_loss)\n        train_acc_history.append(train_auc)\n        val_acc_history.append(val_auc)\n\n        # Update scheduler\n        scheduler.step(val_auc)\n\n        # Early stopping and model saving\n        if val_auc > best_auc:\n            best_auc = val_auc\n            best_model = model.state_dict()\n            patience = 0\n        else:\n            patience += 1\n            if patience >= 10:\n                print(f\"Early stopping at epoch {epoch}\")\n                break\n\n        print(f'Epoch {epoch+1}/{epochs}, Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}, '\n              f'Train AUC: {train_auc:.4f}, Val AUC: {val_auc:.4f}')\n\n    # Load best model\n    model.load_state_dict(best_model)\n\n    return model, train_loss_history, val_loss_history, train_acc_history, val_acc_history",
+    "reasoning": "",
+    "Outer_attempt": 5
+  },
+  "StaticChecks": {
+    "__timestamp": "2026-01-10T20:54:42Z",
+    "PyLint": {
+      "passed": false,
+      "messages": [
+        {
+          "type": "error",
+          "module": "script_mistralai_devstral-2512_free_2154_5",
+          "obj": "MyPreprocessor.transform",
+          "line": 143,
+          "column": 65,
+          "endLine": 143,
+          "endColumn": 66,
+          "path": "outputs\\01-10\\FOURTOPS\\Q2\\script_mistralai_devstral-2512_free_2154_5.py",
+          "symbol": "undefined-variable",
+          "message": "Undefined variable 'y'",
+          "message-id": "E0602"
+        },
+        {
+          "type": "error",
+          "module": "script_mistralai_devstral-2512_free_2154_5",
+          "obj": "MyPreprocessor.transform",
+          "line": 143,
+          "column": 36,
+          "endLine": 143,
+          "endColumn": 37,
+          "path": "outputs\\01-10\\FOURTOPS\\Q2\\script_mistralai_devstral-2512_free_2154_5.py",
+          "symbol": "undefined-variable",
+          "message": "Undefined variable 'y'",
+          "message-id": "E0602"
+        }
+      ]
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2026-01-10T20:54:42Z",
+        "metrics": {
+          ".\\outputs\\01-10\\FOURTOPS\\Q2\\script_mistralai_devstral-2512_free_2154_5.py": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 275,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 0,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 0,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 275,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  }
+}

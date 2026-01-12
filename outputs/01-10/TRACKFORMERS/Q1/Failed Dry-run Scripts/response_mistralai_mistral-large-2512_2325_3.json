@@ -1,0 +1,98 @@
+{
+  "LLMGeneration": {
+    "model": "mistralai/mistral-large-2512",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 4412,
+    "prompt_chars": 17811,
+    "response_tokens": 2623,
+    "response_chars": 10580,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.0061405,
+    "generation_ms": 46954,
+    "code": "# ---------- IMPORTS ----------\nimport torch\nimport torch.nn as nn\nimport torch.nn.functional as F\nimport numpy as np\nfrom torch_geometric.nn import MessagePassing\nfrom torch_geometric.utils import add_self_loops, degree\nfrom torch_scatter import scatter_add\nfrom sklearn.preprocessing import StandardScaler\nfrom scipy.spatial import KDTree\n\n#  -------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.scaler = StandardScaler()\n        self.layer_mean = None\n        self.layer_std = None\n\n    def make_loader_cfg(self) -> dict:\n        return {\n            \"dataset_builder\": \"utils.llm_io:EventDataset\",\n            \"dataset_kwargs\": {},\n\n            \"loader_class\": \"torch.utils.data:DataLoader\",\n            \"batch_size\": 32,\n            \"shuffle\": True,\n            \"num_workers\": 4,\n            \"pin_memory\": True,\n\n            \"collate\": \"ragged_xy\",\n            \"extra_loader_kwargs\": {},\n\n            \"eval_overrides\": {\"shuffle\": False, \"num_workers\": 0}\n        }\n\n    def fit(self, Xs):\n        # Compute global statistics for normalization\n        all_X = np.concatenate(Xs, axis=0)\n        self.scaler.fit(all_X[:, :3])  # Only scale r, theta, z\n\n        # Compute layer statistics\n        layers = all_X[:, 3]\n        self.layer_mean = np.mean(layers)\n        self.layer_std = np.std(layers)\n\n        return self\n\n    def transform(self, X):\n        # X shape: [N_hits, 4]\n        X = X.numpy() if isinstance(X, torch.Tensor) else X\n\n        # Normalize r, theta, z\n        X[:, :3] = self.scaler.transform(X[:, :3])\n\n        # Normalize layer_id\n        if self.layer_std > 0:\n            X[:, 3] = (X[:, 3] - self.layer_mean) / self.layer_std\n\n        return torch.from_numpy(X).float()\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# ---------- MODEL ARCHITECTURE ----------\nclass EdgeConv(MessagePassing):\n    def __init__(self, in_channels, out_channels):\n        super().__init__(aggr='max')\n        self.mlp = nn.Sequential(\n            nn.Linear(2 * in_channels, out_channels),\n            nn.ReLU(),\n            nn.Linear(out_channels, out_channels)\n        )\n\n    def forward(self, x, edge_index):\n        return self.propagate(edge_index, x=x)\n\n    def message(self, x_i, x_j):\n        tmp = torch.cat([x_i, x_j - x_i], dim=1)\n        return self.mlp(tmp)\n\nclass HitClassifier(nn.Module):\n    def __init__(self, example_batch_x):\n        super().__init__()\n        # Determine input dimension from example batch\n        input_dim = example_batch_x[0].shape[1] if isinstance(example_batch_x, list) else example_batch_x.shape[1]\n\n        # Graph construction parameters\n        self.k = 16  # Number of nearest neighbors\n        self.edge_threshold = 0.5  # Distance threshold for edge creation\n\n        # Network architecture\n        self.edge_conv1 = EdgeConv(input_dim, 64)\n        self.edge_conv2 = EdgeConv(64, 64)\n        self.edge_conv3 = EdgeConv(64, 64)\n\n        self.lin1 = nn.Linear(64, 64)\n        self.lin2 = nn.Linear(64, 64)\n        self.lin3 = nn.Linear(64, 32)\n\n        # Output layer for track classification\n        self.output = nn.Linear(32, 1)  # Will use sigmoid for clustering\n\n        # Track embedding dimension\n        self.embedding_dim = 32\n\n    def build_graph(self, x):\n        # x shape: [N_hits, F]\n        N = x.size(0)\n\n        # Build KDTree for efficient nearest neighbor search\n        coords = x[:, :3].cpu().numpy()\n        tree = KDTree(coords)\n\n        # Find k-nearest neighbors\n        distances, indices = tree.query(coords, k=self.k+1)  # +1 to include self\n        indices = indices[:, 1:]  # Remove self\n        distances = distances[:, 1:]\n\n        # Create edge_index\n        row = np.repeat(np.arange(N), self.k)\n        col = indices.flatten()\n        edge_index = torch.tensor(np.stack([row, col]), dtype=torch.long, device=x.device)\n\n        # Filter edges by distance threshold\n        mask = distances.flatten() < self.edge_threshold\n        edge_index = edge_index[:, mask]\n\n        return edge_index\n\n    def forward(self, batch_x):\n        # batch_x is list of tensors [N_i, F]\n        all_x = []\n        all_batch = []\n        ptr = 0\n\n        # Process each event in the batch\n        for x in batch_x:\n            # Build graph for this event\n            edge_index = self.build_graph(x)\n\n            # Apply EdgeConv layers\n            x = F.relu(self.edge_conv1(x, edge_index))\n            x = F.relu(self.edge_conv2(x, edge_index))\n            x = F.relu(self.edge_conv3(x, edge_index))\n\n            # Global pooling (mean)\n            x = scatter_add(x, torch.zeros(x.size(0), dtype=torch.long, device=x.device), dim=0) / x.size(0)\n\n            # Store results\n            all_x.append(x)\n            all_batch.append(torch.full((x.size(0),), ptr, device=x.device))\n            ptr += 1\n\n        # Combine all events\n        x = torch.cat(all_x, dim=0)\n        batch = torch.cat(all_batch, dim=0)\n\n        # Apply final MLP\n        x = F.relu(self.lin1(x))\n        x = F.relu(self.lin2(x))\n        x = F.relu(self.lin3(x))\n\n        return x\n\n    def predict_labels(self, batch_x):\n        # Get embeddings\n        embeddings = self.forward(batch_x)\n\n        # Convert to numpy for clustering\n        embeddings_np = embeddings.detach().cpu().numpy()\n\n        # Cluster using HDBSCAN (will be done per event)\n        from hdbscan import HDBSCAN\n        labels_list = []\n\n        ptr = 0\n        for x in batch_x:\n            N = x.size(0)\n            if N == 0:\n                labels_list.append(torch.empty(0, dtype=torch.long, device=x.device))\n                continue\n\n            # Cluster this event\n            clusterer = HDBSCAN(\n                min_cluster_size=4,\n                min_samples=1,\n                cluster_selection_epsilon=0.5,\n                metric='euclidean'\n            )\n            labels = clusterer.fit_predict(embeddings_np[ptr:ptr+N])\n\n            # Convert to torch tensor and adjust labels\n            labels = torch.tensor(labels, dtype=torch.long, device=x.device)\n            labels[labels == -1] = -1  # Keep noise as -1\n\n            # Remap labels to be contiguous\n            unique_labels = torch.unique(labels)\n            unique_labels = unique_labels[unique_labels != -1]\n            for new_label, old_label in enumerate(unique_labels):\n                labels[labels == old_label] = new_label\n\n            labels_list.append(labels)\n            ptr += N\n\n        return labels_list\n\ndef make_model(example_batch_x):\n    return HitClassifier(example_batch_x)\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 20\n\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    device = next(model.parameters()).device\n    optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-4)\n    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', patience=3, factor=0.5, verbose=True)\n\n    best_val_acc = 0\n    train_losses = []\n    val_losses = []\n    train_accs = []\n    val_accs = []\n\n    for epoch in range(epochs):\n        model.train()\n        total_loss = 0\n        total_correct = 0\n        total_samples = 0\n\n        for batch_idx, (Xs, ys) in enumerate(train_loader):\n            Xs = [x.to(device) for x in Xs]\n            ys = [y.to(device) for y in ys]\n\n            optimizer.zero_grad()\n\n            # Forward pass\n            embeddings = model(Xs)\n\n            # Compute loss (contrastive learning)\n            loss = 0\n            ptr = 0\n            for x, y in zip(Xs, ys):\n                N = x.size(0)\n                if N == 0:\n                    continue\n\n                # Get embeddings for this event\n                emb = embeddings[ptr:ptr+N]\n                y_event = y\n\n                # Create positive and negative pairs\n                pos_mask = y_event.unsqueeze(1) == y_event.unsqueeze(0)\n                pos_mask.fill_diagonal_(False)\n\n                if pos_mask.sum() > 0:\n                    pos_pairs = emb[pos_mask]\n                    pos_dist = F.pairwise_distance(pos_pairs[:, 0], pos_pairs[:, 1])\n\n                    # Negative pairs (different tracks)\n                    neg_mask = y_event.unsqueeze(1) != y_event.unsqueeze(0)\n                    neg_mask.fill_diagonal_(False)\n\n                    if neg_mask.sum() > 0:\n                        neg_pairs = emb[neg_mask]\n                        neg_dist = F.pairwise_distance(neg_pairs[:, 0], neg_pairs[:, 1])\n\n                        # Triplet loss\n                        margin = 1.0\n                        loss += F.relu(pos_dist.mean() - neg_dist.mean() + margin)\n\n                ptr += N\n\n            if loss > 0:\n                loss.backward()\n                optimizer.step()\n                total_loss += loss.item()\n\n        # Validation\n        model.eval()\n        val_loss = 0\n        val_correct = 0\n        val_samples = 0\n\n        with torch.no_grad():\n            for Xs, ys in val_loader:\n                Xs = [x.to(device) for x in Xs]\n                ys = [y.to(device) for y in ys]\n\n                # Get predictions\n                pred_labels = model.predict_labels(Xs)\n\n                # Compute accuracy (simplified - real metric is FitAccuracy)\n                for pred, true in zip(pred_labels, ys):\n                    if pred.size(0) == 0:\n                        continue\n\n                    # Simple accuracy (not the real metric)\n                    correct = (pred == true).sum().item()\n                    val_correct += correct\n                    val_samples += pred.size(0)\n\n        # Compute metrics\n        train_loss = total_loss / len(train_loader)\n        val_loss = val_loss / len(val_loader) if len(val_loader) > 0 else 0\n        train_acc = 0  # Not computed for training\n        val_acc = val_correct / val_samples if val_samples > 0 else 0\n\n        # Update learning rate\n        scheduler.step(val_acc)\n\n        # Store metrics\n        train_losses.append(train_loss)\n        val_losses.append(val_loss)\n        train_accs.append(train_acc)\n        val_accs.append(val_acc)\n\n        print(f'Epoch {epoch+1}/{epochs}, Train Loss: {train_loss:.4f}, Val Acc: {val_acc:.4f}')\n\n        # Early stopping\n        if val_acc > best_val_acc:\n            best_val_acc = val_acc\n            best_model = model.state_dict()\n        else:\n            if epoch > 10 and val_acc < best_val_acc * 0.95:\n                print(\"Early stopping\")\n                break\n\n    # Load best model\n    model.load_state_dict(best_model)\n\n    return model, train_losses, val_losses, train_accs, val_accs",
+    "reasoning": "",
+    "Outer_attempt": 3
+  },
+  "StaticChecks": {
+    "__timestamp": "2026-01-10T22:25:59Z",
+    "PyLint": {
+      "passed": true,
+      "messages": [
+        {
+          "type": "error",
+          "module": "script_mistralai_mistral-large-2512_2325_3",
+          "obj": "train_model",
+          "line": 308,
+          "column": 31,
+          "endLine": 308,
+          "endColumn": 84,
+          "path": "outputs\\01-10\\TRACKFORMERS\\Q1\\script_mistralai_mistral-large-2512_2325_3.py",
+          "symbol": "not-callable",
+          "message": "F.pairwise_distance is not callable",
+          "message-id": "E1102"
+        },
+        {
+          "type": "error",
+          "module": "script_mistralai_mistral-large-2512_2325_3",
+          "obj": "train_model",
+          "line": 316,
+          "column": 35,
+          "endLine": 316,
+          "endColumn": 88,
+          "path": "outputs\\01-10\\TRACKFORMERS\\Q1\\script_mistralai_mistral-large-2512_2325_3.py",
+          "symbol": "not-callable",
+          "message": "F.pairwise_distance is not callable",
+          "message-id": "E1102"
+        }
+      ]
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2026-01-10T22:25:59Z",
+        "metrics": {
+          ".\\outputs\\01-10\\TRACKFORMERS\\Q1\\script_mistralai_mistral-large-2512_2325_3.py": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 312,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 312,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2026-01-10T22:26:16Z",
+    "passed": false,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/01-10/TRACKFORMERS/Q1/script_mistralai_mistral-large-2512_2325_3.py\nargv2=--dryrun\n#PROC_METRICS#{\"cpu_seconds_user\": 8.51, \"cpu_seconds_sys\": 0.7, \"max_rss_kb\": 2753548, \"training_time_s\": 10.48, \"source\": \"proc_tree_ticks\"}\n#GPU_METRICS#{\"cuda_available\": true, \"name\": \"NVIDIA GeForce RTX 3050 Ti Laptop GPU\", \"total_mb\": 4096, \"peak_used_mb\": 129, \"avg_used_mb\": 29.083, \"avg_util_pct\": 0.0, \"peak_util_pct\": 0, \"per_process_gpu_mem\": false}\n",
+      "stderr": "resource_monitor.py: WARNING: cgroup v2 not detected; metrics may be degraded.\n/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.\n  warnings.warn(\n/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.\n  warnings.warn(\n/opt/venv/lib/python3.12/site-packages/sklearn/utils/deprecation.py:132: FutureWarning: 'force_all_finite' was renamed to 'ensure_all_finite' in 1.6 and will be removed in 1.8.\n  warnings.warn(\nTraceback (most recent call last):\n  File \"/workspace/challenges/TRACKFORMERS/utils_trackformers.py\", line 133, in build_trackformers_model\n    out = model.predict_labels(Xs)\n          ^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/outputs/01-10/TRACKFORMERS/Q1/script_mistralai_mistral-large-2512_2325_3.py\", line 241, in predict_labels\n    labels = clusterer.fit_predict(embeddings_np[ptr:ptr+N])\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/hdbscan/hdbscan_.py\", line 1312, in fit_predict\n    self.fit(X)\n  File \"/opt/venv/lib/python3.12/site-packages/hdbscan/hdbscan_.py\", line 1232, in fit\n    X = check_array(X, accept_sparse=\"csr\", force_all_finite=False)\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/sklearn/utils/validation.py\", line 1128, in check_array\n    raise ValueError(\nValueError: Found array with 0 sample(s) (shape=(0, 32)) while a minimum of 1 is required.\n\nThe above exception was the direct cause of the following exception:\n\nTraceback (most recent call last):\n  File \"/workspace/outputs/01-10/TRACKFORMERS/Q1/script_mistralai_mistral-large-2512_2325_3.py\", line 476, in <module>\n    _run(dryrun=\"--dryrun\" in sys.argv)\n  File \"/workspace/outputs/01-10/TRACKFORMERS/Q1/script_mistralai_mistral-large-2512_2325_3.py\", line 411, in _run\n    model = build_trackformers_model(mode, first_batch, make_model, device)\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/utils/suffix_utils.py\", line 204, in build_trackformers_model\n    return _impl(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/challenges/TRACKFORMERS/utils_trackformers.py\", line 135, in build_trackformers_model\n    raise RuntimeError(\"predict_labels() crashed in torch_ragged_xy lane.\") from e\nRuntimeError: predict_labels() crashed in torch_ragged_xy lane.\n"
+    },
+    "return_code": 1
+  }
+}

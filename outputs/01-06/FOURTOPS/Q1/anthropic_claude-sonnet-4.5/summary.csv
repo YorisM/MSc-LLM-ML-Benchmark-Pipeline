@@ -1,0 +1,25 @@
+script,success,return_code,stdout,stderr,duration_s,max_rss_kb
+outputs\01-06\FOURTOPS\Q1\anthropic_claude-sonnet-4.5\script_anthropic_claude-sonnet-4.5_2321_1.py,True,0,"argv0=/usr/local/bin/train.sh
+argv1=outputs/01-06/FOURTOPS/Q1/anthropic_claude-sonnet-4.5/script_anthropic_claude-sonnet-4.5_2321_1.py
+argv2=
+Epoch 1/15 - Train Loss: 0.6712, Train Acc: 0.5980, Val Loss: 0.6641, Val Acc: 0.6078
+Epoch 2/15 - Train Loss: 0.6667, Train Acc: 0.6084, Val Loss: 0.6630, Val Acc: 0.6122
+Epoch 3/15 - Train Loss: 0.6656, Train Acc: 0.6092, Val Loss: 0.6634, Val Acc: 0.6121
+Epoch 4/15 - Train Loss: 0.6648, Train Acc: 0.6106, Val Loss: 0.6624, Val Acc: 0.6126
+Epoch 5/15 - Train Loss: 0.6636, Train Acc: 0.6117, Val Loss: 0.6580, Val Acc: 0.6137
+Epoch 6/15 - Train Loss: 0.6582, Train Acc: 0.6181, Val Loss: 0.6403, Val Acc: 0.6436
+Epoch 7/15 - Train Loss: 0.6318, Train Acc: 0.6471, Val Loss: 0.6053, Val Acc: 0.6741
+Epoch 8/15 - Train Loss: 0.6181, Train Acc: 0.6623, Val Loss: 0.6082, Val Acc: 0.6715
+Epoch 9/15 - Train Loss: 0.6145, Train Acc: 0.6652, Val Loss: 0.6085, Val Acc: 0.6654
+Epoch 10/15 - Train Loss: 0.6123, Train Acc: 0.6690, Val Loss: 0.6016, Val Acc: 0.6746
+Epoch 11/15 - Train Loss: 0.6111, Train Acc: 0.6687, Val Loss: 0.6040, Val Acc: 0.6715
+Epoch 12/15 - Train Loss: 0.6099, Train Acc: 0.6709, Val Loss: 0.6010, Val Acc: 0.6794
+Epoch 13/15 - Train Loss: 0.6097, Train Acc: 0.6700, Val Loss: 0.6010, Val Acc: 0.6754
+Epoch 14/15 - Train Loss: 0.6086, Train Acc: 0.6718, Val Loss: 0.5979, Val Acc: 0.6817
+Epoch 15/15 - Train Loss: 0.6079, Train Acc: 0.6721, Val Loss: 0.5966, Val Acc: 0.6796
+#TRAIN_METRICS#{""epochs"": 15, ""train_loss"": [0.6712280218813947, 0.666731041935512, 0.6655720314253042, 0.6648115757512031, 0.66355572670204, 0.6582478381039094, 0.6318230609030584, 0.6181329210789842, 0.6145364166506289, 0.6122611041763735, 0.6111236804942197, 0.6099308507993499, 0.6097465814805837, 0.6085728977944755, 0.6078964588783273], ""val_loss"": [0.6641496388078797, 0.6630057818319677, 0.6634168073583803, 0.6623693196899104, 0.6579799362077737, 0.6402748697472648, 0.6052884693320499, 0.60815838969373, 0.6085353506161155, 0.6016014840383691, 0.604036456645058, 0.6009673422942605, 0.6009557674735954, 0.5979077598996285, 0.5966239458565822], ""train_acc"": [0.5980459908051494, 0.6084077845872455, 0.6091816086436561, 0.6105678709907016, 0.6116561903855464, 0.6180619638578646, 0.6470741588284221, 0.662302354163132, 0.6652155741402069, 0.6689522753323927, 0.6687081276354503, 0.6708930426182564, 0.670048870920354, 0.6717579047989506, 0.67210964300641], ""val_acc"": [0.6078061376502135, 0.6122421955175953, 0.6121428807892211, 0.6126394544310921, 0.6136657066242924, 0.6435925447743901, 0.6741483762041911, 0.6714999834475452, 0.66540868010726, 0.6746449498460622, 0.6714999834475452, 0.6794451617174827, 0.6753732578541398, 0.6816631906511735, 0.6796106862647731]}
+#PROC_METRICS#{""cpu_seconds_user"": 1036.1, ""cpu_seconds_sys"": 8.99, ""max_rss_kb"": 1503928, ""training_time_s"": 124.762, ""source"": ""proc_tree_ticks""}
+#GPU_METRICS#{""cuda_available"": true, ""name"": ""NVIDIA GeForce RTX 3050 Ti Laptop GPU"", ""total_mb"": 4096, ""peak_used_mb"": 177, ""avg_used_mb"": 164.891, ""avg_util_pct"": 29.394, ""peak_util_pct"": 46, ""per_process_gpu_mem"": false}
+Hash manifest written â†’ anthropic_claude-sonnet-4.5_2321_1_manifest.sha256
+","resource_monitor.py: WARNING: cgroup v2 not detected; metrics may be degraded.
+",136.8149173999991,1503928
