@@ -1,8 +1,8 @@
-# challenges/TRACKFORMERS/visualise_tracks.py
+# challenges/TRACKFORMERS/misc/visualise_tracks.py
 # Run from repo root (PYTHONPATH configured like your harness does).
 #
 # Example:
-# python challenges/TRACKFORMERS/visualise_tracks.py --model-path "outputs/22-10/TRACKFORMERS/Q1/<model>/<base>_model.pkl" --tag REDVID_10-50_linear_frac0.05 --event-idx 0
+# python challenges/TRACKFORMERS/misc/visualise_tracks.py --model-path "outputs/22-10/TRACKFORMERS/Q1/<model>/<base>_model.pkl" --tag REDVID_10-50_linear_frac0.05 --event-idx 0
 #
 # Notes:
 # - Assumes hit features are [r, theta, z, (optional) layer_id] per hit.
@@ -30,47 +30,20 @@ import matplotlib.pyplot as plt
 import numpy as np
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 from dataclasses import dataclass
-from challenges.TRACKFORMERS.evaluate_trackformers import load_TRACKFORMERS_test, DEFAULT_TAG, fit_accuracy
-from utils.llm_io import _initialize_artefacts
+from challenges.TRACKFORMERS.evaluate_trackformers import artefact_base_from_path, load_TRACKFORMERS_test, DEFAULT_TAG, fit_accuracy
+from utils.llm_io import _initialize_artefacts, detect_and_assert_lane, assert_label_output_by_lane
+from utils.loaderspec import LoaderSpec, enforce_pyg_policy
 
 log = logging.getLogger("visualise_tracks")
 
 
-# Helpers: robust event extraction
-def _as_event_lists(batch_x: Any, batch_y: Any) -> Tuple[List[Any], List[Any]]:
-    """
-    Convert normalise_batch outputs into per-event lists.
-    Mirrors the logic in evaluator.
-    """
-    if isinstance(batch_x, list):
-        xs = batch_x
-        if batch_y is None:
-            ys = [None] * len(xs)
-        elif isinstance(batch_y, list):
-            ys = batch_y
-        elif torch.is_tensor(batch_y) and batch_y.ndim >= 1 and batch_y.shape[0] == len(xs):
-            ys = [batch_y[i] for i in range(len(xs))]
-        else:
-            ys = [batch_y] * len(xs)
-        return xs, ys
-
-    if torch.is_tensor(batch_x):
-        if batch_x.ndim == 0:
-            return [batch_x], [batch_y]
-        B = int(batch_x.shape[0])
-        xs = [batch_x[i] for i in range(B)]
-        if batch_y is None:
-            ys = [None] * B
-        elif torch.is_tensor(batch_y) and batch_y.ndim >= 1 and int(batch_y.shape[0]) == B:
-            ys = [batch_y[i] for i in range(B)]
-        elif isinstance(batch_y, list) and len(batch_y) == B:
-            ys = batch_y
-        else:
-            ys = [batch_y] * B
-        return xs, ys
-
-    # PyG Batch or other object: treat as single event unless your normaliser made it a list
-    return [batch_x], [batch_y]
+def _load_spec_for_model(model_path: str | Path) -> LoaderSpec:
+    base = artefact_base_from_path(model_path)
+    model_dir = Path(model_path).resolve().parent
+    spec_path = model_dir / f"{base}_loaderspec.json"
+    spec = LoaderSpec.from_json(spec_path)
+    spec = enforce_pyg_policy(spec, require_torch_collate=True)
+    return spec
 
 def _move_x_to_device(x: Any, device: torch.device) -> Any:
     if torch.is_tensor(x):
@@ -108,7 +81,6 @@ def _to_numpy_1d_int(x: Any, expected_len: int) -> np.ndarray:
         raise ValueError(f"Pred labels length {arr.shape[0]} != N hits {expected_len}")
     return arr
 
-# Helpers: hit feature extraction
 @dataclass
 class HitView:
     r: np.ndarray
@@ -169,7 +141,6 @@ def extract_hits(x_event: Any, *, feature_order: Tuple[int, int, int, Optional[i
 
     return HitView(r=r, theta=th, z=zz, layer_id=lid)
 
-# Cluster correctness logic
 @dataclass
 class ClusterReport:
     pred_label: int
@@ -254,7 +225,6 @@ def fit_accuracy_hit_mask(pred_lbl: np.ndarray, true_tid: np.ndarray) -> Tuple[n
 
     return counted_mask, int(correct_hits), int(denom), reports
 
-# Plotting
 def plot_event(h: HitView, pred: np.ndarray, true: np.ndarray, counted: np.ndarray, *, title: str = "", max_clusters_legend: int = 12, out: Optional[str] = None) -> None:
     """
     Two projections:
@@ -287,14 +257,26 @@ def plot_event(h: HitView, pred: np.ndarray, true: np.ndarray, counted: np.ndarr
 
     # wrong hits = those that are assigned to a cluster but are not "correct"
     truth = (true != 0)
+    truth_noise = (true == 0)
     pred_noise = (pred == -1)
+
     wrong = truth & (~counted) & (~pred_noise)  # “truth hits not counted by FitAccuracy”
 
-    base = ~pred_noise
-    ax_xy.scatter(h.x[base], h.y[base], c=pred_idx[base], cmap=cmap, s=np.asarray(s)[base] if np.ndim(s) else s,
-                linewidths=0.0, alpha=0.9)
-    ax_zr.scatter(h.z[base], h.r[base], c=pred_idx[base], cmap=cmap, s=np.asarray(s)[base] if np.ndim(s) else s,
-                linewidths=0.0, alpha=0.9)
+    # plot truth-noise separately (so it doesn't steal cluster colours)
+    base = (~pred_noise) & (~truth_noise)
+
+    ax_xy.scatter(h.x[base], h.y[base], c=pred_idx[base], cmap=cmap,
+                s=np.asarray(s)[base] if np.ndim(s) else s, linewidths=0.0, alpha=0.9)
+    ax_zr.scatter(h.z[base], h.r[base], c=pred_idx[base], cmap=cmap,
+                s=np.asarray(s)[base] if np.ndim(s) else s, linewidths=0.0, alpha=0.9)
+
+    if truth_noise.any():
+        ax_xy.scatter(h.x[truth_noise], h.y[truth_noise],
+                    marker=".", alpha=0.25,
+                    s=np.asarray(s)[truth_noise] if np.ndim(s) else s)
+        ax_zr.scatter(h.z[truth_noise], h.r[truth_noise],
+                    marker=".", alpha=0.25,
+                    s=np.asarray(s)[truth_noise] if np.ndim(s) else s)
 
     # predicted noise: show as x markers
     if wrong.any():
@@ -340,14 +322,13 @@ def plot_event(h: HitView, pred: np.ndarray, true: np.ndarray, counted: np.ndarr
     else:
         plt.show()
 
-# Docker
 def _docker_viz_cmd(project_root: Path, artefact_pkl: Path, *, tag: str, event_idx: int, outdir: Optional[Path]) -> list[str]:
     """
     Build docker run command that executes visualise_tracks.py inside llm-evaluation-sandbox:latest for a single model.
     """
 
     artefact_dir        = artefact_pkl.parent                  # .../outputs/<DATE>/<C>/<Q>/<MODEL>
-    viz_script_py = project_root / "challenges/TRACKFORMERS/visualise_tracks.py"
+    viz_script_dir = project_root / "challenges/TRACKFORMERS/misc"
     viz_out = (outdir if outdir is not None else (artefact_dir / "viz"))
     viz_out.mkdir(parents=True, exist_ok=True)
 
@@ -387,7 +368,7 @@ def _docker_viz_cmd(project_root: Path, artefact_pkl: Path, *, tag: str, event_i
         "-v", f"{loaderspec_py}:/workspace/utils/loaderspec.py:ro",
         "-v", f"{suffix_utils_py}:/workspace/utils/suffix_utils.py:ro",
         "-v", f"{artefact_dir}:/workspace/out:ro",
-        "-v", f"{viz_script_py}:/workspace/challenges/TRACKFORMERS/visualise_tracks.py:ro",
+        "-v", f"{viz_script_dir}:/workspace/challenges/TRACKFORMERS/misc:ro",
         "-v", f"{viz_out}:/workspace/viz:rw",
 
         # run python directly
@@ -402,43 +383,6 @@ def _docker_viz_cmd(project_root: Path, artefact_pkl: Path, *, tag: str, event_i
     ]
 
     return cmd
-
-# Main: load one event, predict, summarise, plot
-def iter_events_from_loader(test_loader, device: torch.device) -> Iterable[Tuple[Any, Any]]:
-    """
-    Yield (x_event, y_event) one event at a time from a loader (supports ragged/padded/PyG).
-    """
-    for batch in test_loader:
-        view = normalise_batch(batch, device=device)
-        xs, ys = _as_event_lists(view.batch_x, view.batch_y)
-        for x_e, y_e in zip(xs, ys):
-            yield x_e, y_e
-
-def predict_one_event(model, x_event: Any, device: torch.device) -> Any:
-    """
-    Try calling model on x_event; if it fails, try [x_event].
-    Returns raw model output for that event.
-    """
-    x_dev = _move_x_to_device(x_event, device)
-
-    try:
-        out = model(x_dev)
-    except Exception as e1:
-        # Some models are written to expect a ragged list even for one event.
-        if not isinstance(x_dev, list):
-            try:
-                out = model([x_dev])
-                # if it returns list-of-events, unwrap
-                if isinstance(out, (list, tuple)) and len(out) == 1:
-                    out = out[0]
-            except Exception as e2:
-                raise RuntimeError(
-                    "Model call failed both as model(x_event) and model([x_event]). "
-                    f"First error: {type(e1).__name__}: {e1}\nSecond error: {type(e2).__name__}: {e2}"
-                )
-        else:
-            raise
-    return out
 
 def main():
     ap = argparse.ArgumentParser()
@@ -481,12 +425,50 @@ def main():
     test_loader = load_TRACKFORMERS_test(args.model_path, tag=args.tag)
 
     # Grab Nth event
+    spec = _load_spec_for_model(args.model_path)
+
     target_i = int(args.event_idx)
-    x_e = y_e = None
-    for i, (x, y) in enumerate(iter_events_from_loader(test_loader, device=device)):
-        if i == target_i:
-            x_e, y_e = x, y
-            break
+    x_e = y_e = out_e = None
+    mode = None
+    seen = 0
+
+    with torch.no_grad():
+        for batch in test_loader:
+            if mode is None:
+                mode = detect_and_assert_lane(spec, batch)
+
+            if mode == "torch_ragged_xy":
+                Xs, ys = batch
+                Xs_dev = [x.to(device) for x in Xs]
+
+                out = model.predict_labels(Xs_dev)
+                assert_label_output_by_lane(mode, batch, out, allow_noise_label=True)
+
+                for x_i, y_i, out_i in zip(Xs, ys, out):
+                    if seen == target_i:
+                        x_e, y_e, out_e = x_i, y_i, out_i
+                        break
+                    seen += 1
+
+            elif mode == "pyg_batch":
+                G = batch.to(device)
+                if hasattr(G, "num_graphs") and G.num_graphs != 1:
+                    raise RuntimeError(f"PyG eval expected batch_size=1, got num_graphs={G.num_graphs}.")
+
+                out = model.predict_labels(G)
+                assert_label_output_by_lane(mode, batch, out, allow_noise_label=True)
+
+                if seen == target_i:
+                    x_e, y_e, out_e = batch, batch.y, out   # keep CPU batch for plotting
+                    break
+                seen += 1
+
+            else:
+                raise RuntimeError(f"Unknown lane mode: {mode}")
+
+            if x_e is not None:
+                break
+
     if x_e is None:
         raise IndexError(f"event-idx={target_i} out of range for this loader stream")
 
@@ -499,9 +481,7 @@ def main():
         true = np.asarray(y_e).reshape(-1).astype(np.int64, copy=False)
 
     # Predict
-    with torch.no_grad():
-        out = predict_one_event(model, x_e, device=device)
-    pred = _to_numpy_1d_int(out, expected_len=true.shape[0])
+    pred = _to_numpy_1d_int(out_e, expected_len=true.shape[0])
 
     counted_mask, correct_hits, denom, reports = fit_accuracy_hit_mask(pred, true)
     fitacc_evt = correct_hits / max(denom, 1)
@@ -532,7 +512,11 @@ def main():
         feature_order=(int(args.r_col), int(args.theta_col), int(args.z_col), layer_col),
     )
 
-    title = f"TRACKFORMERS event {target_i} | FitAcc={fitacc_evt:.3f} ({correct_hits}/{denom}) | assigned={n_assigned}/{n_hits}"
+    # Plot with model name in title
+    model_name = Path(args.model_path).name
+    model_name = model_name.replace("_model.pkl", "").replace("_state.pt", "")
+    title = f"{model_name} | event {target_i} | FitAcc={fitacc_evt:.3f} ({correct_hits}/{denom}) | assigned={n_assigned}/{n_hits}"
+
     plot_event(hv, pred=pred, true=true, counted=counted_mask, title=title, out=args.out)
 
 if __name__ == "__main__":

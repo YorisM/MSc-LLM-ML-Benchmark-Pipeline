@@ -1,0 +1,7 @@
+git workflow:
+
+git checkout -b <new-branchname>
+* do some work * 
+git status 
+git add .
+git commit -m "..."
