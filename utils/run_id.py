@@ -9,10 +9,11 @@ import re
 
 
 TZ = ZoneInfo("Europe/Amsterdam")
-DATE_FMT = "%m-%d"
+DATE_FMT = "%Y-%m-%d"
 OUT_ROOT = Path("./outputs")
 ACTIVE_FILE = OUT_ROOT / ".active_run_id"
-_RUN_RE = re.compile(r"^(?P<base>\d{2}-\d{2})(?:\((?P<n>\d+)\))?$")
+_RUN_RE = re.compile(r"^(?P<base>\d{4}-\d{2}-\d{2})(?:\((?P<n>\d+)\))?$")
+
 
 
 def _today_base() -> str:

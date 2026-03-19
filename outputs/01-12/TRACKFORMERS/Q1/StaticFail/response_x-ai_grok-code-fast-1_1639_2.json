@@ -1,0 +1,76 @@
+{
+  "LLMGeneration": {
+    "model": "x-ai/grok-code-fast-1",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 4310,
+    "prompt_chars": 17811,
+    "response_tokens": 4831,
+    "response_chars": 4061,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.00733666,
+    "generation_ms": 71706,
+    "code": "# ---------- IMPORTS ----------\nimport hdbscan\nimport pytorch_metric_learning.losses as pmlosses\nimport torch.optim as optim\nfrom torch.nn.functional import normalize\n\n# ----------- PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.mean = None\n        self.std = None\n\n    def make_loader_cfg(self) -> dict:\n        return {\n            \"dataset_builder\": \"utils.llm_io:EventDataset\",\n            \"dataset_kwargs\": {},\n            \"loader_class\": \"torch.utils.data:DataLoader\",\n            \"batch_size\": 64,\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": False,\n            \"collate\": \"ragged_xy\",\n            \"extra_loader_kwargs\": {},\n            \"eval_overrides\": {\"shuffle\": False}\n        }\n\n    def fit(self, Xs):\n        all_X = torch.cat(Xs, dim=0).numpy()\n        self.mean = all_X.mean(axis=0, keepdims=True)\n        self.std = all_X.std(axis=0, keepdims=True) + 1e-8  # avoid div0\n        return self\n\n    def transform(self, X):\n        X_np = X.numpy()\n        X_norm = (X_np - self.mean) / self.std\n        return torch.from_numpy(X_norm).float()\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# ---------- MODEL ARCHITECTURE ----------\nclass HitClassifier(nn.Module):\n    def __init__(self, example_batch_x):\n        super().__init__()\n        embed_size = 64\n        self.encoder = nn.Sequential(\n            nn.Linear(4, 128),\n            nn.ReLU(),\n            nn.Linear(128, embed_size)\n        )\n\n    def forward(self, batch_x):\n        embs = []\n        for x in batch_x:\n            emb = self.encoder(x)\n            # emb [N, 64]\n            emb = normalize(emb, p=2, dim=1)  # L2 normalize\n            embs.append(emb)\n        return embs  # list of [N_i, 64]\n\n    def predict_labels(self, batch_x):\n        embs = self(batch_x)\n        labels = []\n        for emb in embs:\n            emb_np = emb.cpu().numpy()\n            if len(emb_np) == 0:\n                labels.append(torch.tensor([], dtype=torch.long))\n                continue\n            clusterer = hdbscan.HDBSCAN(min_cluster_size=4, metric='euclidean')\n            clusters = clusterer.fit_predict(emb_np)  # [N], int, -1 for noise\n            labels.append(torch.from_numpy(clusters).long())\n        return labels\n\ndef make_model(example_batch_x):\n    return HitClassifier(example_batch_x)\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 20\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    optimizer = optim.Adam(model.parameters(), lr=1e-3)\n    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.5)\n    loss_fn = pmlosses.NTXentLoss(temperature=0.07)\n    model.to(device)\n\n    train_loss, val_loss = [], []\n    train_acc, val_acc = [], []  # set to None since hard to compute meaningful accuracy\n\n    for epoch in range(epochs):\n        model.train()\n        epoch_loss = 0.0\n        for xs, ys in train_loader:\n            xs = [x.to(device) for x in xs]\n            ys = [y.to(device) for y in ys]\n            embs = model(xs)\n            all_embs = torch.cat(embs, dim=0)  # [sum N, 64]\n            all_ys = torch.cat(ys, dim=0)   # [sum N]\n            loss = loss_fn(all_embs, all_ys)\n            optimizer.zero_grad()\n            loss.backward()\n            optimizer.step()\n            epoch_loss += loss.item()\n        train_loss.append(epoch_loss / len(train_loader))\n        scheduler.step()\n\n        model.eval()\n        epoch_val_loss = 0.0\n        with torch.no_grad():\n            for xs, ys in val_loader:\n                xs = [x.to(device) for x in xs]\n                ys = [y.to(device) for y in ys]\n                embs = model(xs)\n                all_embs = torch.cat(embs, dim=0)\n                all_ys = torch.cat(ys, dim=0)\n                loss = loss_fn(all_embs, all_ys)\n                epoch_val_loss += loss.item()\n        val_loss.append(epoch_val_loss / len(val_loader))\n\n        train_acc.append(None)\n        val_acc.append(None)\n\n    return model, train_loss, val_loss, train_acc, val_acc",
+    "reasoning": "",
+    "Outer_attempt": 2
+  },
+  "StaticChecks": {
+    "__timestamp": "2026-01-12T15:39:59Z",
+    "PyLint": {
+      "passed": false,
+      "messages": [
+        {
+          "type": "error",
+          "module": "script_x-ai_grok-code-fast-1_1639_2",
+          "obj": "",
+          "line": 54,
+          "column": 0,
+          "endLine": 54,
+          "endColumn": 49,
+          "path": "outputs\\01-12\\TRACKFORMERS\\Q1\\script_x-ai_grok-code-fast-1_1639_2.py",
+          "symbol": "import-error",
+          "message": "Unable to import 'pytorch_metric_learning.losses'",
+          "message-id": "E0401"
+        }
+      ]
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2026-01-12T15:39:59Z",
+        "metrics": {
+          ".\\outputs\\01-12\\TRACKFORMERS\\Q1\\script_x-ai_grok-code-fast-1_1639_2.py": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 204,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 204,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  }
+}

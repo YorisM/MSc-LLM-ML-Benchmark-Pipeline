@@ -19,7 +19,7 @@ Options:
 
 from __future__ import annotations
 from pathlib import Path
-import argparse, json, itertools, sys, logging
+import argparse, json, itertools, sys, logging, numbers
 
 import matplotlib.pyplot as plt
 from matplotlib.colors import to_rgb
@@ -59,6 +59,16 @@ def _lighten(color: str | tuple, factor: float = 0.5) -> tuple:
     r, g, b = to_rgb(color)
     return (1 - factor) + factor * r, (1 - factor) + factor * g, (1 - factor) + factor * b
 
+def _as_list(v) -> list[float]:
+    """Accept either list[float] or scalar float/int; return list[float]."""
+    if v is None:
+        return []
+    if isinstance(v, list):
+        return [float(x) for x in v]
+    if isinstance(v, numbers.Number):
+        return [float(v)]
+    raise TypeError(f"Expected list or number, got {type(v).__name__}: {v!r}")
+
 def _load_metrics(json_path: Path, train_key: str,
                   val_key: str) -> tuple[list[float], list[float]]:
     """Return (train_acc_list, val_acc_list) or raises KeyError."""
@@ -66,8 +76,8 @@ def _load_metrics(json_path: Path, train_key: str,
         data = json.load(f)
 
     metrics = data["Training"]["metrics"]
-    train = metrics[train_key]
-    val   = metrics[val_key]
+    train = _as_list(metrics[train_key])
+    val   = _as_list(metrics[val_key])
 
     return train, val
 
@@ -147,6 +157,11 @@ def main() -> None:
         except (KeyError, TypeError) as e:
             print(f"⚠️  Bad JSON format in {j_path}: {e}")
             continue
+
+        if len(train) == 0 and len(val) == 0:
+            print(f"⚠️  Empty metrics in {j_path}; skipping")
+            continue
+        
         epochs_t = list(range(1, len(train) + 1))
         epochs_v = list(range(1, len(val)   + 1))
 

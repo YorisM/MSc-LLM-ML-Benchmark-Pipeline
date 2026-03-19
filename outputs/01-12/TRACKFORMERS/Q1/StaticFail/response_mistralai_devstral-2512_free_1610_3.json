@@ -1,0 +1,76 @@
+{
+  "LLMGeneration": {
+    "model": "mistralai/devstral-2512:free",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 4412,
+    "prompt_chars": 17811,
+    "response_tokens": 1795,
+    "response_chars": 7347,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0,
+    "generation_ms": 46671,
+    "code": "# ---------- IMPORTS ----------\nimport torch.nn.functional as F\nfrom torch_geometric.nn import GCNConv, global_mean_pool\nfrom torch_geometric.data import Data, Batch\nfrom sklearn.preprocessing import StandardScaler\nfrom sklearn.cluster import DBSCAN\nimport hdbscan\n\n#  -------- (OPTIONAL) CUSTOM DATASET  --------\n# Not needed for this solution\n\n# ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.scaler = StandardScaler()\n        self.layer_means = None\n        self.layer_stds = None\n\n    def make_loader_cfg(self) -> dict:\n        return {\n            \"dataset_builder\": \"utils.llm_io:EventDataset\",\n            \"dataset_kwargs\": {},\n            \"loader_class\": \"torch_geometric.loader:DataLoader\",\n            \"batch_size\": 32,\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": False,\n            \"collate\": None,\n            \"extra_loader_kwargs\": {},\n            \"eval_overrides\": {\"shuffle\": False}\n        }\n\n    def fit(self, Xs):\n        # Collect all hits for scaling\n        all_hits = torch.cat(Xs, dim=0).numpy()\n        self.scaler.fit(all_hits[:, :3])  # Scale r, theta, z\n\n        # Calculate layer statistics\n        layer_stats = {}\n        for X in Xs:\n            layers = X[:, 3].numpy()\n            for i, layer in enumerate(layers):\n                if layer not in layer_stats:\n                    layer_stats[layer] = []\n                layer_stats[layer].append(X[i, :3].numpy())\n\n        self.layer_means = {}\n        self.layer_stds = {}\n        for layer, hits in layer_stats.items():\n            hits = np.array(hits)\n            self.layer_means[layer] = np.mean(hits, axis=0)\n            self.layer_stds[layer] = np.std(hits, axis=0)\n\n        return self\n\n    def transform(self, X):\n        # Scale features\n        scaled = self.scaler.transform(X[:, :3].numpy())\n        X = torch.from_numpy(scaled).float()\n\n        # Add layer features\n        layer_features = torch.zeros((X.shape[0], 3))\n        for i, layer in enumerate(X_layer[:, 3]):\n            if layer in self.layer_means:\n                layer_features[i] = torch.from_numpy((X[i] - self.layer_means[layer]) / (self.layer_stds[layer] + 1e-6)).float()\n\n        # Combine features\n        X = torch.cat([X, layer_features], dim=1)\n        return X\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# ---------- MODEL ARCHITECTURE ----------\nclass HitClassifier(nn.Module):\n    def __init__(self, example_batch_x):\n        super().__init__()\n        # Graph convolution layers\n        self.conv1 = GCNConv(6, 64)\n        self.conv2 = GCNConv(64, 128)\n        self.conv3 = GCNConv(128, 64)\n\n        # MLP for classification\n        self.mlp = nn.Sequential(\n            nn.Linear(64, 128),\n            nn.ReLU(),\n            nn.Linear(128, 64),\n            nn.ReLU(),\n            nn.Linear(64, 32)\n        )\n\n        # Clustering parameters\n        self.cluster_head = nn.Linear(32, 16)\n\n    def forward(self, batch_x):\n        # Graph convolution forward pass\n        x, edge_index = batch_x.x, batch_x.edge_index\n        x = F.relu(self.conv1(x, edge_index))\n        x = F.relu(self.conv2(x, edge_index))\n        x = self.conv3(x, edge_index)\n\n        # Global pooling for graph-level features\n        graph_features = global_mean_pool(x, batch_x.batch)\n\n        # MLP processing\n        x = self.mlp(x)\n        return x, graph_features\n\n    def predict_labels(self, batch_x):\n        with torch.no_grad():\n            # Get node embeddings\n            embeddings, _ = self.forward(batch_x)\n            embeddings = embeddings.cpu().numpy()\n\n            # Cluster using HDBSCAN\n            clusterer = hdbscan.HDBSCAN(\n                min_cluster_size=4,\n                min_samples=1,\n                cluster_selection_epsilon=0.5,\n                metric='euclidean'\n            )\n            labels = clusterer.fit_predict(embeddings)\n\n            # Convert to torch tensor and map noise to -1\n            labels = torch.from_numpy(labels).to(device)\n            labels[labels == -1] = -1  # Noise label\n            return labels\n\ndef make_model(example_batch_x):\n    return HitClassifier(example_batch_x)\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 20\n\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)\n    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=3)\n    criterion = nn.CrossEntropyLoss()\n\n    train_loss, val_loss = [], []\n    train_acc, val_acc = [], []\n\n    for epoch in range(epochs):\n        model.train()\n        epoch_train_loss = 0\n        correct_train = 0\n        total_train = 0\n\n        for batch in train_loader:\n            batch = batch.to(device)\n            optimizer.zero_grad()\n\n            # Forward pass\n            embeddings, graph_features = model(batch)\n\n            # Create pseudo-labels using DBSCAN for training\n            embeddings_np = embeddings.detach().cpu().numpy()\n            clustering = DBSCAN(eps=0.5, min_samples=4).fit(embeddings_np)\n            pseudo_labels = torch.from_numpy(clustering.labels_).to(device)\n\n            # Filter out noise\n            mask = pseudo_labels != -1\n            if mask.sum() > 0:\n                # Create classification targets\n                unique_labels = torch.unique(pseudo_labels[mask])\n                label_mapping = {label.item(): idx for idx, label in enumerate(unique_labels)}\n                targets = torch.tensor([label_mapping[label.item()] for label in pseudo_labels[mask]]).to(device)\n\n                # Train on embeddings\n                output = model.mlp(embeddings[mask])\n                loss = criterion(output, targets)\n                loss.backward()\n                optimizer.step()\n\n                epoch_train_loss += loss.item()\n                pred = output.argmax(dim=1)\n                correct_train += (pred == targets).sum().item()\n                total_train += targets.size(0)\n\n        # Validation\n        model.eval()\n        epoch_val_loss = 0\n        correct_val = 0\n        total_val = 0\n\n        with torch.no_grad():\n            for batch in val_loader:\n                batch = batch.to(device)\n                embeddings, _ = model(batch)\n\n                # Get predictions\n                pred_labels = model.predict_labels(batch)\n\n                # Calculate accuracy (simple matching for validation)\n                mask = batch.y != 0  # Ignore noise\n                if mask.sum() > 0:\n                    correct_val += (pred_labels[mask] == batch.y[mask]).sum().item()\n                    total_val += mask.sum().item()\n\n        # Store metrics\n        train_loss.append(epoch_train_loss / len(train_loader) if len(train_loader) > 0 else 0)\n        val_loss.append(epoch_val_loss / len(val_loader) if len(val_loader) > 0 else 0)\n        train_acc.append(correct_train / total_train if total_train > 0 else 0)\n        val_acc.append(correct_val / total_val if total_val > 0 else 0)\n\n        # Update scheduler\n        scheduler.step(epoch_val_loss)\n\n        print(f\"Epoch {epoch+1}/{epochs} - Train Loss: {train_loss[-1]:.4f}, Val Loss: {val_loss[-1]:.4f}, Train Acc: {train_acc[-1]:.4f}, Val Acc: {val_acc[-1]:.4f}\")\n\n    return model, train_loss, val_loss, train_acc, val_acc",
+    "reasoning": "",
+    "Outer_attempt": 3
+  },
+  "StaticChecks": {
+    "__timestamp": "2026-01-12T15:10:41Z",
+    "PyLint": {
+      "passed": false,
+      "messages": [
+        {
+          "type": "error",
+          "module": "script_mistralai_devstral-2512_free_1610_3",
+          "obj": "MyPreprocessor.transform",
+          "line": 114,
+          "column": 34,
+          "endLine": 114,
+          "endColumn": 41,
+          "path": "outputs\\01-12\\TRACKFORMERS\\Q1\\script_mistralai_devstral-2512_free_1610_3.py",
+          "symbol": "undefined-variable",
+          "message": "Undefined variable 'X_layer'",
+          "message-id": "E0602"
+        }
+      ]
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2026-01-12T15:10:41Z",
+        "metrics": {
+          ".\\outputs\\01-12\\TRACKFORMERS\\Q1\\script_mistralai_devstral-2512_free_1610_3.py": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 245,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 245,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  }
+}

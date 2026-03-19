@@ -27,14 +27,7 @@ logging.basicConfig(
 
 # Models
 models = [
-    "mistralai/devstral-2512:free",
-    "mistralai/mistral-large-2512",
-    "x-ai/grok-code-fast-1",
-    "deepseek/deepseek-v3.2",
-    "anthropic/claude-sonnet-4.5",
-    "google/gemini-3-pro-preview",
-    "openai/gpt-5.1-codex-max",
-    "openai/gpt-5.2-pro"
+    "anthropic/claude-sonnet-4.5"
     ]
 
 """

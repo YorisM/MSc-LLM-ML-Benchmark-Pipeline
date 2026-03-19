@@ -1,0 +1,211 @@
+{
+  "LLMGeneration": {
+    "model": "deepseek/deepseek-v3.2",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 4463,
+    "prompt_chars": 17811,
+    "response_tokens": 8296,
+    "response_chars": 20993,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.00431286,
+    "generation_ms": 423779,
+    "code": "import torch\nimport torch.nn as nn\nimport torch.nn.functional as F\nimport numpy as np\nfrom sklearn.preprocessing import StandardScaler\nfrom torch.utils.data import DataLoader\nimport torch_geometric\nfrom torch_geometric.data import Data, Batch\nfrom torch_geometric.nn import MessagePassing, global_mean_pool\nimport torch_scatter\nfrom torch_cluster import knn_graph, radius_graph\n\n# -------- CUSTOM DATASET --------\nclass CustomDataset(torch.utils.data.Dataset):\n    def __init__(self, events, pre, train: bool = True, **kwargs):\n        self.events = events\n        self.pre = pre\n        self.train = train\n\n    def __len__(self):\n        return len(self.events)\n\n    def __getitem__(self, idx):\n        X, y = split_X_y(self.events[idx])\n        if self.pre is not None:\n            X = self.pre.transform(X)\n        # Create PyG Data object\n        data = Data(x=X, y=y)\n        return data\n\n# ----------- PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.scaler = StandardScaler()\n        self.layer_means = None\n        self.layer_stds = None\n\n    def make_loader_cfg(self) -> dict:\n        return {\n            \"dataset_builder\": \"llm_script:CustomDataset\",\n            \"dataset_kwargs\": {},\n            \"loader_class\": \"torch_geometric.loader:DataLoader\",\n            \"batch_size\": 32,\n            \"shuffle\": True,\n            \"num_workers\": 4,\n            \"pin_memory\": True,\n            \"collate\": None,\n            \"extra_loader_kwargs\": {\"follow_batch\": []},\n            \"eval_overrides\": {\"shuffle\": False, \"batch_size\": 32}\n        }\n\n    def fit(self, Xs):\n        # Concatenate all events for global statistics\n        all_X = torch.cat(Xs, dim=0).numpy()  # [total_hits, 4]\n\n        # Fit scaler on all features except layer_id\n        self.scaler.fit(all_X[:, :3])\n\n        # Compute layer-specific statistics\n        layer_ids = all_X[:, 3]\n        unique_layers = np.unique(layer_ids)\n        self.layer_means = {}\n        self.layer_stds = {}\n\n        for layer in unique_layers:\n            mask = layer_ids == layer\n            if mask.sum() > 1:\n                self.layer_means[layer] = all_X[mask, :3].mean(axis=0)\n                self.layer_stds[layer] = all_X[mask, :3].std(axis=0)\n                # Avoid division by zero\n                self.layer_stds[layer][self.layer_stds[layer] == 0] = 1.0\n        return self\n\n    def transform(self, X):\n        # X: [N_hits, 4]\n        X_np = X.numpy() if isinstance(X, torch.Tensor) else X\n\n        # Separate features\n        spatial = X_np[:, :3]  # r, theta, z\n        layers = X_np[:, 3]    # layer_id\n\n        # Global normalization\n        spatial_normalized = self.scaler.transform(spatial)\n\n        # Layer-wise normalization\n        spatial_layer_norm = np.zeros_like(spatial_normalized)\n        for i, layer in enumerate(layers):\n            if layer in self.layer_means:\n                spatial_layer_norm[i] = (spatial_normalized[i] - self.layer_means[layer]) / self.layer_stds[layer]\n            else:\n                spatial_layer_norm[i] = spatial_normalized[i]\n\n        # Add engineered features\n        r = spatial[:, 0]\n        theta = spatial[:, 1]\n        z = spatial[:, 2]\n\n        # Convert to cartesian coordinates\n        x = r * np.cos(theta)\n        y = r * np.sin(theta)\n\n        # Create final feature matrix [N_hits, 8]\n        features = np.column_stack([\n            x, y, z,                         # Cartesian coordinates\n            spatial_layer_norm,              # Normalized features [3]\n            layers.reshape(-1, 1),          # Layer ID\n            np.sqrt(x**2 + y**2 + z**2)     # Distance from origin\n        ])\n\n        return torch.from_numpy(features.astype(np.float32))\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# ---------- GNN LAYERS ----------\nclass EdgeConv(MessagePassing):\n    def __init__(self, in_channels, out_channels):\n        super().__init__(aggr='max')\n        self.mlp = nn.Sequential(\n            nn.Linear(2 * in_channels, out_channels),\n            nn.ReLU(),\n            nn.Linear(out_channels, out_channels),\n            nn.ReLU(),\n            nn.Linear(out_channels, out_channels)\n        )\n\n    def forward(self, x, edge_index):\n        return self.propagate(edge_index, x=x)\n\n    def message(self, x_i, x_j):\n        edge_features = torch.cat([x_i, x_j - x_i], dim=1)  # [E, 2*in_channels]\n        return self.mlp(edge_features)  # [E, out_channels]\n\nclass TrackGNN(nn.Module):\n    def __init__(self, input_dim, hidden_dim=128, num_layers=5):\n        super().__init__()\n        self.input_proj = nn.Linear(input_dim, hidden_dim)\n\n        self.convs = nn.ModuleList()\n        for _ in range(num_layers):\n            self.convs.append(EdgeConv(hidden_dim, hidden_dim))\n\n        self.norms = nn.ModuleList([nn.LayerNorm(hidden_dim) for _ in range(num_layers)])\n\n        # Final projection for clustering\n        self.final_proj = nn.Sequential(\n            nn.Linear(hidden_dim, hidden_dim),\n            nn.ReLU(),\n            nn.Dropout(0.2),\n            nn.Linear(hidden_dim, hidden_dim // 2),\n            nn.ReLU(),\n            nn.Linear(hidden_dim // 2, 64)  # Embedding dimension for clustering\n        )\n\n        # Edge prediction head for auxiliary loss\n        self.edge_pred = nn.Sequential(\n            nn.Linear(2 * hidden_dim, hidden_dim),\n            nn.ReLU(),\n            nn.Linear(hidden_dim, 1)\n        )\n\n    def forward(self, x, edge_index, batch):\n        # x: [N, input_dim], edge_index: [2, E], batch: [N]\n        h = F.relu(self.input_proj(x))  # [N, hidden_dim]\n\n        # Store intermediate representations for skip connections\n        intermediates = []\n        for conv, norm in zip(self.convs, self.norms):\n            h_new = conv(h, edge_index)  # [N, hidden_dim]\n            h = norm(h + h_new)  # Residual connection\n            h = F.relu(h)\n            intermediates.append(h)\n\n        # Final embeddings\n        embeddings = self.final_proj(h)  # [N, 64]\n\n        # Edge features for auxiliary loss\n        src, dst = edge_index\n        edge_features = torch.cat([h[src], h[dst]], dim=1)  # [E, 2*hidden_dim]\n        edge_scores = self.edge_pred(edge_features)  # [E, 1]\n\n        return embeddings, edge_scores.squeeze(-1)\n\n# ---------- MODEL ARCHITECTURE ----------\nclass HitClassifier(nn.Module):\n    def __init__(self, example_batch_x):\n        super().__init__()\n        # Extract input dimension from example batch\n        input_dim = example_batch_x.x.size(1)\n\n        self.gnn = TrackGNN(input_dim=input_dim, hidden_dim=128, num_layers=5)\n\n        # Learnable clustering parameters\n        self.cluster_centers = nn.Parameter(torch.randn(200, 64))  # Max clusters\n        self.temperature = nn.Parameter(torch.tensor(1.0))\n\n        # Edge construction parameters\n        self.k = 20\n        self.r = 0.1\n\n    def build_graph(self, x, batch):\n        # Build multi-scale graph connectivity\n        edge_index_knn = knn_graph(x[:, :3], k=self.k, batch=batch)  # Spatial KNN\n\n        # Radius graph for local connections\n        edge_index_radius = radius_graph(x[:, :3], r=self.r, batch=batch)\n\n        # Combine edges\n        edge_index = torch.cat([edge_index_knn, edge_index_radius], dim=1)\n        edge_index = torch.unique(edge_index, dim=1)  # Remove duplicates\n\n        return edge_index\n\n    def forward(self, data):\n        # Extract from PyG batch\n        x, batch = data.x, data.batch\n\n        # Build graph\n        edge_index = self.build_graph(x, batch)\n\n        # Get embeddings and edge scores\n        embeddings, edge_scores = self.gnn(x, edge_index, batch)\n\n        return embeddings, edge_scores, edge_index\n\n    def predict_labels(self, batch_x):\n        # batch_x is PyG Batch object\n        self.eval()\n        with torch.no_grad():\n            # Get embeddings\n            embeddings, _, edge_index = self.forward(batch_x)\n\n            # Soft clustering assignment\n            distances = torch.cdist(embeddings, self.cluster_centers)  # [N, num_centers]\n            cluster_probs = F.softmax(-distances / self.temperature, dim=1)  # [N, num_centers]\n\n            # Assign to nearest cluster\n            cluster_assignments = torch.argmax(cluster_probs, dim=1)  # [N]\n\n            # Apply DBSCAN-like post-processing using embeddings\n            labels = self._dbscan_postprocess(\n                embeddings, \n                cluster_assignments,\n                batch_x.batch,\n                eps=0.5,\n                min_samples=3\n            )\n\n            # Handle noise (assign -1 to isolated points)\n            return labels\n\n    def _dbscan_postprocess(self, embeddings, initial_labels, batch, eps=0.5, min_samples=3):\n        # Simple DBSCAN implementation for post-processing\n        batch_size = batch.max().item() + 1\n        all_labels = []\n\n        for b in range(batch_size):\n            mask = batch == b\n            emb_batch = embeddings[mask]  # [N_b, 64]\n\n            if len(emb_batch) == 0:\n                all_labels.append(torch.tensor([], device=embeddings.device, dtype=torch.long))\n                continue\n\n            # Compute pairwise distances\n            dists = torch.cdist(emb_batch, emb_batch)\n\n            # Find core points\n            n_neighbors = (dists <= eps).sum(dim=1) - 1  # Exclude self\n            core_mask = n_neighbors >= min_samples\n\n            # Initialize labels: -1 for noise, 0 for unassigned\n            labels_batch = torch.full((len(emb_batch),), -1, \n                                    device=embeddings.device, dtype=torch.long)\n            cluster_id = 0\n\n            # Expand clusters from core points\n            visited = torch.zeros(len(emb_batch), dtype=torch.bool, device=embeddings.device)\n\n            for i in torch.where(core_mask)[0]:\n                if visited[i]:\n                    continue\n\n                # Start new cluster\n                stack = [i]\n                labels_batch[i] = cluster_id\n                visited[i] = True\n\n                while stack:\n                    current = stack.pop()\n\n                    # Find neighbors\n                    neighbors = torch.where(dists[current] <= eps)[0]\n\n                    for neighbor in neighbors:\n                        if not visited[neighbor]:\n                            labels_batch[neighbor] = cluster_id\n                            visited[neighbor] = True\n\n                            # If neighbor is core, expand from it\n                            if core_mask[neighbor]:\n                                stack.append(neighbor)\n\n                cluster_id += 1\n\n            # Assign border points to nearest cluster\n            for i in torch.where(~visited)[0]:\n                if not core_mask[i]:\n                    neighbors = torch.where(dists[i] <= eps)[0]\n                    neighbor_labels = labels_batch[neighbors]\n                    valid_labels = neighbor_labels[neighbor_labels != -1]\n\n                    if len(valid_labels) > 0:\n                        # Assign to most common neighbor label\n                        unique_labels, counts = torch.unique(valid_labels, return_counts=True)\n                        labels_batch[i] = unique_labels[torch.argmax(counts)]\n\n            all_labels.append(labels_batch)\n\n        return torch.cat(all_labels, dim=0)\n\ndef make_model(example_batch_x):\n    return HitClassifier(example_batch_x)\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 50\n\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    device = torch.device(\"cuda\" if torch.cuda.is_available() else \"cpu\")\n    model = model.to(device)\n\n    optimizer = torch.optim.AdamW(model.parameters(), lr=0.001, weight_decay=1e-4)\n    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)\n\n    # Loss weights\n    lambda_cluster = 1.0\n    lambda_edge = 0.5\n    lambda_separation = 0.1\n\n    train_losses = []\n    val_losses = []\n    train_accs = []\n    val_accs = []\n\n    best_val_acc = 0.0\n    patience = 10\n    patience_counter = 0\n\n    for epoch in range(epochs):\n        # Training\n        model.train()\n        total_loss = 0\n        correct_hits = 0\n        total_hits = 0\n\n        for batch in train_loader:\n            batch = batch.to(device)\n            optimizer.zero_grad()\n\n            # Forward pass\n            embeddings, edge_scores, edge_index = model(batch)\n\n            # Build ground truth edges (same track = 1, different = 0)\n            track_ids = batch.y\n            src, dst = edge_index\n\n            # Edge labels: 1 if same track (excluding noise), 0 otherwise\n            edge_labels = ((track_ids[src] == track_ids[dst]) & \n                          (track_ids[src] != 0) & \n                          (track_ids[dst] != 0)).float()\n\n            # Edge prediction loss\n            edge_loss = F.binary_cross_entropy_with_logits(\n                edge_scores, edge_labels, reduction='mean'\n            )\n\n            # Cluster separation loss\n            unique_tracks = torch.unique(track_ids[track_ids != 0])\n            if len(unique_tracks) > 1:\n                cluster_means = []\n                for track in unique_tracks:\n                    mask = track_ids == track\n                    if mask.sum() > 0:\n                        cluster_means.append(embeddings[mask].mean(dim=0, keepdim=True))\n\n                if len(cluster_means) > 1:\n                    cluster_means = torch.cat(cluster_means, dim=0)\n                    intra_dists = torch.cdist(cluster_means, cluster_means)\n                    mask = torch.eye(len(cluster_means), device=device).bool()\n                    intra_dists = intra_dists[~mask].view(len(cluster_means), -1)\n\n                    separation_loss = -torch.mean(torch.min(intra_dists, dim=1)[0])\n                else:\n                    separation_loss = torch.tensor(0.0, device=device)\n            else:\n                separation_loss = torch.tensor(0.0, device=device)\n\n            # Combine losses\n            loss = lambda_edge * edge_loss + lambda_separation * separation_loss\n\n            loss.backward()\n            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)\n            optimizer.step()\n\n            total_loss += loss.item()\n\n            # Calculate accuracy (approximate)\n            with torch.no_grad():\n                pred_labels = model.predict_labels(batch)\n                true_labels = batch.y\n\n                # Simple accuracy calculation (ignoring permutation invariance)\n                for b in range(batch.batch.max().item() + 1):\n                    mask = batch.batch == b\n                    pred_b = pred_labels[mask]\n                    true_b = true_labels[mask]\n\n                    # Match clusters to tracks using Hungarian algorithm\n                    from scipy.optimize import linear_sum_assignment\n                    import numpy as np\n\n                    pred_unique = torch.unique(pred_b[pred_b != -1])\n                    true_unique = torch.unique(true_b[true_b != 0])\n\n                    if len(pred_unique) > 0 and len(true_unique) > 0:\n                        # Build cost matrix\n                        cost_matrix = np.zeros((len(pred_unique), len(true_unique)))\n                        for i, p_cluster in enumerate(pred_unique):\n                            for j, t_track in enumerate(true_unique):\n                                mask_p = pred_b == p_cluster\n                                mask_t = true_b == t_track\n                                intersection = (mask_p & mask_t).sum().item()\n                                union = (mask_p | mask_t).sum().item()\n                                cost_matrix[i, j] = -intersection / max(union, 1)\n\n                        # Hungarian matching\n                        row_ind, col_ind = linear_sum_assignment(cost_matrix)\n\n                        # Count correctly assigned hits\n                        for i, j in zip(row_ind, col_ind):\n                            p_cluster = pred_unique[i]\n                            t_track = true_unique[j]\n                            mask_p = pred_b == p_cluster\n                            mask_t = true_b == t_track\n                            correct_hits += (mask_p & mask_t).sum().item()\n\n                    total_hits += mask.sum().item()\n\n        avg_train_loss = total_loss / len(train_loader)\n        train_acc = correct_hits / max(total_hits, 1)\n\n        # Validation\n        model.eval()\n        val_loss = 0\n        val_correct = 0\n        val_total = 0\n\n        with torch.no_grad():\n            for batch in val_loader:\n                batch = batch.to(device)\n\n                embeddings, edge_scores, edge_index = model(batch)\n                track_ids = batch.y\n                src, dst = edge_index\n\n                edge_labels = ((track_ids[src] == track_ids[dst]) & \n                              (track_ids[src] != 0) & \n                              (track_ids[dst] != 0)).float()\n\n                edge_loss = F.binary_cross_entropy_with_logits(\n                    edge_scores, edge_labels, reduction='mean'\n                )\n\n                val_loss += edge_loss.item()\n\n                # Calculate validation accuracy\n                pred_labels = model.predict_labels(batch)\n                true_labels = batch.y\n\n                for b in range(batch.batch.max().item() + 1):\n                    mask = batch.batch == b\n                    pred_b = pred_labels[mask]\n                    true_b = true_labels[mask]\n\n                    pred_unique = torch.unique(pred_b[pred_b != -1])\n                    true_unique = torch.unique(true_b[true_b != 0])\n\n                    if len(pred_unique) > 0 and len(true_unique) > 0:\n                        cost_matrix = np.zeros((len(pred_unique), len(true_unique)))\n                        for i, p_cluster in enumerate(pred_unique):\n                            for j, t_track in enumerate(true_unique):\n                                mask_p = pred_b == p_cluster\n                                mask_t = true_b == t_track\n                                intersection = (mask_p & mask_t).sum().item()\n                                union = (mask_p | mask_t).sum().item()\n                                cost_matrix[i, j] = -intersection / max(union, 1)\n\n                        row_ind, col_ind = linear_sum_assignment(cost_matrix)\n\n                        for i, j in zip(row_ind, col_ind):\n                            p_cluster = pred_unique[i]\n                            t_track = true_unique[j]\n                            mask_p = pred_b == p_cluster\n                            mask_t = true_b == t_track\n                            val_correct += (mask_p & mask_t).sum().item()\n\n                    val_total += mask.sum().item()\n\n        avg_val_loss = val_loss / len(val_loader)\n        val_acc = val_correct / max(val_total, 1)\n\n        # Update learning rate\n        scheduler.step()\n\n        # Early stopping\n        if val_acc > best_val_acc:\n            best_val_acc = val_acc\n            patience_counter = 0\n            # Save best model\n            torch.save(model.state_dict(), 'best_model.pth')\n        else:\n            patience_counter += 1\n            if patience_counter >= patience:\n                print(f\"Early stopping at epoch {epoch}\")\n                break\n\n        # Store metrics\n        train_losses.append(avg_train_loss)\n        val_losses.append(avg_val_loss)\n        train_accs.append(train_acc)\n        val_accs.append(val_acc)\n\n        if epoch % 5 == 0:\n            print(f\"Epoch {epoch}: Train Loss: {avg_train_loss:.4f}, \"\n                  f\"Train Acc: {train_acc:.4f}, Val Loss: {avg_val_loss:.4f}, \"\n                  f\"Val Acc: {val_acc:.4f}\")\n\n    # Load best model\n    model.load_state_dict(torch.load('best_model.pth'))\n\n    return model, train_losses, val_losses, train_accs, val_accs",
+    "reasoning": "",
+    "Outer_attempt": 3
+  },
+  "StaticChecks": {
+    "__timestamp": "2026-01-12T16:00:03Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2026-01-12T16:00:03Z",
+        "metrics": {
+          ".\\outputs\\01-12\\TRACKFORMERS\\Q1\\script_deepseek_deepseek-v3.2_1659_3.py": {
+            "CONFIDENCE.HIGH": 2,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 2,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 461,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 2,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 2,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 461,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2026-01-12T16:04:44Z",
+    "passed": true,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/01-12/TRACKFORMERS/Q1/script_deepseek_deepseek-v3.2_1659_3.py\nargv2=--dryrun\nEpoch 0: Train Loss: 0.4038, Train Acc: 0.0296, Val Loss: 0.6708, Val Acc: 0.0326\n#PROC_METRICS#{\"cpu_seconds_user\": 243.23, \"cpu_seconds_sys\": 22.44, \"max_rss_kb\": 6351828, \"training_time_s\": 270.927, \"source\": \"proc_tree_ticks\"}\n#GPU_METRICS#{\"cuda_available\": true, \"name\": \"NVIDIA GeForce RTX 3050 Ti Laptop GPU\", \"total_mb\": 4096, \"peak_used_mb\": 3245, \"avg_used_mb\": 2054.47, \"avg_util_pct\": 13.736, \"peak_util_pct\": 82, \"per_process_gpu_mem\": false}\nDry-run: skipping artefact manifest\n",
+      "stderr": "resource_monitor.py: WARNING: cgroup v2 not detected; metrics may be degraded.\n"
+    },
+    "return_code": 0
+  },
+  "Training": {
+    "__timestamp": "2026-01-13T09:46:21.225495+00:00",
+    "passed": true,
+    "resources": {
+      "wall_time_s": 61998.697,
+      "training_time_s": 61988.04,
+      "cpu_seconds_user": 56677.15,
+      "cpu_seconds_sys": 5591.23,
+      "disk_read_mb": null,
+      "disk_write_mb": null,
+      "max_rss_kb": 7670688,
+      "proc_source": "proc_tree_ticks",
+      "cuda_available": true,
+      "gpu_name": "NVIDIA GeForce RTX 3050 Ti Laptop GPU",
+      "gpu_total_mb": 4096,
+      "per_process_gpu_mem": false,
+      "gpu_peak_alloc_mb": 3955,
+      "gpu_avg_util_pct": 25.411,
+      "gpu_peak_util_pct": 100,
+      "gpu_avg_used_mb": 3932.219
+    },
+    "metrics": {
+      "epochs": 50,
+      "train_loss": [
+        -1.5956851941943169,
+        -20.661128231048583,
+        -67.23702171325684,
+        -156.08077862548828,
+        -290.0633846435547,
+        -492.0591818847656,
+        -754.1991162109375,
+        -1079.7743515625,
+        -1534.19766796875,
+        -1984.687330078125,
+        -2625.569490234375,
+        -3348.2016953125,
+        -4298.096244140625,
+        -5248.73230078125,
+        -6444.50519140625,
+        -7617.79865625,
+        -8856.31993359375,
+        -10290.5060234375,
+        -11883.6150078125,
+        -13611.8158671875,
+        -15043.675671875,
+        -17331.3398515625,
+        -19340.8881875
+      ],
+      "val_loss": [
+        0.3396834042072296,
+        0.3427624298930168,
+        0.3334867617487907,
+        0.3373354040980339,
+        0.33994767236709594,
+        0.3345464018583298,
+        0.33365871298313143,
+        0.33210334050655366,
+        0.33680163741111757,
+        0.33684004068374634,
+        0.33791972118616104,
+        0.3394950404167175,
+        0.33777132618427275,
+        0.33428325003385545,
+        0.3333974655270576,
+        0.33221169364452363,
+        0.3315023729801178,
+        0.33393547958135605,
+        0.33498477226495743,
+        0.33949714368581774,
+        0.3342243222594261,
+        0.333750304043293,
+        0.332986114859581
+      ],
+      "train_acc": [
+        0.029790255069188764,
+        0.003949541768450038,
+        0.03718685237600614,
+        0.06603099765769634,
+        0.09555924204977054,
+        0.10508997015949631,
+        0.1103617685505354,
+        0.12141646561235485,
+        0.1176205410628158,
+        0.12727545505511914,
+        0.12136262780198884,
+        0.1294304031447024,
+        0.12861852896438306,
+        0.13177270681435935,
+        0.142024143745518,
+        0.13292052893136252,
+        0.1372103256613257,
+        0.1319507305073029,
+        0.136131415941591,
+        0.12580675958833457,
+        0.13619314996414403,
+        0.13681623288944658,
+        0.13262406205561375
+      ],
+      "val_acc": [
+        1.1499077199054776e-05,
+        0.004956102272792608,
+        0.05751263461107246,
+        0.09022175970378377,
+        0.11548523231010711,
+        0.09003202492999937,
+        0.11664088956861211,
+        0.11300718117371081,
+        0.11768155605512658,
+        0.10703341056880185,
+        0.13027304558809155,
+        0.13478068385012104,
+        0.11035089434072916,
+        0.1438189585285781,
+        0.131204470841215,
+        0.12571366147866633,
+        0.11973414133515785,
+        0.1293358707963686,
+        0.1403807344460607,
+        0.134355217993756,
+        0.14089819292001818,
+        0.13570635956464494,
+        0.1351774020134884
+      ]
+    },
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/01-12/TRACKFORMERS/Q1/deepseek_deepseek-v3.2/script_deepseek_deepseek-v3.2_1659_3.py\nargv2=\nEpoch 0: Train Loss: -1.5957, Train Acc: 0.0298, Val Loss: 0.3397, Val Acc: 0.0000\nEpoch 5: Train Loss: -492.0592, Train Acc: 0.1051, Val Loss: 0.3345, Val Acc: 0.0900\nEpoch 10: Train Loss: -2625.5695, Train Acc: 0.1214, Val Loss: 0.3379, Val Acc: 0.1303\nEpoch 15: Train Loss: -7617.7987, Train Acc: 0.1329, Val Loss: 0.3322, Val Acc: 0.1257\nEpoch 20: Train Loss: -15043.6757, Train Acc: 0.1362, Val Loss: 0.3342, Val Acc: 0.1409\nEarly stopping at epoch 23\n#TRAIN_METRICS#{\"epochs\": 50, \"train_loss\": [-1.5956851941943169, -20.661128231048583, -67.23702171325684, -156.08077862548828, -290.0633846435547, -492.0591818847656, -754.1991162109375, -1079.7743515625, -1534.19766796875, -1984.687330078125, -2625.569490234375, -3348.2016953125, -4298.096244140625, -5248.73230078125, -6444.50519140625, -7617.79865625, -8856.31993359375, -10290.5060234375, -11883.6150078125, -13611.8158671875, -15043.675671875, -17331.3398515625, -19340.8881875], \"val_loss\": [0.3396834042072296, 0.3427624298930168, 0.3334867617487907, 0.3373354040980339, 0.33994767236709594, 0.3345464018583298, 0.33365871298313143, 0.33210334050655366, 0.33680163741111757, 0.33684004068374634, 0.33791972118616104, 0.3394950404167175, 0.33777132618427275, 0.33428325003385545, 0.3333974655270576, 0.33221169364452363, 0.3315023729801178, 0.33393547958135605, 0.33498477226495743, 0.33949714368581774, 0.3342243222594261, 0.333750304043293, 0.332986114859581], \"train_acc\": [0.029790255069188764, 0.003949541768450038, 0.03718685237600614, 0.06603099765769634, 0.09555924204977054, 0.10508997015949631, 0.1103617685505354, 0.12141646561235485, 0.1176205410628158, 0.12727545505511914, 0.12136262780198884, 0.1294304031447024, 0.12861852896438306, 0.13177270681435935, 0.142024143745518, 0.13292052893136252, 0.1372103256613257, 0.1319507305073029, 0.136131415941591, 0.12580675958833457, 0.13619314996414403, 0.13681623288944658, 0.13262406205561375], \"val_acc\": [1.1499077199054776e-05, 0.004956102272792608, 0.05751263461107246, 0.09022175970378377, 0.11548523231010711, 0.09003202492999937, 0.11664088956861211, 0.11300718117371081, 0.11768155605512658, 0.10703341056880185, 0.13027304558809155, 0.13478068385012104, 0.11035089434072916, 0.1438189585285781, 0.131204470841215, 0.12571366147866633, 0.11973414133515785, 0.1293358707963686, 0.1403807344460607, 0.134355217993756, 0.14089819292001818, 0.13570635956464494, 0.1351774020134884]}\n#PROC_METRICS#{\"cpu_seconds_user\": 56677.15, \"cpu_seconds_sys\": 5591.23, \"max_rss_kb\": 7670688, \"training_time_s\": 61988.04, \"source\": \"proc_tree_ticks\"}\n#GPU_METRICS#{\"cuda_available\": true, \"name\": \"NVIDIA GeForce RTX 3050 Ti Laptop GPU\", \"total_mb\": 4096, \"peak_used_mb\": 3955, \"avg_used_mb\": 3932.219, \"avg_util_pct\": 25.411, \"peak_util_pct\": 100, \"per_process_gpu_mem\": false}\nHash manifest written â†’ deepseek_deepseek-v3.2_1659_3_manifest.sha256\n",
+      "stderr": "resource_monitor.py: WARNING: cgroup v2 not detected; metrics may be degraded.\n"
+    }
+  },
+  "Evaluation": {
+    "__timestamp": "2026-01-13T18:12:22Z",
+    "passed": true,
+    "metrics": {
+      "ok": true,
+      "load_s": 10.75,
+      "eval_s": 328.22,
+      "FitAccuracy": 0.017101302732446033
+    },
+    "runtime_s": 352.85
+  }
+}

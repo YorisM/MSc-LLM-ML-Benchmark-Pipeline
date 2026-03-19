@@ -189,10 +189,18 @@ def assert_binary_output(view, out: Any, *, tol: float = 1e-6, accept_logits: bo
     if not torch.is_floating_point(out):
         raise TypeError(f"Expected float outputs (logits or probabilities), got dtype={out.dtype}")
 
-    # Shape: allow (B,) or (B,1)
-    scores = out.squeeze(-1)
+    # Shape: accept (B,) or (B,1); also tolerate scalar only when B==1 later
+    if out.ndim == 2 and out.shape[1] == 1:
+        scores = out[:, 0]              # (B,)
+    elif out.ndim == 1:
+        scores = out                    # (B,)
+    elif out.ndim == 0:
+        scores = out.view(1)            # (1,)  (will be rejected later if B != 1)
+    else:
+        raise ValueError(f"Expected output (B,) or (B,1), got shape {tuple(out.shape)}")
+
     if scores.ndim != 1:
-        raise ValueError(f"Expected output with 1 dimension after squeeze, got shape {tuple(scores.shape)}")
+        raise ValueError(f"Expected 1D scores, got shape {tuple(scores.shape)}")
 
     # Determine batch size B from labels if possible, else from batch_x
     B: Optional[int] = None

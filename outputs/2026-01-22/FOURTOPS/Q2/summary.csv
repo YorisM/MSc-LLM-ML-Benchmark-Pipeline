@@ -1,0 +1,30 @@
+script,success,return_code,stdout,stderr,duration_s,max_rss_kb
+C:\Users\yoris\projects\Benchmark\outputs\2026-01-22\FOURTOPS\Q2\anthropic_claude-sonnet-4.5\script_anthropic_claude-sonnet-4.5_1251_1.py,True,0,"argv0=/usr/local/bin/train.sh
+argv1=outputs/2026-01-22/FOURTOPS/Q2/anthropic_claude-sonnet-4.5/script_anthropic_claude-sonnet-4.5_1251_1.py
+argv2=
+Epoch 1/50: Train Loss=0.6884, Train AUC=0.5549, Val Loss=0.6915, Val AUC=0.5377
+Epoch 2/50: Train Loss=0.6911, Train AUC=0.5374, Val Loss=0.6910, Val AUC=0.5382
+Epoch 3/50: Train Loss=0.6910, Train AUC=0.5383, Val Loss=0.6911, Val AUC=0.5379
+Epoch 4/50: Train Loss=0.6909, Train AUC=0.5386, Val Loss=0.6912, Val AUC=0.5378
+Epoch 5/50: Train Loss=0.6909, Train AUC=0.5384, Val Loss=0.6907, Val AUC=0.5382
+Epoch 6/50: Train Loss=0.6908, Train AUC=0.5394, Val Loss=0.6910, Val AUC=0.5373
+Epoch 7/50: Train Loss=0.6909, Train AUC=0.5390, Val Loss=0.6910, Val AUC=0.5384
+Epoch 8/50: Train Loss=0.6908, Train AUC=0.5400, Val Loss=0.6910, Val AUC=0.5363
+Epoch 9/50: Train Loss=0.6906, Train AUC=0.5420, Val Loss=0.6914, Val AUC=0.5376
+Epoch 10/50: Train Loss=0.6907, Train AUC=0.5408, Val Loss=0.6909, Val AUC=0.5378
+Epoch 11/50: Train Loss=0.6908, Train AUC=0.5394, Val Loss=0.6908, Val AUC=0.5381
+Epoch 12/50: Train Loss=0.6907, Train AUC=0.5408, Val Loss=0.6910, Val AUC=0.5378
+Epoch 13/50: Train Loss=0.6904, Train AUC=0.5424, Val Loss=0.6913, Val AUC=0.5381
+Epoch 14/50: Train Loss=0.6903, Train AUC=0.5430, Val Loss=0.6914, Val AUC=0.5374
+Epoch 15/50: Train Loss=0.6903, Train AUC=0.5431, Val Loss=0.6922, Val AUC=0.5374
+Epoch 16/50: Train Loss=0.6900, Train AUC=0.5456, Val Loss=0.6924, Val AUC=0.5374
+Epoch 17/50: Train Loss=0.6900, Train AUC=0.5457, Val Loss=0.6928, Val AUC=0.5369
+Early stopping triggered at epoch 17
+#TRAIN_METRICS#{""epochs"": 50, ""train_loss"": [0.6884325383222111, 0.6910670627836607, 0.6910041830143949, 0.6909179221785761, 0.6909407590064801, 0.6908273760288406, 0.6908618728166717, 0.6907557397421654, 0.6905807763472637, 0.6906836997272986, 0.6908212885562542, 0.6906984612191108, 0.6904283821862248, 0.6903221722938793, 0.6903335342841054, 0.6900212167566353, 0.6899605104568043], ""val_loss"": [0.6914706618332731, 0.6909792091295783, 0.6911011999790847, 0.6911811332707056, 0.6907367608151543, 0.6910113535098011, 0.6910007828656961, 0.6909807662439468, 0.6913586814582622, 0.6908690736709507, 0.6907901907151066, 0.6910253297758935, 0.6912534730584461, 0.6914247593229489, 0.6922479333176522, 0.6924281831128155, 0.6927783353944267], ""train_acc"": [0.5548973378270321, 0.5374257301794805, 0.538283220007229, 0.5386192654637622, 0.5384252730090268, 0.5393989791526657, 0.5389728972077079, 0.5399741109472452, 0.5419527516165019, 0.540790208532526, 0.5394261075769711, 0.5407858355069171, 0.5423569311361643, 0.5429556016059587, 0.5430721663035168, 0.5456022883373818, 0.5456638868535801], ""val_acc"": [0.5377058425366408, 0.5381710727976068, 0.5378721837703808, 0.5377674190640859, 0.538150214110608, 0.5372518723718405, 0.5383822637155293, 0.5363154913671866, 0.5376132541655999, 0.5377904521749499, 0.5381257101948915, 0.537789562239376, 0.5380607624336714, 0.5373877826312632, 0.5374115807360074, 0.5373899592470882, 0.5369325718173624]}
+#PROC_METRICS#{""cpu_seconds_user"": 2057.03, ""cpu_seconds_sys"": 59.11, ""max_rss_kb"": 1833804, ""training_time_s"": 2108.752, ""source"": ""proc_tree_ticks""}
+#GPU_METRICS#{""cuda_available"": true, ""name"": ""NVIDIA GeForce RTX 3050 Ti Laptop GPU"", ""total_mb"": 4096, ""peak_used_mb"": 495, ""avg_used_mb"": 493.085, ""avg_util_pct"": 92.484, ""peak_util_pct"": 100, ""per_process_gpu_mem"": false}
+Hash manifest written â†’ anthropic_claude-sonnet-4.5_1251_1_manifest.sha256
+","resource_monitor.py: WARNING: cgroup v2 not detected; metrics may be degraded.
+/opt/venv/lib/python3.12/site-packages/torch/nn/modules/transformer.py:508: UserWarning: The PyTorch API of nested tensors is in prototype stage and will change in the near future. We recommend specifying layout=torch.jagged when constructing a nested tensor, as this layout receives active development, has better operator coverage, and works with torch.compile. (Triggered internally at /pytorch/aten/src/ATen/NestedTensorImpl.cpp:178.)
+  output = torch._nested_tensor_from_mask(
+",2117.8196931000566,1833804

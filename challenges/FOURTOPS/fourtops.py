@@ -5,7 +5,7 @@ from challenges.challenges import Challenge, Question
 fourtop_challenge = Challenge(
     name = "FOURTOPS",
 
-    version = "v2.4.1",
+    version = "v2.4.2",
 
     dataset = {
     "X_train": "./challenges/FOURTOPS/data/train/X_train.csv",
@@ -237,7 +237,7 @@ def train_model(model: nn.Module, train_loader, val_loader, epochs: int):
     # <LLM: Implement early stopping if possible>
     return trained_model, train_loss, val_loss, train_acc, val_acc
 
-# DO NOT execute the pipeline here – the harness will do that.
+# DO NOT execute the pipeline here - the harness will do that.
 # <end code template>
 # ---------------------------  END OF LLM-CODE BLOCK  ---------------------------
 """,
@@ -337,7 +337,15 @@ Write Python code for a binary classification model focusing on maximising the A
                 
 You may optionally leverage the following particle-physics insights (strongly recommended if possible):
 
-Pairwise Particle Features: It has been shown that explicitly computing pairwise particle features, particularly the invariant mass $m_{ij} = \sqrt{(p_i + p_j)^2} = \sqrt{(E_i + E_j)^2 - \abs((p_i^2 + p_j^2))}$ and the angular distance $\delta R_{ij} = \sqrt{(\eta_i - \eta_j)^2 + (\phi_i - \phi_j)^2}$ can significantly enhance the discriminative power of your model.
+Pairwise Particle Features: It has been shown that explicitly computing pairwise particle features, particularly the invariant mass:
+
+$$m_{ij}^2 \equiv (p_i + p_j)^2 = (E_i + E_j)^2 - {\left| \left| \vec p_i + \vec p_j \right| \right|}^2, \qquad m_{ij} = \sqrt{m_{ij}^2}$$
+
+And the angular distance: 
+
+$$\delta R_{ij} = \sqrt{(\eta_i - \eta_j)^2 + (\phi_i - \phi_j)^2}$$
+
+Can significantly enhance the discriminative power of your model.
                 
 Model Architecture: It has been shown that Transformer models and Graph Neural Networks are particularly well-suited for this task.
 

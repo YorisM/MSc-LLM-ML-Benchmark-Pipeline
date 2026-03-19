@@ -10,7 +10,11 @@ import matplotlib.pyplot as plt
 OUT_DIR = os.path.dirname(__file__)          # .../challenges/TRACKFORMERS/misc
 plt.rcParams["figure.dpi"] = 110
 
-# CLI ------------------------------------------------------
+# Example usage:
+#
+# python challenges/TRACKFORMERS/misc/TRACKFORMERS_inspect_data.py "challenges\TRACKFORMERS\data\hits_and_tracks_3d_events_linear_10-50_all.csv" --sample-event 0
+# 
+
 def parse_args():
     p = argparse.ArgumentParser(
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -34,9 +38,19 @@ def parse_args():
                    help="Print first n rows of the chosen event")
     p.add_argument("--sep", default=None,
                    help="Field delimiter for CSV. Leave blank for auto-detect.")
+    p.add_argument("--event-id", type=int, default=None,
+                   help="Only load this exact event_id (CSV: stream-filtered).")
+    p.add_argument("--max-events", type=int, default=None,
+                   help="Only load the first N unique events (CSV: stream-limited).")
+    p.add_argument("--chunksize", type=int, default=1_000_000,
+                   help="CSV chunk size when using --event-id/--max-events.")
+    p.add_argument("--plot", action="store_true",
+                   help="Write 2D+3D plots for the chosen event "
+                        "(--event-id if set else --sample-event).")
+    p.add_argument("--max-tracks-plot", type=int, default=20,
+                   help="Max tracks to draw in event plots (readability).")
     return p.parse_args()
 
-# helpers -------------------------------------------------
 def _detect_sep(sample_bytes: bytes) -> str:
     try:
         dialect = csv.Sniffer().sniff(sample_bytes.decode("utf-8", "ignore"),
@@ -45,7 +59,7 @@ def _detect_sep(sample_bytes: bytes) -> str:
     except csv.Error:
         return ','
 
-def _load_csv(path: str, user_sep: str | None) -> pd.DataFrame:
+def _load_csv(path: str, user_sep: str | None, event_id: int | None = None, max_events: int | None = None, chunksize: int = 1_000_000) -> pd.DataFrame:
     if user_sep is None:
         with open(path, "rb") as fh:
             sep = _detect_sep(fh.read(4096))
@@ -62,11 +76,58 @@ def _load_csv(path: str, user_sep: str | None) -> pd.DataFrame:
         "hit_theta":       "float32",
         "hit_z":           "float32",
     }
-    df = pd.read_csv(path, sep=sep, dtype=dtypes, low_memory=False)
-    df.columns = [c.strip().lower() for c in df.columns]
+
+    # Default behaviour (load all) remains unchanged unless user requests limiting.
+    if event_id is None and max_events is None:
+        df = pd.read_csv(path, sep=sep, dtype=dtypes, low_memory=False, encoding="utf-8-sig")
+        df.columns = [c.replace("\ufeff", "").strip().lower() for c in df.columns]
+        return df
+
+    # Stream-load & filter.
+    frames = []
+    selected = set()
+    saw_target = False
+
+    for chunk in pd.read_csv(
+        path,
+        sep=sep,
+        dtype=dtypes,
+        low_memory=False,
+        encoding="utf-8-sig",
+        chunksize=chunksize,
+    ):
+        chunk.columns = [c.replace("\ufeff", "").strip().lower() for c in chunk.columns]
+
+        if "event_id" not in chunk.columns:
+            raise RuntimeError("CSV does not contain 'event_id' after normalising column names.")
+
+        if event_id is not None:
+            sub = chunk[chunk["event_id"] == event_id]
+            if not sub.empty:
+                frames.append(sub)
+                saw_target = True
+            # Heuristic early-stop if file is sorted by event_id
+            if saw_target and chunk["event_id"].min() > event_id:
+                break
+
+        else:
+            # Keep first max_events unique event IDs as encountered
+            for eid in chunk["event_id"].unique():
+                if eid not in selected and len(selected) < int(max_events):
+                    selected.add(int(eid))
+            sub = chunk[chunk["event_id"].isin(selected)]
+            if not sub.empty:
+                frames.append(sub)
+            # Heuristic early-stop if it looks like we passed the last selected id
+            if len(selected) >= int(max_events) and chunk["event_id"].min() > max(selected):
+                break
+
+    if not frames:
+        return pd.DataFrame(columns=list(dtypes.keys()))
+    df = pd.concat(frames, ignore_index=True)
     return df
 
-def _load_pkl(path: str) -> pd.DataFrame:
+def _load_pkl(path: str, event_id: int | None = None, max_events: int | None = None) -> pd.DataFrame:
     opener = gzip.open if path.endswith(".gz") else open
     with opener(path, "rb") as fh:
         data = pickle.load(fh)
@@ -75,13 +136,24 @@ def _load_pkl(path: str) -> pd.DataFrame:
     if events is None:
         raise RuntimeError(f"{path}: key 'events' not found")
 
+    # Apply limits for PKL in-memory (cannot stream pickle easily).
+    if event_id is not None:
+        if event_id < 0 or event_id >= len(events):
+            raise RuntimeError(f"{path}: event_id={event_id} out of range [0, {len(events)-1}]")
+        iter_events = [(event_id, events[event_id])]
+    elif max_events is not None:
+        n = min(int(max_events), len(events))
+        iter_events = list(enumerate(events[:n]))
+    else:
+        iter_events = list(enumerate(events))
+
     rows = []
-    for ev_id, evt in enumerate(events):
+    for ev_id, evt in iter_events:
         n = len(evt["hit_r"])
         rows.append(pd.DataFrame({
             "event_id":        np.full(n, ev_id, dtype=np.int32),
             "track_id":        evt["track_id"].astype(np.int32),
-            "sub_detector_id": evt["layer_id"].astype(np.int16),   # alias
+            "sub_detector_id": evt["layer_id"].astype(np.int16),
             "hit_r":           evt["hit_r"].astype(np.float32),
             "hit_theta":       evt["hit_theta"].astype(np.float32),
             "hit_z":           evt["hit_z"].astype(np.float32),
@@ -89,7 +161,6 @@ def _load_pkl(path: str) -> pd.DataFrame:
     df = pd.concat(rows, ignore_index=True)
     return df
 
-# metrics & plots ------------------------------------------
 def compute_metrics(df):
     hits_event   = df.groupby("event_id").size()
     tracks_event = df.groupby("event_id")["track_id"].nunique()
@@ -118,22 +189,51 @@ def plot_hist(data, title, fname, xlabel, bins=50, log=False):
     plt.close()
     print(f"[saved] {fname}")
 
-def scatter_event(df_evt, fname):
+def plot_event_2d(df_evt, fname, max_tracks=20):
+    fig, axes = plt.subplots(1, 3, figsize=(15, 4.5))
+    ax_xy, ax_xz, ax_yz = axes
+
+    tids = df_evt.track_id.unique()[:max_tracks]
+    for tid in tids:
+        sub = df_evt[df_evt.track_id == tid].sort_values("sub_detector_id", kind="mergesort")
+        xi = sub.hit_r.to_numpy() * np.cos(sub.hit_theta.to_numpy())
+        yi = sub.hit_r.to_numpy() * np.sin(sub.hit_theta.to_numpy())
+        zi = sub.hit_z.to_numpy()
+
+        ax_xy.plot(xi, yi, linewidth=1); ax_xy.scatter(xi, yi, s=6)
+        ax_xz.plot(xi, zi, linewidth=1); ax_xz.scatter(xi, zi, s=6)
+        ax_yz.plot(yi, zi, linewidth=1); ax_yz.scatter(yi, zi, s=6)
+
+    ax_xy.set_title("XY"); ax_xy.set_xlabel("x"); ax_xy.set_ylabel("y")
+    ax_xy.set_aspect("equal", adjustable="box")
+    ax_xz.set_title("XZ"); ax_xz.set_xlabel("x"); ax_xz.set_ylabel("z")
+    ax_yz.set_title("YZ"); ax_yz.set_xlabel("y"); ax_yz.set_ylabel("z")
+
+    fig.suptitle(f"Event {df_evt.event_id.iloc[0]} (≤{max_tracks} tracks)")
+    plt.tight_layout()
+    plt.savefig(os.path.join(OUT_DIR, fname))
+    plt.close()
+    print(f"[saved] {fname}")
+
+def scatter_event(df_evt, fname, max_tracks=20):
     import matplotlib.colors as mcolors; from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
     fig = plt.figure(); ax = fig.add_subplot(111, projection='3d')
     palette = list(mcolors.TABLEAU_COLORS.values())
 
-    for i, tid in enumerate(df_evt.track_id.unique()[:20]):
-        sub = df_evt[df_evt.track_id == tid]
+    for i, tid in enumerate(df_evt.track_id.unique()[:max_tracks]):
+        sub = df_evt[df_evt.track_id == tid].sort_values("sub_detector_id", kind="mergesort")
         xi = sub.hit_r.to_numpy() * np.cos(sub.hit_theta.to_numpy())
         yi = sub.hit_r.to_numpy() * np.sin(sub.hit_theta.to_numpy())
         zi = sub.hit_z.to_numpy()
+        ax.plot(xi, yi, zi, linewidth=1,
+                color=palette[i % len(palette)],
+                alpha=0.8)
         ax.scatter(xi, yi, zi, s=8, alpha=0.7,
                    color=palette[i % len(palette)],
                    label=f"t{tid}" if i < 10 else None)
 
     ax.set_xlabel("x"); ax.set_ylabel("y"); ax.set_zlabel("z")
-    ax.set_title(f"Event {df_evt.event_id.iloc[0]} (≤20 tracks)")
+    ax.set_title(f"Event {df_evt.event_id.iloc[0]} (≤{max_tracks} tracks)")
     if df_evt.track_id.nunique() <= 10:
         ax.legend(loc="upper left", fontsize=7)
 
@@ -163,14 +263,12 @@ def overlay_hist(metric_dict: dict, title, fname, xlabel,
     plt.close()
     print(f"[saved] {fname}")
 
-
-# main ------------------------------------------------------
-def load_any(path: str, user_sep: str | None) -> pd.DataFrame:
+def load_any(path: str, user_sep: str | None, event_id: int | None = None, max_events: int | None = None, chunksize: int = 1_000_000) -> pd.DataFrame:
     ext = os.path.splitext(path)[1].lower()
     if ext in {".csv", ".txt"}:
-        return _load_csv(path, user_sep)
+        return _load_csv(path, user_sep, event_id=event_id, max_events=max_events, chunksize=chunksize)
     elif ext in {".pkl", ".gz"}:
-        return _load_pkl(path)
+        return _load_pkl(path, event_id=event_id, max_events=max_events)
     else:
         raise RuntimeError(f"Unsupported file extension for {path}")
 
@@ -180,7 +278,12 @@ def main():
 
     for in_path in args.paths:
         print(f"\n================  {in_path}  ================")
-        df = load_any(in_path, args.sep)
+        df = load_any(in_path, args.sep, event_id=args.event_id,
+                      max_events=args.max_events, chunksize=args.chunksize)
+        if df.empty:
+            print("[warn] Loaded empty dataframe (no matching events). Skipping.")
+            continue
+        
         print("Loaded dataframe shape:", df.shape)
 
         hits_evt, tracks_evt, hits_track = compute_metrics(df)
@@ -191,8 +294,20 @@ def main():
         stem = in_path.replace("\\", "_").replace("/", "_")
 
         evt_ids = df.event_id.sort_values().unique()
-        evt_id  = evt_ids[min(args.sample_event, len(evt_ids)-1)]
-        scatter_event(df[df.event_id == evt_id], f"{stem}_sample_event.png")
+        if args.event_id is not None:
+            evt_id = args.event_id
+        else:
+            evt_id = evt_ids[min(args.sample_event, len(evt_ids)-1)]
+
+        df_evt = df[df.event_id == evt_id]
+        if df_evt.empty:
+            print(f"[warn] Event {evt_id} not present in loaded data. Skipping plots.")
+        else:
+            if args.plot:
+                plot_event_2d(df_evt, f"{stem}_event{evt_id}_2D.png", max_tracks=args.max_tracks_plot)
+                scatter_event(df_evt, f"{stem}_event{evt_id}_3D.png", max_tracks=args.max_tracks_plot)
+            else:
+                scatter_event(df_evt, f"{stem}_sample_event.png", max_tracks=args.max_tracks_plot)
 
         print(f"\n=== First {args.n_head} rows of event {evt_id} ===")
         print(df[df.event_id == evt_id].head(args.n_head).to_string(index=False))

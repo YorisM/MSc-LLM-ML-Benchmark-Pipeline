@@ -69,24 +69,42 @@
     "return_code": 0
   },
   "Training": {
-    "__timestamp": "2026-01-07T14:55:32.857298+00:00",
-    "passed": false,
+    "__timestamp": "2026-01-14T02:02:50.361771+00:00",
+    "passed": true,
     "resources": {
-      "cpu_seconds_user": 1.28,
-      "cpu_seconds_sys": 1.09,
-      "disk_read_mb": 46.9,
-      "disk_write_mb": 0.5,
-      "max_rss_kb": -10948,
-      "training_time_s": 10147.5,
-      "gpu_name": null,
-      "gpu_total_mb": null,
-      "gpu_peak_alloc_mb": null,
-      "cuda_available": null
+      "wall_time_s": 12384.634,
+      "training_time_s": 12376.495,
+      "cpu_seconds_user": 83770.82,
+      "cpu_seconds_sys": 303.98,
+      "disk_read_mb": null,
+      "disk_write_mb": null,
+      "max_rss_kb": 3739344,
+      "proc_source": "proc_tree_ticks",
+      "cuda_available": true,
+      "gpu_name": "NVIDIA GeForce RTX 3050 Ti Laptop GPU",
+      "gpu_total_mb": 4096,
+      "per_process_gpu_mem": false,
+      "gpu_peak_alloc_mb": 237,
+      "gpu_avg_util_pct": 12.983,
+      "gpu_peak_util_pct": 90,
+      "gpu_avg_used_mb": 85.83
     },
-    "metrics": null,
+    "metrics": {
+      "epochs": 10,
+      "train_loss": null,
+      "val_loss": null,
+      "train_acc": 0.7307882681064626,
+      "val_acc": 0.7307882681064626
+    },
     "STD": {
-      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/01-06/FOURTOPS/Q2/x-ai_grok-code-fast-1/script_x-ai_grok-code-fast-1_2352_2.py\nargv2=\n",
-      "stderr": "WARNING:matplotlib:mkdir -p failed for path /home/sandbox/.config/matplotlib: [Errno 30] Read-only file system: '/home/sandbox/.config'\nWARNING:matplotlib:Matplotlib created a temporary cache directory at /tmp/matplotlib-zibq578d because there was an issue with the default path (/home/sandbox/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.\nTraceback (most recent call last):\n  File \"/workspace/outputs/01-06/FOURTOPS/Q2/x-ai_grok-code-fast-1/script_x-ai_grok-code-fast-1_2352_2.py\", line 325, in <module>\n    _run(dryrun=\"--dryrun\" in sys.argv)\n  File \"/workspace/outputs/01-06/FOURTOPS/Q2/x-ai_grok-code-fast-1/script_x-ai_grok-code-fast-1_2352_2.py\", line 309, in _run\n    plot_train_val(tr_acc, va_acc, f\"{base} Accuracy\", os.path.join(SCRIPT_DIR, f\"{base}_accuracy.png\"))\n  File \"/workspace/utils/suffix_utils.py\", line 60, in plot_train_val\n    if len(train_series) == 0 or len(val_series) == 0:\n       ^^^^^^^^^^^^^^^^^\nTypeError: object of type 'float' has no len()\n"
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/01-06/FOURTOPS/Q2/x-ai_grok-code-fast-1/script_x-ai_grok-code-fast-1_2352_2.py\nargv2=\n#TRAIN_METRICS#{\"epochs\": 10, \"train_loss\": null, \"val_loss\": null, \"train_acc\": 0.7307882681064626, \"val_acc\": 0.7307882681064626}\n#PROC_METRICS#{\"cpu_seconds_user\": 83770.82, \"cpu_seconds_sys\": 303.98, \"max_rss_kb\": 3739344, \"training_time_s\": 12376.495, \"source\": \"proc_tree_ticks\"}\n#GPU_METRICS#{\"cuda_available\": true, \"name\": \"NVIDIA GeForce RTX 3050 Ti Laptop GPU\", \"total_mb\": 4096, \"peak_used_mb\": 237, \"avg_used_mb\": 85.83, \"avg_util_pct\": 12.983, \"peak_util_pct\": 90, \"per_process_gpu_mem\": false}\nHash manifest written â†’ x-ai_grok-code-fast-1_2352_2_manifest.sha256\n",
+      "stderr": "resource_monitor.py: WARNING: cgroup v2 not detected; metrics may be degraded.\n"
     }
+  },
+  "Evaluation": {
+    "__timestamp": "2026-01-14T04:49:59Z",
+    "passed": false,
+    "metrics": {},
+    "runtime_s": 237.09
   }
 }

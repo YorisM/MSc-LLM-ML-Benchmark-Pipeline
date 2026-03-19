@@ -1,0 +1,37 @@
+script,success,return_code,stdout,stderr,duration_s,max_rss_kb
+C:\Users\yoris\projects\Benchmark\outputs\2026-01-22(2)\FOURTOPS\Q2\anthropic_claude-sonnet-4.5\script_anthropic_claude-sonnet-4.5_1330_1.py,True,0,"argv0=/usr/local/bin/train.sh
+argv1=outputs/2026-01-22(2)/FOURTOPS/Q2/anthropic_claude-sonnet-4.5/script_anthropic_claude-sonnet-4.5_1330_1.py
+argv2=
+Epoch 1/25 - Train Loss: 0.6474, Train Acc: 0.6196, Train AUC: 0.6698 - Val Loss: 0.6139, Val Acc: 0.6645, Val AUC: 0.7283
+Epoch 2/25 - Train Loss: 0.6175, Train Acc: 0.6620, Train AUC: 0.7187 - Val Loss: 0.6084, Val Acc: 0.6730, Val AUC: 0.7381
+Epoch 3/25 - Train Loss: 0.6122, Train Acc: 0.6678, Train AUC: 0.7258 - Val Loss: 0.6031, Val Acc: 0.6717, Val AUC: 0.7377
+Epoch 4/25 - Train Loss: 0.6091, Train Acc: 0.6705, Train AUC: 0.7296 - Val Loss: 0.6033, Val Acc: 0.6715, Val AUC: 0.7397
+Epoch 5/25 - Train Loss: 0.6089, Train Acc: 0.6708, Train AUC: 0.7299 - Val Loss: 0.6020, Val Acc: 0.6783, Val AUC: 0.7426
+Epoch 6/25 - Train Loss: 0.6071, Train Acc: 0.6727, Train AUC: 0.7322 - Val Loss: 0.6044, Val Acc: 0.6790, Val AUC: 0.7457
+Epoch 7/25 - Train Loss: 0.6055, Train Acc: 0.6741, Train AUC: 0.7341 - Val Loss: 0.5977, Val Acc: 0.6825, Val AUC: 0.7444
+Epoch 8/25 - Train Loss: 0.6062, Train Acc: 0.6739, Train AUC: 0.7333 - Val Loss: 0.6087, Val Acc: 0.6685, Val AUC: 0.7456
+Epoch 9/25 - Train Loss: 0.6057, Train Acc: 0.6732, Train AUC: 0.7337 - Val Loss: 0.6117, Val Acc: 0.6651, Val AUC: 0.7440
+Epoch 10/25 - Train Loss: 0.6049, Train Acc: 0.6744, Train AUC: 0.7348 - Val Loss: 0.5940, Val Acc: 0.6837, Val AUC: 0.7488
+Epoch 11/25 - Train Loss: 0.6052, Train Acc: 0.6736, Train AUC: 0.7345 - Val Loss: 0.6097, Val Acc: 0.6751, Val AUC: 0.7474
+Epoch 12/25 - Train Loss: 0.6031, Train Acc: 0.6757, Train AUC: 0.7371 - Val Loss: 0.5973, Val Acc: 0.6810, Val AUC: 0.7452
+Epoch 13/25 - Train Loss: 0.6028, Train Acc: 0.6762, Train AUC: 0.7374 - Val Loss: 0.5959, Val Acc: 0.6822, Val AUC: 0.7473
+Epoch 14/25 - Train Loss: 0.6021, Train Acc: 0.6766, Train AUC: 0.7382 - Val Loss: 0.5984, Val Acc: 0.6787, Val AUC: 0.7488
+Epoch 15/25 - Train Loss: 0.5982, Train Acc: 0.6803, Train AUC: 0.7429 - Val Loss: 0.6101, Val Acc: 0.6685, Val AUC: 0.7512
+Epoch 16/25 - Train Loss: 0.5972, Train Acc: 0.6813, Train AUC: 0.7441 - Val Loss: 0.5964, Val Acc: 0.6806, Val AUC: 0.7507
+Epoch 17/25 - Train Loss: 0.5973, Train Acc: 0.6809, Train AUC: 0.7439 - Val Loss: 0.5967, Val Acc: 0.6820, Val AUC: 0.7492
+Epoch 18/25 - Train Loss: 0.5970, Train Acc: 0.6813, Train AUC: 0.7443 - Val Loss: 0.5945, Val Acc: 0.6815, Val AUC: 0.7513
+Epoch 19/25 - Train Loss: 0.5965, Train Acc: 0.6809, Train AUC: 0.7448 - Val Loss: 0.5900, Val Acc: 0.6866, Val AUC: 0.7535
+Epoch 20/25 - Train Loss: 0.5959, Train Acc: 0.6819, Train AUC: 0.7456 - Val Loss: 0.5912, Val Acc: 0.6872, Val AUC: 0.7529
+Epoch 21/25 - Train Loss: 0.5953, Train Acc: 0.6830, Train AUC: 0.7464 - Val Loss: 0.5877, Val Acc: 0.6911, Val AUC: 0.7549
+Epoch 22/25 - Train Loss: 0.5952, Train Acc: 0.6825, Train AUC: 0.7463 - Val Loss: 0.6006, Val Acc: 0.6792, Val AUC: 0.7522
+Epoch 23/25 - Train Loss: 0.5941, Train Acc: 0.6840, Train AUC: 0.7477 - Val Loss: 0.5968, Val Acc: 0.6835, Val AUC: 0.7552
+Epoch 24/25 - Train Loss: 0.5940, Train Acc: 0.6844, Train AUC: 0.7477 - Val Loss: 0.5942, Val Acc: 0.6856, Val AUC: 0.7553
+Epoch 25/25 - Train Loss: 0.5932, Train Acc: 0.6854, Train AUC: 0.7488 - Val Loss: 0.5895, Val Acc: 0.6878, Val AUC: 0.7565
+#TRAIN_METRICS#{""epochs"": 25, ""train_loss"": [0.6473879702314475, 0.6175437312202187, 0.6122032336640132, 0.6091355699491402, 0.6088770476428909, 0.6070963141761876, 0.605526231128333, 0.6061546116674054, 0.6057355900245822, 0.6049067295330126, 0.6051573207686236, 0.6031133770353688, 0.6028360602702828, 0.602110911283462, 0.5981975919504096, 0.5972133038442138, 0.5973203568678727, 0.5969504833933267, 0.5965156152522489, 0.5959385417899191, 0.595273807947175, 0.5952113430531908, 0.5940935176728377, 0.593983248323775, 0.5932368083983566], ""val_loss"": [0.6138759132083843, 0.6083997330165342, 0.6030761547882167, 0.6032559943814009, 0.601965935607848, 0.6043725115412234, 0.5977463225888674, 0.6087377312901074, 0.6116569068962489, 0.5940252560570298, 0.6097040379592393, 0.5973288411554563, 0.5958682467408887, 0.5984047257675688, 0.6101144483661913, 0.5963843606389472, 0.5967181245221532, 0.5944652758501972, 0.590006456550106, 0.5911849513721469, 0.5877062306071984, 0.6005749866170546, 0.5967821998566515, 0.5942079258497064, 0.5894987817794369], ""train_acc"": [0.6195806452947773, 0.661954754052231, 0.6677605035235892, 0.6705454425073555, 0.6708020044939729, 0.6726807003314615, 0.674124896030324, 0.6738600578505899, 0.673189686208138, 0.6743607675341496, 0.673562114898389, 0.675672544143145, 0.6762146347922883, 0.6766160301584477, 0.6803403170609583, 0.6812506983037943, 0.6809279267722433, 0.6813458745246361, 0.6809444791584767, 0.681871412787546, 0.6829886988582992, 0.6825376463334395, 0.6840025325150937, 0.6844163421709282, 0.6854384520208394], ""val_acc"": [0.66454795246135, 0.6730228092826166, 0.6716655079948356, 0.6714999834475452, 0.6783195947959082, 0.6790147978945278, 0.6824908133876254, 0.6684543317774025, 0.6651438408315953, 0.683682590128116, 0.6750753136690171, 0.680967987552554, 0.6822259741119608, 0.6787499586188632, 0.6685205415963187, 0.6805707286390572, 0.6819942397457543, 0.6814976661038832, 0.6866289270698844, 0.6871917105306717, 0.6910649849372662, 0.6792465322607343, 0.6834839606713675, 0.6855695699672262, 0.6878207038103751]}
+#PROC_METRICS#{""cpu_seconds_user"": 2770.35, ""cpu_seconds_sys"": 41.38, ""max_rss_kb"": 1883980, ""training_time_s"": 2797.162, ""source"": ""proc_tree_ticks""}
+#GPU_METRICS#{""cuda_available"": true, ""name"": ""NVIDIA GeForce RTX 3050 Ti Laptop GPU"", ""total_mb"": 4096, ""peak_used_mb"": 604, ""avg_used_mb"": 594.786, ""avg_util_pct"": 94.06, ""peak_util_pct"": 100, ""per_process_gpu_mem"": false}
+Hash manifest written â†’ anthropic_claude-sonnet-4.5_1330_1_manifest.sha256
+","resource_monitor.py: WARNING: cgroup v2 not detected; metrics may be degraded.
+/opt/venv/lib/python3.12/site-packages/torch/nn/modules/transformer.py:508: UserWarning: The PyTorch API of nested tensors is in prototype stage and will change in the near future. We recommend specifying layout=torch.jagged when constructing a nested tensor, as this layout receives active development, has better operator coverage, and works with torch.compile. (Triggered internally at /pytorch/aten/src/ATen/NestedTensorImpl.cpp:178.)
+  output = torch._nested_tensor_from_mask(
+",2807.905465399963,1883980

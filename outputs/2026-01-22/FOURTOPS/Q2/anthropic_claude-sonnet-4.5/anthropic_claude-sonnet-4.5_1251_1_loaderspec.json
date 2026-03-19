@@ -1,0 +1,22 @@
+{
+  "dataset": {
+    "builder": "llm_script:FourTopsDataset",
+    "expects_train_flag": true,
+    "kwargs": {}
+  },
+  "eval_overrides": {
+    "batch_size": 256,
+    "shuffle": false
+  },
+  "loader": {
+    "batch_size": 256,
+    "class": "torch.utils.data:DataLoader",
+    "collate": null,
+    "extra_kwargs": {},
+    "num_workers": 0,
+    "pin_memory": false,
+    "shuffle": true
+  },
+  "schema_version": 1,
+  "script_module": "llm_script"
+}

@@ -1,0 +1,199 @@
+{
+  "LLMGeneration": {
+    "model": "x-ai/grok-code-fast-1",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 4310,
+    "prompt_chars": 17811,
+    "response_tokens": 5589,
+    "response_chars": 5754,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.00847366,
+    "generation_ms": 143129,
+    "code": "# ---------- IMPORTS ----------\nimport torch\nimport torch.nn as nn\nimport torch.nn.functional as F\nimport torch.optim as optim\nfrom torch.utils.data import Dataset\nfrom torch_geometric.data import Data\nimport numpy as np\n\n# ----------- (OPTIONAL) CUSTOM DATASET  --------\nclass TrackerDataset(Dataset):\n    def __init__(self, events, pre, train=True, **kwargs):\n        self.events = events\n        self.pre = pre\n        self.train = train\n\n    def __len__(self):\n        return len(self.events)\n\n    def __getitem__(self, idx):\n        evt = self.events[idx]\n        X, y = split_X_y(evt)\n        X = self.pre.transform(X) if self.pre is not None else X\n        # Renumber track_ids: 0 to 49 for true tracks, 50 for noise\n        new_y = y.clone()\n        unique = torch.unique(y[y > 0])\n        for i, tid in enumerate(unique):\n            new_y[y == tid] = i\n        new_y[y == 0] = 50\n        # Create full graph edge_index\n        n_nodes = len(y)\n        edge_index = torch.combinations(torch.arange(n_nodes), r=2).t()\n        data = Data(x=X, y=new_y, edge_index=edge_index)\n        return data\n\n# ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.mean = None\n        self.std = None\n\n    def make_loader_cfg(self) -> dict:\n        return {\n            \"dataset_builder\": \"llm_script:TrackerDataset\",\n            \"dataset_kwargs\": {},\n            \"loader_class\": \"torch_geometric.loader:DataLoader\",\n            \"batch_size\": 8,  # Smaller batch for graphs\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": False,\n            \"collate\": None,\n            \"extra_loader_kwargs\": {},\n            \"eval_overrides\": {\"shuffle\": False}\n        }\n\n    def fit(self, Xs):\n        # XS: list of per-event X [N_hits_i, 4]\n        all_X = torch.cat(Xs, dim=0)  # [total_hits, 4]\n        self.mean = all_X.mean(dim=0)  # [4]\n        self.std = all_X.std(dim=0)    # [4]\n        return self\n\n    def transform(self, X):\n        # X: [N_hits, 4]\n        X = (X - self.mean) / (self.std + 1e-8)  # Normalize, prevent div by zero\n        return X  # [N_hits, 4]\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# ---------- MODEL ARCHITECTURE ----------\nfrom torch_geometric.nn import GCNConv\n\nclass HitClassifier(nn.Module):\n    def __init__(self, num_hidden=128, num_classes=51):\n        super().__init__()\n        self.emb = nn.Linear(4, num_hidden)\n        self.conv1 = GCNConv(num_hidden, num_hidden)\n        self.conv2 = GCNConv(num_hidden, num_hidden)\n        self.classifier = nn.Linear(num_hidden, num_classes)\n\n    def forward(self, data):\n        x = F.relu(self.emb(data.x))\n        x = F.relu(self.conv1(x, data.edge_index))\n        x = F.relu(self.conv2(x, data.edge_index))\n        logits = self.classifier(x)  # [N, num_classes]\n        return logits\n\n    def predict_labels(self, data):\n        with torch.no_grad():\n            logits = self.forward(data)\n            preds = logits.argmax(dim=1)\n            preds = torch.where(preds == 50, -1, preds)  # Noise class to -1\n            return preds  # [N]\n\ndef make_model(example_batch_x):\n    return HitClassifier()\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 20\n\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    optimizer = optim.Adam(model.parameters(), lr=1e-4)\n    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.5)\n    loss_fn = nn.CrossEntropyLoss(ignore_index=50)\n    # Now we use ignore_index to skip noise class\n\n    best_val_acc = 0.0\n    best_model_state = None\n\n    def compute_accuracy(loader):\n        model.eval()\n        total_correct = 0\n        total_masked = 0\n        with torch.no_grad():\n            for data in loader:\n                data = data.to(device)\n                logits = model(data)\n                preds = logits.argmax(dim=1)\n                mask = data.y != 50\n                correct = (preds[mask] == data.y[mask]).sum().item()\n                total_correct += correct\n                total_masked += mask.sum().item()\n        return total_correct / total_masked if total_masked > 0 else 0.0\n\n    model.to(device)\n    train_loss_hist = []\n    val_loss_hist = []\n    train_acc_hist = []\n    val_acc_hist = []\n\n    for epoch in range(epochs):\n        model.train()\n        total_loss = 0.0\n        for data in train_loader:\n            data = data.to(device)\n            optimizer.zero_grad()\n            logits = model(data)\n            loss = loss_fn(logits, data.y)\n            loss.backward()\n            optimizer.step()\n            total_loss += loss.item()\n        avg_train_loss = total_loss / len(train_loader)\n        train_loss_hist.append(avg_train_loss)\n\n        train_acc = compute_accuracy(train_loader)\n        train_acc_hist.append(train_acc)\n\n        val_loss = 0.0\n        for data in val_loader:\n            data = data.to(device)\n            logits = model(data)\n            loss = loss_fn(logits, data.y)\n            val_loss += loss.item()\n        avg_val_loss = val_loss / len(val_loader)\n        val_loss_hist.append(avg_val_loss)\n\n        val_acc = compute_accuracy(val_loader)\n        val_acc_hist.append(val_acc)\n\n        scheduler.step()\n\n        print(f\"Epoch {epoch+1}/{epochs}, Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}, Train Acc: {train_acc:.4f}, Val Acc: {val_acc:.4f}\")\n\n        if val_acc > best_val_acc:\n            best_val_acc = val_acc\n            best_model_state = model.state_dict()\n\n    # Load best model\n    model.load_state_dict(best_model_state)\n    return model, train_loss_hist, val_loss_hist, train_acc_hist, val_acc_hist",
+    "reasoning": "",
+    "Outer_attempt": 4
+  },
+  "StaticChecks": {
+    "__timestamp": "2026-01-12T15:44:12Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2026-01-12T15:44:12Z",
+        "metrics": {
+          ".\\outputs\\01-12\\TRACKFORMERS\\Q1\\script_x-ai_grok-code-fast-1_1644_4.py": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 237,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 237,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2026-01-12T15:44:44Z",
+    "passed": true,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/01-12/TRACKFORMERS/Q1/script_x-ai_grok-code-fast-1_1644_4.py\nargv2=--dryrun\nEpoch 1/1, Train Loss: 3.9637, Val Loss: 3.9349, Train Acc: 0.0239, Val Acc: 0.0226\n#PROC_METRICS#{\"cpu_seconds_user\": 17.6, \"cpu_seconds_sys\": 1.15, \"max_rss_kb\": 1275304, \"training_time_s\": 17.17, \"source\": \"proc_tree_ticks\"}\n#GPU_METRICS#{\"cuda_available\": true, \"name\": \"NVIDIA GeForce RTX 3050 Ti Laptop GPU\", \"total_mb\": 4096, \"peak_used_mb\": 1479, \"avg_used_mb\": 269.5, \"avg_util_pct\": 2.643, \"peak_util_pct\": 26, \"per_process_gpu_mem\": false}\nDry-run: skipping artefact manifest\n",
+      "stderr": "resource_monitor.py: WARNING: cgroup v2 not detected; metrics may be degraded.\n"
+    },
+    "return_code": 0
+  },
+  "Training": {
+    "__timestamp": "2026-01-13T18:05:58.058542+00:00",
+    "passed": true,
+    "resources": {
+      "wall_time_s": 1978.774,
+      "training_time_s": 1963.23,
+      "cpu_seconds_user": 14097.67,
+      "cpu_seconds_sys": 47.38,
+      "disk_read_mb": null,
+      "disk_write_mb": null,
+      "max_rss_kb": 1570472,
+      "proc_source": "proc_tree_ticks",
+      "cuda_available": true,
+      "gpu_name": "NVIDIA GeForce RTX 3050 Ti Laptop GPU",
+      "gpu_total_mb": 4096,
+      "per_process_gpu_mem": false,
+      "gpu_peak_alloc_mb": 3949,
+      "gpu_avg_util_pct": 52.127,
+      "gpu_peak_util_pct": 100,
+      "gpu_avg_used_mb": 3904.435
+    },
+    "metrics": {
+      "epochs": 20,
+      "train_loss": [
+        3.863073998451233,
+        3.8511031718254087,
+        3.850306828022003,
+        3.8497407999038695,
+        3.849219421863556,
+        3.848479516029358,
+        3.848016038894653,
+        3.847794421195984,
+        3.8473483228683474,
+        3.8470439925193785,
+        3.846579176902771,
+        3.8463383836746217,
+        3.8462786540985108,
+        3.846143187046051,
+        3.845946475505829,
+        3.8457442016601564,
+        3.845636077404022,
+        3.8456482152938842,
+        3.8454119334220884,
+        3.845370762348175
+      ],
+      "val_loss": [
+        3.84313965845108,
+        3.8404971284866334,
+        3.8403919115066527,
+        3.841120946884155,
+        3.8403614296913147,
+        3.83853910446167,
+        3.837788296699524,
+        3.8381150736808776,
+        3.8377069182395935,
+        3.838564235687256,
+        3.8372990188598632,
+        3.8364422359466555,
+        3.836987079620361,
+        3.8363544239997864,
+        3.8367278819084167,
+        3.8363989729881287,
+        3.836135639667511,
+        3.8364577503204345,
+        3.8362539896965027,
+        3.835931697368622
+      ],
+      "train_acc": [
+        0.023722450778724653,
+        0.024288862768145753,
+        0.02395680282104026,
+        0.02418307375844843,
+        0.02417352336173964,
+        0.02425359976491331,
+        0.024285189538642376,
+        0.02415442256832207,
+        0.024434322656479577,
+        0.024357919482809284,
+        0.0243909785483397,
+        0.024304290332059948,
+        0.02448721716132824,
+        0.02441742580076403,
+        0.02448501322362621,
+        0.02451219512195122,
+        0.024436526594181603,
+        0.024425506905671468,
+        0.02452468410226271,
+        0.02449970614163973
+      ],
+      "val_acc": [
+        0.024233080096273237,
+        0.024133040668969534,
+        0.024215426079690232,
+        0.0240271165694715,
+        0.023885884436807447,
+        0.024021231897277163,
+        0.02457439108354469,
+        0.023838807059252766,
+        0.02435665821235428,
+        0.024144810013358206,
+        0.02429192681821659,
+        0.024186002718718555,
+        0.02455085239476735,
+        0.02405065525824884,
+        0.02482154731570678,
+        0.024321350179188267,
+        0.02460381444451637,
+        0.024686199855237064,
+        0.024303696162605262,
+        0.024509659689407
+      ]
+    },
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/01-12/TRACKFORMERS/Q1/x-ai_grok-code-fast-1/script_x-ai_grok-code-fast-1_1644_4.py\nargv2=\nEpoch 1/20, Train Loss: 3.8631, Val Loss: 3.8431, Train Acc: 0.0237, Val Acc: 0.0242\nEpoch 2/20, Train Loss: 3.8511, Val Loss: 3.8405, Train Acc: 0.0243, Val Acc: 0.0241\nEpoch 3/20, Train Loss: 3.8503, Val Loss: 3.8404, Train Acc: 0.0240, Val Acc: 0.0242\nEpoch 4/20, Train Loss: 3.8497, Val Loss: 3.8411, Train Acc: 0.0242, Val Acc: 0.0240\nEpoch 5/20, Train Loss: 3.8492, Val Loss: 3.8404, Train Acc: 0.0242, Val Acc: 0.0239\nEpoch 6/20, Train Loss: 3.8485, Val Loss: 3.8385, Train Acc: 0.0243, Val Acc: 0.0240\nEpoch 7/20, Train Loss: 3.8480, Val Loss: 3.8378, Train Acc: 0.0243, Val Acc: 0.0246\nEpoch 8/20, Train Loss: 3.8478, Val Loss: 3.8381, Train Acc: 0.0242, Val Acc: 0.0238\nEpoch 9/20, Train Loss: 3.8473, Val Loss: 3.8377, Train Acc: 0.0244, Val Acc: 0.0244\nEpoch 10/20, Train Loss: 3.8470, Val Loss: 3.8386, Train Acc: 0.0244, Val Acc: 0.0241\nEpoch 11/20, Train Loss: 3.8466, Val Loss: 3.8373, Train Acc: 0.0244, Val Acc: 0.0243\nEpoch 12/20, Train Loss: 3.8463, Val Loss: 3.8364, Train Acc: 0.0243, Val Acc: 0.0242\nEpoch 13/20, Train Loss: 3.8463, Val Loss: 3.8370, Train Acc: 0.0245, Val Acc: 0.0246\nEpoch 14/20, Train Loss: 3.8461, Val Loss: 3.8364, Train Acc: 0.0244, Val Acc: 0.0241\nEpoch 15/20, Train Loss: 3.8459, Val Loss: 3.8367, Train Acc: 0.0245, Val Acc: 0.0248\nEpoch 16/20, Train Loss: 3.8457, Val Loss: 3.8364, Train Acc: 0.0245, Val Acc: 0.0243\nEpoch 17/20, Train Loss: 3.8456, Val Loss: 3.8361, Train Acc: 0.0244, Val Acc: 0.0246\nEpoch 18/20, Train Loss: 3.8456, Val Loss: 3.8365, Train Acc: 0.0244, Val Acc: 0.0247\nEpoch 19/20, Train Loss: 3.8454, Val Loss: 3.8363, Train Acc: 0.0245, Val Acc: 0.0243\nEpoch 20/20, Train Loss: 3.8454, Val Loss: 3.8359, Train Acc: 0.0245, Val Acc: 0.0245\n#TRAIN_METRICS#{\"epochs\": 20, \"train_loss\": [3.863073998451233, 3.8511031718254087, 3.850306828022003, 3.8497407999038695, 3.849219421863556, 3.848479516029358, 3.848016038894653, 3.847794421195984, 3.8473483228683474, 3.8470439925193785, 3.846579176902771, 3.8463383836746217, 3.8462786540985108, 3.846143187046051, 3.845946475505829, 3.8457442016601564, 3.845636077404022, 3.8456482152938842, 3.8454119334220884, 3.845370762348175], \"val_loss\": [3.84313965845108, 3.8404971284866334, 3.8403919115066527, 3.841120946884155, 3.8403614296913147, 3.83853910446167, 3.837788296699524, 3.8381150736808776, 3.8377069182395935, 3.838564235687256, 3.8372990188598632, 3.8364422359466555, 3.836987079620361, 3.8363544239997864, 3.8367278819084167, 3.8363989729881287, 3.836135639667511, 3.8364577503204345, 3.8362539896965027, 3.835931697368622], \"train_acc\": [0.023722450778724653, 0.024288862768145753, 0.02395680282104026, 0.02418307375844843, 0.02417352336173964, 0.02425359976491331, 0.024285189538642376, 0.02415442256832207, 0.024434322656479577, 0.024357919482809284, 0.0243909785483397, 0.024304290332059948, 0.02448721716132824, 0.02441742580076403, 0.02448501322362621, 0.02451219512195122, 0.024436526594181603, 0.024425506905671468, 0.02452468410226271, 0.02449970614163973], \"val_acc\": [0.024233080096273237, 0.024133040668969534, 0.024215426079690232, 0.0240271165694715, 0.023885884436807447, 0.024021231897277163, 0.02457439108354469, 0.023838807059252766, 0.02435665821235428, 0.024144810013358206, 0.02429192681821659, 0.024186002718718555, 0.02455085239476735, 0.02405065525824884, 0.02482154731570678, 0.024321350179188267, 0.02460381444451637, 0.024686199855237064, 0.024303696162605262, 0.024509659689407]}\n#PROC_METRICS#{\"cpu_seconds_user\": 14097.67, \"cpu_seconds_sys\": 47.38, \"max_rss_kb\": 1570472, \"training_time_s\": 1963.23, \"source\": \"proc_tree_ticks\"}\n#GPU_METRICS#{\"cuda_available\": true, \"name\": \"NVIDIA GeForce RTX 3050 Ti Laptop GPU\", \"total_mb\": 4096, \"peak_used_mb\": 3949, \"avg_used_mb\": 3904.435, \"avg_util_pct\": 52.127, \"peak_util_pct\": 100, \"per_process_gpu_mem\": false}\nHash manifest written â†’ x-ai_grok-code-fast-1_1644_4_manifest.sha256\n",
+      "stderr": "resource_monitor.py: WARNING: cgroup v2 not detected; metrics may be degraded.\n"
+    }
+  },
+  "Evaluation": {
+    "__timestamp": "2026-01-13T18:14:48Z",
+    "passed": true,
+    "metrics": {
+      "ok": true,
+      "load_s": 7.92,
+      "eval_s": 9.97,
+      "FitAccuracy": 4.7049136942394215e-05
+    },
+    "runtime_s": 32.19
+  }
+}

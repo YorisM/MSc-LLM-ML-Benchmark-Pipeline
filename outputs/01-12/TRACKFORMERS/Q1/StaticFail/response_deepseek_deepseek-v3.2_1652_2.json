@@ -1,0 +1,89 @@
+{
+  "LLMGeneration": {
+    "model": "deepseek/deepseek-v3.2",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 4457,
+    "prompt_chars": 17811,
+    "response_tokens": 5855,
+    "response_chars": 13273,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.00397185,
+    "generation_ms": 346118,
+    "code": "import torch\nimport torch.nn as nn\nimport torch.nn.functional as F\nimport numpy as np\nfrom sklearn.preprocessing import StandardScaler\nfrom collections import defaultdict\nimport scipy.spatial.distance as distance\n\n# ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.scaler = StandardScaler()\n\n    def make_loader_cfg(self) -> dict:\n        return {\n            \"dataset_builder\": \"utils.llm_io:EventDataset\",\n            \"dataset_kwargs\": {},\n            \"loader_class\": \"torch.utils.data:DataLoader\",\n            \"batch_size\": 32,\n            \"shuffle\": True,\n            \"num_workers\": 4,\n            \"pin_memory\": True,\n            \"collate\": \"ragged_xy\",\n            \"extra_loader_kwargs\": {},\n            \"eval_overrides\": {\"shuffle\": False, \"batch_size\": 32}\n        }\n\n    def fit(self, Xs):\n        # Xs: list of per-event X, each [N_hits_i, F_raw]\n        # Collect all hit features for standardization\n        all_X = torch.cat([x for x in Xs], dim=0).numpy()  # [total_hits, 4]\n        self.scaler.fit(all_X)\n        return self\n\n    def transform(self, X):\n        # X: one event array/tensor [N_hits, F_raw]\n        X_np = X.numpy()\n        X_scaled = self.scaler.transform(X_np)\n        return torch.from_numpy(X_scaled).float()  # [N_hits, 4]\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# ---------- MODEL ARCHITECTURE ----------\n# Using LANE A: Torch ragged tensors\nclass HitClassifier(nn.Module):\n    def __init__(self, example_batch_x):\n        super().__init__()\n        # Analyze input feature dimension from example batch\n        first_event = example_batch_x[0]  # [N_hits, 4]\n        in_features = first_event.shape[1]\n\n        # Embedding network\n        hidden_dim = 128\n        self.embedding_net = nn.Sequential(\n            nn.Linear(in_features, hidden_dim),\n            nn.ReLU(),\n            nn.Linear(hidden_dim, hidden_dim),\n            nn.ReLU(),\n            nn.Linear(hidden_dim, hidden_dim),\n        )\n\n        # Output projection for contrastive learning\n        self.projection = nn.Sequential(\n            nn.Linear(hidden_dim, hidden_dim),\n            nn.ReLU(),\n            nn.Linear(hidden_dim, 32)  # Final embedding dimension\n        )\n\n        # Attention pooling for global context\n        self.attention = nn.Sequential(\n            nn.Linear(hidden_dim, 1),\n            nn.Sigmoid()\n        )\n\n    def forward(self, batch_x):\n        # batch_x: list of tensors, each [N_i, F]\n        embeddings = []\n        for x in batch_x:\n            emb = self.embedding_net(x)  # [N_i, hidden_dim]\n            # Attention-weighted features\n            weights = self.attention(emb)  # [N_i, 1]\n            weighted_emb = emb * weights  # [N_i, hidden_dim]\n            embeddings.append(weighted_emb)\n        return embeddings\n\n    def predict_labels(self, batch_x):\n        # Get embeddings for each event\n        embeddings_list = self.forward(batch_x)\n        all_labels = []\n\n        for emb in embeddings_list:\n            # emb: [N_i, hidden_dim]\n            if emb.shape[0] == 0:\n                all_labels.append(torch.tensor([], dtype=torch.long))\n                continue\n\n            # Project to final embedding space\n            final_emb = self.projection(emb)  # [N_i, 32]\n\n            # Simple clustering based on cosine similarity\n            # Normalize embeddings\n            norms = torch.norm(final_emb, dim=1, keepdim=True) + 1e-8\n            normalized_emb = final_emb / norms  # [N_i, 32]\n\n            # Compute cosine similarity matrix\n            sim_matrix = torch.mm(normalized_emb, normalized_emb.t())  # [N_i, N_i]\n\n            # DBSCAN-like clustering using cosine similarity\n            eps = 0.5\n            min_samples = 4\n            labels = self._dbscan_cosine(sim_matrix.numpy(), eps, min_samples)\n\n            # Convert to torch tensor\n            all_labels.append(torch.from_numpy(labels).long())\n\n        return all_labels\n\n    def _dbscan_cosine(self, sim_matrix, eps, min_samples):\n        # Simple DBSCAN implementation using cosine similarity\n        n_points = sim_matrix.shape[0]\n        visited = np.zeros(n_points, dtype=bool)\n        labels = -np.ones(n_points, dtype=int)\n        cluster_id = 0\n\n        for i in range(n_points):\n            if visited[i]:\n                continue\n            visited[i] = True\n\n            # Find neighbors\n            neighbors = np.where(sim_matrix[i] > eps)[0]\n            if len(neighbors) < min_samples:\n                continue  # Noise point\n\n            # Start new cluster\n            labels[i] = cluster_id\n            seed_set = set(neighbors)\n            seed_set.discard(i)\n\n            while seed_set:\n                j = seed_set.pop()\n                if not visited[j]:\n                    visited[j] = True\n                    j_neighbors = np.where(sim_matrix[j] > eps)[0]\n                    if len(j_neighbors) >= min_samples:\n                        seed_set.update(j_neighbors)\n                if labels[j] == -1:\n                    labels[j] = cluster_id\n\n            cluster_id += 1\n\n        return labels\n\ndef make_model(example_batch_x):\n    return HitClassifier(example_batch_x)\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 20\n\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    device = torch.device(\"cuda\" if torch.cuda.is_available() else \"cpu\")\n    model = model.to(device)\n\n    # Optimizer\n    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)\n    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)\n\n    # Loss function - contrastive loss\n    def contrastive_loss(embeddings, labels, margin=1.0):\n        # embeddings: list of [N_i, D]\n        # labels: list of [N_i]\n        total_loss = 0.0\n        total_pairs = 0\n\n        for emb, lbl in zip(embeddings, labels):\n            if emb.shape[0] < 2:\n                continue\n\n            # Only use non-noise points (label > 0)\n            mask = lbl > 0\n            if mask.sum() < 2:\n                continue\n\n            emb_pos = emb[mask]  # [M, D]\n            lbl_pos = lbl[mask]  # [M]\n\n            # Normalize embeddings\n            norms = torch.norm(emb_pos, dim=1, keepdim=True) + 1e-8\n            emb_norm = emb_pos / norms\n\n            # Compute similarity matrix\n            sim = torch.mm(emb_norm, emb_norm.t())  # [M, M]\n\n            # Create positive mask (same track)\n            pos_mask = (lbl_pos.unsqueeze(1) == lbl_pos.unsqueeze(0)).float()\n            pos_mask.fill_diagonal_(0)  # Remove self\n\n            # Create negative mask (different tracks)\n            neg_mask = (lbl_pos.unsqueeze(1) != lbl_pos.unsqueeze(0)).float()\n\n            # Positive pairs loss\n            pos_loss = (1 - sim) * pos_mask\n            pos_loss = pos_loss.sum() / (pos_mask.sum() + 1e-8)\n\n            # Negative pairs loss\n            neg_loss = F.relu(sim - margin) * neg_mask\n            neg_loss = neg_loss.sum() / (neg_mask.sum() + 1e-8)\n\n            total_loss += pos_loss + neg_loss\n            total_pairs += 1\n\n        return total_loss / max(total_pairs, 1)\n\n    train_losses, val_losses = [], []\n    train_accs, val_accs = [], []\n\n    best_val_acc = 0.0\n    best_model_state = None\n\n    for epoch in range(epochs):\n        # Training\n        model.train()\n        epoch_train_loss = 0.0\n        epoch_train_acc = 0.0\n        batch_count = 0\n\n        for batch_idx, (Xs, ys) in enumerate(train_loader):\n            Xs = [x.to(device) for x in Xs]\n            ys = [y.to(device) for y in ys]\n\n            # Forward pass\n            embeddings = model(Xs)\n\n            # Compute loss\n            loss = contrastive_loss(embeddings, ys)\n\n            # Backward pass\n            optimizer.zero_grad()\n            loss.backward()\n            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)\n            optimizer.step()\n\n            # Compute accuracy for this batch\n            with torch.no_grad():\n                pred_labels = model.predict_labels(Xs)\n                batch_acc = 0.0\n                for pred, true in zip(pred_labels, ys):\n                    pred_cpu = pred.cpu().numpy()\n                    true_cpu = true.cpu().numpy()\n                    batch_acc += self._compute_fit_accuracy_single(pred_cpu, true_cpu)\n                batch_acc /= len(pred_labels)\n\n            epoch_train_loss += loss.item()\n            epoch_train_acc += batch_acc\n            batch_count += 1\n\n            if batch_count % 50 == 0:\n                print(f\"Epoch {epoch+1}, Batch {batch_count}, Loss: {loss.item():.4f}, Acc: {batch_acc:.4f}\")\n\n        avg_train_loss = epoch_train_loss / max(batch_count, 1)\n        avg_train_acc = epoch_train_acc / max(batch_count, 1)\n        train_losses.append(avg_train_loss)\n        train_accs.append(avg_train_acc)\n\n        # Validation\n        model.eval()\n        epoch_val_loss = 0.0\n        epoch_val_acc = 0.0\n        val_batch_count = 0\n\n        with torch.no_grad():\n            for Xs, ys in val_loader:\n                Xs = [x.to(device) for x in Xs]\n                ys = [y.to(device) for y in ys]\n\n                embeddings = model(Xs)\n                loss = contrastive_loss(embeddings, ys)\n\n                pred_labels = model.predict_labels(Xs)\n                batch_acc = 0.0\n                for pred, true in zip(pred_labels, ys):\n                    pred_cpu = pred.cpu().numpy()\n                    true_cpu = true.cpu().numpy()\n                    batch_acc += self._compute_fit_accuracy_single(pred_cpu, true_cpu)\n                batch_acc /= len(pred_labels)\n\n                epoch_val_loss += loss.item()\n                epoch_val_acc += batch_acc\n                val_batch_count += 1\n\n        avg_val_loss = epoch_val_loss / max(val_batch_count, 1)\n        avg_val_acc = epoch_val_acc / max(val_batch_count, 1)\n        val_losses.append(avg_val_loss)\n        val_accs.append(avg_val_acc)\n\n        # Update learning rate\n        scheduler.step()\n\n        # Save best model\n        if avg_val_acc > best_val_acc:\n            best_val_acc = avg_val_acc\n            best_model_state = model.state_dict().copy()\n\n        print(f\"Epoch {epoch+1}/{epochs}:\")\n        print(f\"  Train Loss: {avg_train_loss:.4f}, Train Acc: {avg_train_acc:.4f}\")\n        print(f\"  Val Loss: {avg_val_loss:.4f}, Val Acc: {avg_val_acc:.4f}\")\n\n    # Load best model\n    if best_model_state is not None:\n        model.load_state_dict(best_model_state)\n\n    return model, train_losses, val_losses, train_accs, val_accs\n\n# Helper function to compute FitAccuracy for single event\ndef _compute_fit_accuracy_single(self, pred_labels, true_labels):\n    \"\"\"\n    Compute FitAccuracy for a single event.\n    pred_labels: [N] integer labels, -1 for noise\n    true_labels: [N] integer track ids, 0 for noise\n    \"\"\"\n    # Only consider non-noise true hits (track_id > 0)\n    non_noise_mask = true_labels > 0\n    if not non_noise_mask.any():\n        return 0.0\n\n    pred_labels = pred_labels[non_noise_mask]\n    true_labels = true_labels[non_noise_mask]\n\n    # Group predicted clusters\n    pred_clusters = {}\n    for i, (pred, true) in enumerate(zip(pred_labels, true_labels)):\n        if pred == -1:\n            continue\n        if pred not in pred_clusters:\n            pred_clusters[pred] = []\n        pred_clusters[pred].append((i, true))\n\n    # Filter clusters with < 4 hits\n    valid_clusters = {}\n    for cluster_id, hits in pred_clusters.items():\n        if len(hits) >= 4:\n            valid_clusters[cluster_id] = hits\n\n    if not valid_clusters:\n        return 0.0\n\n    # Compute matching and correctness\n    total_correct = 0\n    matched_true_tracks = set()\n\n    for cluster_id, hits in valid_clusters.items():\n        # Count hits per true track\n        true_counts = {}\n        for _, true_id in hits:\n            true_counts[true_id] = true_counts.get(true_id, 0) + 1\n\n        # Find dominant true track\n        dominant_true = max(true_counts.items(), key=lambda x: x[1])\n        dominant_id, dominant_count = dominant_true\n\n        # Check purity and coverage\n        purity = dominant_count / len(hits)\n        total_hits_in_true = np.sum(true_labels == dominant_id)\n        coverage = dominant_count / total_hits_in_true\n\n        if purity >= 0.5 and coverage >= 0.5:\n            # Count correct hits\n            total_correct += dominant_count\n            matched_true_tracks.add(dominant_id)\n\n    # Compute accuracy\n    total_non_noise = np.sum(non_noise_mask)\n    accuracy = total_correct / total_non_noise\n\n    return accuracy\n\n# Attach helper method to train_model function for convenience\ntrain_model._compute_fit_accuracy_single = _compute_fit_accuracy_single",
+    "reasoning": "",
+    "Outer_attempt": 2
+  },
+  "StaticChecks": {
+    "__timestamp": "2026-01-12T15:52:47Z",
+    "PyLint": {
+      "passed": false,
+      "messages": [
+        {
+          "type": "error",
+          "module": "script_deepseek_deepseek-v3.2_1652_2",
+          "obj": "train_model",
+          "line": 302,
+          "column": 33,
+          "endLine": 302,
+          "endColumn": 37,
+          "path": "outputs\\01-12\\TRACKFORMERS\\Q1\\script_deepseek_deepseek-v3.2_1652_2.py",
+          "symbol": "undefined-variable",
+          "message": "Undefined variable 'self'",
+          "message-id": "E0602"
+        },
+        {
+          "type": "error",
+          "module": "script_deepseek_deepseek-v3.2_1652_2",
+          "obj": "train_model",
+          "line": 336,
+          "column": 33,
+          "endLine": 336,
+          "endColumn": 37,
+          "path": "outputs\\01-12\\TRACKFORMERS\\Q1\\script_deepseek_deepseek-v3.2_1652_2.py",
+          "symbol": "undefined-variable",
+          "message": "Undefined variable 'self'",
+          "message-id": "E0602"
+        }
+      ]
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2026-01-12T15:52:47Z",
+        "metrics": {
+          ".\\outputs\\01-12\\TRACKFORMERS\\Q1\\script_deepseek_deepseek-v3.2_1652_2.py": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 351,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 351,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  }
+}

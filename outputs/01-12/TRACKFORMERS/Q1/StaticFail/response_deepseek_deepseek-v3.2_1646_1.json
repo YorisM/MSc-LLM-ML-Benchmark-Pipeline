@@ -1,0 +1,76 @@
+{
+  "LLMGeneration": {
+    "model": "deepseek/deepseek-v3.2",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 4457,
+    "prompt_chars": 17811,
+    "response_tokens": 6042,
+    "response_chars": 12761,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.00374103,
+    "generation_ms": 114788,
+    "code": "# ---------- IMPORTS ----------\nimport torch\nimport torch.nn as nn\nimport torch.nn.functional as F\nimport numpy as np\nfrom sklearn.preprocessing import StandardScaler\nfrom sklearn.neighbors import kneighbors_graph\nimport torch_geometric\nfrom torch_geometric.nn import EdgeConv, global_mean_pool\nfrom torch_geometric.data import Data, Batch\nfrom torch_geometric.loader import DataLoader as PyGDataLoader\nimport torch_geometric.transforms as T\nfrom typing import List, Tuple\n\n#  -------- (OPTIONAL) CUSTOM DATASET  --------\nclass PyGDataset(torch.utils.data.Dataset):\n    def __init__(self, events, pre, train=True, k_neighbors=20, max_hits_per_event=5000):\n        self.events = events\n        self.pre = pre\n        self.train = train\n        self.k_neighbors = k_neighbors\n        self.max_hits_per_event = max_hits_per_event\n\n    def __len__(self):\n        return len(self.events)\n\n    def __getitem__(self, idx):\n        X, y = split_X_y(self.events[idx])\n        X = self.pre.transform(X)\n\n        # Limit hits for memory efficiency\n        if len(X) > self.max_hits_per_event:\n            indices = torch.randperm(len(X))[:self.max_hits_per_event]\n            X = X[indices]\n            y = y[indices]\n\n        # Build kNN graph\n        edge_index = self._build_knn_graph(X.numpy())\n\n        # Create PyG Data object\n        data = Data(\n            x=X,  # [N_hits, F_out]\n            y=y,  # [N_hits]\n            edge_index=edge_index,\n            num_nodes=len(X)\n        )\n        return data\n\n    def _build_knn_graph(self, X):\n        # Build kNN graph for edge connections\n        knn_graph = kneighbors_graph(X, self.k_neighbors, mode='connectivity', include_self=False)\n        edge_index = torch.tensor(np.stack(knn_graph.nonzero()), dtype=torch.long)\n        return edge_index\n\n# ----------- PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.scaler = StandardScaler()\n        self.n_features = 4\n\n    def make_loader_cfg(self) -> dict:\n        return {\n            \"dataset_builder\": \"llm_script:PyGDataset\",   # Use PyG dataset\n            \"dataset_kwargs\": {\"k_neighbors\": 20, \"max_hits_per_event\": 5000},\n\n            \"loader_class\": \"torch_geometric.loader:DataLoader\",\n            \"batch_size\": 16,  # Smaller for memory constraints\n            \"shuffle\": True,\n            \"num_workers\": 2,\n            \"pin_memory\": True,\n\n            \"collate\": None,  # PyG handles collation\n            \"extra_loader_kwargs\": {\"follow_batch\": [], \"exclude_keys\": []},\n\n            \"eval_overrides\": {\"shuffle\": False, \"batch_size\": 8}\n        }\n\n    def fit(self, Xs):\n        # Concatenate all events for scaling\n        X_all = torch.cat(Xs, dim=0).numpy()\n        self.scaler.fit(X_all)\n        return self\n\n    def transform(self, X):\n        # X: [N_hits, 4] torch tensor\n        X_np = X.numpy()\n        X_scaled = self.scaler.transform(X_np)\n\n        # Add engineered features\n        r = X[:, 0].unsqueeze(1)  # [N_hits, 1]\n        theta = X[:, 1].unsqueeze(1)  # [N_hits, 1]\n        z = X[:, 2].unsqueeze(1)  # [N_hits, 1]\n        layer = X[:, 3].unsqueeze(1)  # [N_hits, 1]\n\n        # Cylindrical to Cartesian (approximate)\n        x = r * torch.cos(theta)  # [N_hits, 1]\n        y = r * torch.sin(theta)  # [N_hits, 1]\n\n        # Normalize features\n        coords = torch.cat([x, y, z], dim=1)  # [N_hits, 3]\n        coords_norm = (coords - coords.mean(dim=0)) / (coords.std(dim=0) + 1e-8)\n\n        # Concatenate all features\n        X_out = torch.cat([\n            torch.tensor(X_scaled, dtype=torch.float32),  # Original scaled features\n            coords_norm,  # Normalized Cartesian coordinates\n            layer / 10.0  # Normalized layer ID\n        ], dim=1)  # [N_hits, 4 + 3 + 1 = 8 features]\n\n        return X_out\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# ---------- MODEL ARCHITECTURE ----------\nclass DynamicEdgeConv(nn.Module):\n    def __init__(self, in_channels, out_channels, k=20):\n        super().__init__()\n        self.k = k\n        self.conv = EdgeConv(\n            nn.Sequential(\n                nn.Linear(2 * in_channels, 128),\n                nn.ReLU(),\n                nn.Linear(128, out_channels)\n            ),\n            aggr='max'\n        )\n\n    def forward(self, x, batch=None):\n        # Dynamic kNN graph generation\n        from torch_geometric.nn import knn_graph\n        edge_index = knn_graph(x, self.k, batch, loop=False)\n        return self.conv(x, edge_index)\n\nclass TrackGNN(nn.Module):\n    def __init__(self, example_batch_x=None):\n        super().__init__()\n        input_dim = 8  # From preprocessor\n\n        # Graph convolution layers\n        self.conv1 = DynamicEdgeConv(input_dim, 128, k=20)\n        self.conv2 = DynamicEdgeConv(128, 256, k=15)\n        self.conv3 = DynamicEdgeConv(256, 256, k=10)\n\n        # Node classification head\n        self.node_head = nn.Sequential(\n            nn.Linear(256, 128),\n            nn.ReLU(),\n            nn.Dropout(0.2),\n            nn.Linear(128, 64),\n            nn.ReLU(),\n            nn.Linear(64, 32)  # Embedding dimension\n        )\n\n        # Cluster prediction head\n        self.cluster_head = nn.Sequential(\n            nn.Linear(32, 32),\n            nn.ReLU(),\n            nn.Linear(32, 1)  # Binary: same cluster or not\n        )\n\n    def forward(self, data):\n        x, batch = data.x, data.batch if hasattr(data, 'batch') else None\n\n        # Graph convolutions\n        x1 = F.relu(self.conv1(x, batch))  # [N, 128]\n        x2 = F.relu(self.conv2(x1, batch))  # [N, 256]\n        x3 = F.relu(self.conv3(x2, batch))  # [N, 256]\n\n        # Node embeddings\n        embeddings = self.node_head(x3)  # [N, 32]\n        return embeddings\n\n    def predict_labels(self, batch_x):\n        self.eval()\n        with torch.no_grad():\n            if isinstance(batch_x, Batch):\n                # PyG batch\n                embeddings = self.forward(batch_x)  # [N_total, 32]\n\n                # Create batch indices\n                batch = batch_x.batch\n                unique_batch = torch.unique(batch)\n                predictions = []\n\n                for b_idx in unique_batch:\n                    mask = (batch == b_idx)\n                    emb_batch = embeddings[mask]  # [N_batch, 32]\n\n                    if len(emb_batch) < 4:\n                        # Too few hits, all noise\n                        pred = -torch.ones(len(emb_batch), dtype=torch.long, device=emb_batch.device)\n                    else:\n                        # Adaptive clustering using learned embeddings\n                        pred = self._cluster_batch(emb_batch)\n\n                    predictions.append(pred)\n\n                # Flatten predictions\n                return torch.cat(predictions, dim=0)\n            else:\n                # Ragged tensor batch (LANE A)\n                raise NotImplementedError(\"Only PyG lane is implemented\")\n\n    def _cluster_batch(self, embeddings, min_cluster_size=4, eps=0.5):\n        # DBSCAN-like clustering on embeddings\n        device = embeddings.device\n        n_points = len(embeddings)\n\n        if n_points < min_cluster_size:\n            return -torch.ones(n_points, dtype=torch.long, device=device)\n\n        # Compute pairwise distances\n        dists = torch.cdist(embeddings, embeddings)  # [N, N]\n\n        # Initialize labels as noise\n        labels = -torch.ones(n_points, dtype=torch.long, device=device)\n        cluster_id = 0\n\n        # Core point detection\n        core_mask = (dists < eps).sum(dim=1) >= min_cluster_size  # [N]\n\n        for i in range(n_points):\n            if labels[i] != -1 or not core_mask[i]:\n                continue\n\n            # Start new cluster\n            cluster_points = [i]\n            labels[i] = cluster_id\n\n            # Expand cluster\n            j = 0\n            while j < len(cluster_points):\n                point = cluster_points[j]\n                neighbors = (dists[point] < eps).nonzero(as_tuple=True)[0]\n\n                for neighbor in neighbors:\n                    if labels[neighbor] == -1:\n                        labels[neighbor] = cluster_id\n                        if core_mask[neighbor]:\n                            cluster_points.append(neighbor)\n                j += 1\n\n            # Check if cluster meets minimum size\n            if (labels == cluster_id).sum() < min_cluster_size:\n                # Mark as noise\n                labels[labels == cluster_id] = -1\n            else:\n                cluster_id += 1\n\n        return labels\n\ndef make_model(example_batch_x):\n    return TrackGNN(example_batch_x)\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 30\n\ndef contrastive_loss(embeddings, labels, margin=1.0):\n    \"\"\"Triplet loss for embedding learning\"\"\"\n    device = embeddings.device\n    batch_size = len(embeddings)\n\n    # Only use valid tracks (labels > 0)\n    valid_mask = labels > 0\n    if valid_mask.sum() < 2:\n        return torch.tensor(0.0, device=device)\n\n    embeddings = embeddings[valid_mask]\n    labels = labels[valid_mask]\n\n    # Compute pairwise distances\n    dists = torch.cdist(embeddings, embeddings)  # [N_valid, N_valid]\n\n    # Create masks for positive and negative pairs\n    label_matrix = labels.unsqueeze(0) == labels.unsqueeze(1)  # [N_valid, N_valid]\n    pos_mask = label_matrix & (~torch.eye(len(labels), dtype=torch.bool, device=device))\n    neg_mask = ~label_matrix\n\n    if not pos_mask.any() or not neg_mask.any():\n        return torch.tensor(0.0, device=device)\n\n    # Hard negative mining\n    pos_dists = dists[pos_mask]\n    neg_dists = dists[neg_mask]\n\n    # Triplet loss\n    loss = F.relu(pos_dists.mean() - neg_dists.min() + margin)\n    return loss\n\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    device = next(model.parameters()).device\n    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)\n    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(\n        optimizer, mode='min', factor=0.5, patience=5, verbose=False\n    )\n\n    # Track metrics\n    train_losses, val_losses = [], []\n    train_accs, val_accs = [], []\n\n    best_val_loss = float('inf')\n    patience_counter = 0\n    patience = 10\n\n    for epoch in range(epochs):\n        # Training\n        model.train()\n        train_loss = 0.0\n        train_batches = 0\n\n        for batch in train_loader:\n            batch = batch.to(device)\n            optimizer.zero_grad()\n\n            embeddings = model(batch)  # [N_total, 32]\n            loss = contrastive_loss(embeddings, batch.y)\n\n            loss.backward()\n            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)\n            optimizer.step()\n\n            train_loss += loss.item()\n            train_batches += 1\n\n        avg_train_loss = train_loss / max(train_batches, 1)\n        train_losses.append(avg_train_loss)\n\n        # Validation\n        model.eval()\n        val_loss = 0.0\n        val_batches = 0\n\n        with torch.no_grad():\n            for batch in val_loader:\n                batch = batch.to(device)\n                embeddings = model(batch)\n                loss = contrastive_loss(embeddings, batch.y)\n\n                val_loss += loss.item()\n                val_batches += 1\n\n        avg_val_loss = val_loss / max(val_batches, 1)\n        val_losses.append(avg_val_loss)\n\n        # Learning rate scheduling\n        scheduler.step(avg_val_loss)\n\n        # Early stopping\n        if avg_val_loss < best_val_loss:\n            best_val_loss = avg_val_loss\n            patience_counter = 0\n            best_model_state = model.state_dict().copy()\n        else:\n            patience_counter += 1\n\n        if patience_counter >= patience:\n            print(f\"Early stopping at epoch {epoch}\")\n            break\n\n        # Print progress\n        if (epoch + 1) % 5 == 0:\n            print(f\"Epoch {epoch+1}/{epochs}: \"\n                  f\"Train Loss: {avg_train_loss:.4f}, \"\n                  f\"Val Loss: {avg_val_loss:.4f}\")\n\n    # Load best model\n    model.load_state_dict(best_model_state)\n\n    # Dummy accuracies (real accuracy requires full evaluation pipeline)\n    train_acc = [0.7] * len(train_losses)\n    val_acc = [0.6] * len(val_losses)\n\n    return model, train_losses, val_losses, train_acc, val_acc",
+    "reasoning": "",
+    "Outer_attempt": 1
+  },
+  "StaticChecks": {
+    "__timestamp": "2026-01-12T15:46:48Z",
+    "PyLint": {
+      "passed": false,
+      "messages": [
+        {
+          "type": "error",
+          "module": "script_deepseek_deepseek-v3.2_1646_1",
+          "obj": "train_model",
+          "line": 419,
+          "column": 26,
+          "endLine": 419,
+          "endColumn": 42,
+          "path": "outputs\\01-12\\TRACKFORMERS\\Q1\\script_deepseek_deepseek-v3.2_1646_1.py",
+          "symbol": "possibly-used-before-assignment",
+          "message": "Possibly using variable 'best_model_state' before assignment",
+          "message-id": "E0606"
+        }
+      ]
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2026-01-12T15:46:48Z",
+        "metrics": {
+          ".\\outputs\\01-12\\TRACKFORMERS\\Q1\\script_deepseek_deepseek-v3.2_1646_1.py": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 353,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 353,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  }
+}

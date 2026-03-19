@@ -44,7 +44,7 @@ from utils.run_id import *
 # python main.py --all --question FOURTOPS:Q1
 
 
-_RUN_ID_FROM_PATH_RE = re.compile(r"(?:^|[\\/])outputs[\\/](\d{2}-\d{2}(?:\(\d+\))?)(?:[\\/]|$)")
+_RUN_ID_FROM_PATH_RE = re.compile(r"(?:^|[\\/])outputs[\\/](\d{4}-\d{2}-\d{2}(?:\(\d+\))?)(?:[\\/]|$)")
 
 
 def parse_args():
@@ -73,8 +73,12 @@ def parse_args():
     parser.add_argument("--challenge", action="append", default=None,
         help='Challenge filter. Examples: --challenge ALL | --challenge FOURTOPS | --challenge FOURTOPS --challenge TRACKFORMERS | --challenge "FOURTOPS,TRACKFORMERS"')
     
+    # Optional filtering - run a single challenge-question
     parser.add_argument("--question", action="append", default=None,
         help='Question filter. Examples: --question ALL | --question Q1 | --question "Q1,Q2". Optional scoped form: --question FOURTOPS:Q1')
+    
+    parser.add_argument("--repeat", type=int, default=1,
+        help="Repeat the full --all pipeline N times. Each repetition gets a fresh run_id.")
 
     return parser.parse_args()
 
@@ -241,21 +245,29 @@ def main():
     ensure_docker_running()
 
     if args.gen:
-            logging.info("Mode: Generate scripts and dry-run validation.")
-            selected = _select_challenges_for_generation(args.challenge, args.question)
-            generate_and_dryrun(challenges_override=selected)
-            logging.info("Active run id after generation: %s", get_active_run_id())
+        logging.info("Mode: Generate scripts and dry-run validation.")
+        selected = _select_challenges_for_generation(args.challenge, args.question)
+        generate_and_dryrun(challenges_override=selected)
+        logging.info("Active run id after generation: %s", get_active_run_id())
 
     elif args.run:
-        base_dir = _resolve_output_dir(args)
-        targets = _iter_selected_dirs_for_run_eval(base_dir, args.challenge, args.question)
+        if args.input_dir:
+            targets = [args.input_dir]
+        else:
+            base_dir = _resolve_output_dir(args)
+            targets = _iter_selected_dirs_for_run_eval(base_dir, args.challenge, args.question)
+
         logging.info("Mode: Execute scripts. Targets: %s", targets)
         for d in targets:
             execute_scripts_in_batch(d)
 
     elif args.eval:
-        base_dir = _resolve_output_dir(args)
-        targets = _iter_selected_dirs_for_run_eval(base_dir, args.challenge, args.question)
+        if args.input_dir:
+            targets = [args.input_dir]
+        else:
+            base_dir = _resolve_output_dir(args)
+            targets = _iter_selected_dirs_for_run_eval(base_dir, args.challenge, args.question)
+
         logging.info("Mode: Evaluate script outputs. Targets: %s", targets)
         for d in targets:
             evaluate_results(d)
@@ -263,25 +275,34 @@ def main():
     elif args.all:
         logging.info("Mode: Full pipeline execution.")
 
-        # Step 1: Generation and Dry-run
-        logging.info("Start generation and dryrun.")
-        selected = _select_challenges_for_generation(args.challenge, args.question)
-        generate_and_dryrun(challenges_override=selected)
+        for i in range(args.repeat):
+            if args.repeat > 1:
+                logging.info(f"--- Repetition {i+1}/{args.repeat} ---")
 
-        run_id = require_active_run_id()
-        input_dir = f"./outputs/{run_id}/"
-        logging.info(f"Using active run directory for script execution & evaluation: {input_dir}")
+            # Force a fresh run id for this repetition (2026-01-21, 2026-01-21(2), ...)
+            get_or_create_run_id(create_new=True)
 
-        # Step 2: Run scripts
-        logging.info("Start script execution.")
-        targets = _iter_selected_dirs_for_run_eval(input_dir, args.challenge, args.question)
-        for d in targets:
-            execute_scripts_in_batch(d, use_docker=True, dryrun=False)
+            # Stage 1: Generation and Dry-run (must set/keep active run id)
+            logging.info("Start generation and dryrun.")
+            selected = _select_challenges_for_generation(args.challenge, args.question)
+            generate_and_dryrun(challenges_override=selected)
 
-        # Step 3: Evaluation
-        logging.info("Start model evaluation.")
-        for d in targets:
-            evaluate_results(d)
+            # Use the run_id that Stage 1 actually used
+            run_id = require_active_run_id()
+            input_dir = f"./outputs/{run_id}/"
+            logging.info(f"Using active run directory for script execution & evaluation: {input_dir}")
+
+            # Stage 2: Run scripts
+            logging.info("Start script execution.")
+            targets = _iter_selected_dirs_for_run_eval(input_dir, args.challenge, args.question)
+            for d in targets:
+                execute_scripts_in_batch(d, use_docker=True, dryrun=False)
+
+            # Stage 3: Evaluation
+            logging.info("Start model evaluation.")
+            for d in targets:
+                evaluate_results(d)
+
 
     logging.info("\n\n\n----------------------------------------------------\n--------- Completed LLM Challenge Pipeline ---------\n----------------------------------------------------")
 

@@ -1,16 +1,11 @@
 # challenges/TRACKFORMERS/misc/visualise_tracks.py
-# Run from repo root (PYTHONPATH configured like your harness does).
 #
 # Example:
-# python challenges/TRACKFORMERS/misc/visualise_tracks.py --model-path "outputs/22-10/TRACKFORMERS/Q1/<model>/<base>_model.pkl" --tag REDVID_10-50_linear_frac0.05 --event-idx 0
-#
-# Notes:
-# - Assumes hit features are [r, theta, z, (optional) layer_id] per hit.
-# - Assumes theta is the azimuth around beam axis (so x=r*cos(theta), y=r*sin(theta)).
+# python challenges/TRACKFORMERS/misc/visualise_tracks.py --model-path "outputs\01-12\TRACKFORMERS\Q1\anthropic_claude-sonnet-4.5\anthropic_claude-sonnet-4.5_1707_1_model.pkl" --tag REDVID_10-50_linear_frac0.05 --event-idx 42 --geom-source raw
 
 from __future__ import annotations
 
-import sys, os, subprocess, argparse, logging, torch
+import sys, os, subprocess, argparse, logging, torch, gzip, pickle
 from pathlib import Path
 
 os.environ.setdefault("MPLBACKEND", "Agg")
@@ -36,6 +31,26 @@ from utils.loaderspec import LoaderSpec, enforce_pyg_policy
 
 log = logging.getLogger("visualise_tracks")
 
+def _load_raw_event(tag: str, event_idx: int) -> dict:
+    """
+    Load raw event dict from the benchmark test pkl.gz.
+    Assumes file layout: challenges/TRACKFORMERS/data/test/{tag}_test.pkl.gz
+    with payload {"events": [evt0, evt1, ...]}.
+    """
+    pkl = (repo_root / "challenges" / "TRACKFORMERS" / "data" / "test" / f"{tag}_test.pkl.gz").resolve()
+    if not pkl.exists():
+        raise FileNotFoundError(f"Raw test file not found: {pkl}")
+    with gzip.open(pkl, "rb") as fh:
+        payload = pickle.load(fh)
+    events = payload.get("events")
+    if events is None:
+        raise KeyError(f"{pkl}: key 'events' not found")
+    if event_idx < 0 or event_idx >= len(events):
+        raise IndexError(f"{pkl}: event_idx={event_idx} out of range [0,{len(events)-1}]")
+    evt = events[event_idx]
+    if not isinstance(evt, dict):
+        raise TypeError(f"{pkl}: events[{event_idx}] is not a dict")
+    return evt
 
 def _load_spec_for_model(model_path: str | Path) -> LoaderSpec:
     base = artefact_base_from_path(model_path)
@@ -111,9 +126,29 @@ def extract_hits(x_event: Any, *, feature_order: Tuple[int, int, int, Optional[i
 
     # dict style
     elif isinstance(x_event, dict):
-        r = np.asarray(x_event["hit_r"]).reshape(-1)
-        th = np.asarray(x_event["hit_theta"]).reshape(-1)
-        z = np.asarray(x_event["hit_z"]).reshape(-1)
+        # REDVID raw (cylindrical)
+        if ("hit_r" in x_event) and ("hit_theta" in x_event) and ("hit_z" in x_event):
+            r = np.asarray(x_event["hit_r"]).reshape(-1)
+            th = np.asarray(x_event["hit_theta"]).reshape(-1)
+            z = np.asarray(x_event["hit_z"]).reshape(-1)
+            lid = np.asarray(x_event["layer_id"]).reshape(-1) if "layer_id" in x_event else None
+            return HitView(r=r, theta=th, z=z, layer_id=lid)
+
+        # TrackML-ish raw (cartesian) -> convert to (r,theta,z)
+        # accept either (x,y,z) or (hit_x,hit_y,hit_z)
+        if ("x" in x_event) and ("y" in x_event) and ("z" in x_event):
+            x = np.asarray(x_event["x"]).reshape(-1)
+            y = np.asarray(x_event["y"]).reshape(-1)
+            z = np.asarray(x_event["z"]).reshape(-1)
+        elif ("hit_x" in x_event) and ("hit_y" in x_event) and ("hit_z" in x_event):
+            x = np.asarray(x_event["hit_x"]).reshape(-1)
+            y = np.asarray(x_event["hit_y"]).reshape(-1)
+            z = np.asarray(x_event["hit_z"]).reshape(-1)
+        else:
+            raise KeyError("Dict event did not contain REDVID keys (hit_r/hit_theta/hit_z) "
+                           "or cartesian keys (x/y/z or hit_x/hit_y/hit_z).")
+        r = np.sqrt(x * x + y * y)
+        th = np.arctan2(y, x)
         lid = np.asarray(x_event["layer_id"]).reshape(-1) if "layer_id" in x_event else None
         return HitView(r=r, theta=th, z=z, layer_id=lid)
     else:
@@ -225,11 +260,23 @@ def fit_accuracy_hit_mask(pred_lbl: np.ndarray, true_tid: np.ndarray) -> Tuple[n
 
     return counted_mask, int(correct_hits), int(denom), reports
 
-def plot_event(h: HitView, pred: np.ndarray, true: np.ndarray, counted: np.ndarray, *, title: str = "", max_clusters_legend: int = 12, out: Optional[str] = None) -> None:
+def _set_axes_equal_3d(ax) -> None:
     """
-    Two projections:
-      - XY (transverse plane)
-      - ZR (longitudinal view)
+    Make 3D axes have equal scale so geometry isn't visually distorted.
+    """
+    xlim = ax.get_xlim3d(); ylim = ax.get_ylim3d(); zlim = ax.get_zlim3d()
+    xmid = 0.5 * (xlim[0] + xlim[1]); ymid = 0.5 * (ylim[0] + ylim[1]); zmid = 0.5 * (zlim[0] + zlim[1])
+    xr = abs(xlim[1] - xlim[0]); yr = abs(ylim[1] - ylim[0]); zr = abs(zlim[1] - zlim[0])
+    r = 0.5 * max(xr, yr, zr)
+    ax.set_xlim3d(xmid - r, xmid + r)
+    ax.set_ylim3d(ymid - r, ymid + r)
+    ax.set_zlim3d(zmid - r, zmid + r)
+
+def plot_event(h: HitView, pred: np.ndarray, true: np.ndarray, counted: np.ndarray, *, title: str = "", max_clusters_legend: int = 12, out: Optional[str] = None, plot_mode: str = "xy_3d", colour_by: str = "pred") -> None:
+    """
+    Two-panel view:
+      - Left: XY (transverse plane)
+      - Right: ZR (longitudinal)  OR  XYZ (3D) depending on `plot_mode`
     Colour = predicted cluster (reindexed); wrong hits outlined.
     """
 
@@ -241,7 +288,24 @@ def plot_event(h: HitView, pred: np.ndarray, true: np.ndarray, counted: np.ndarr
 
     fig = plt.figure(figsize=(12, 5))
     ax_xy = fig.add_subplot(1, 2, 1)
-    ax_zr = fig.add_subplot(1, 2, 2)
+    if plot_mode == "xy_3d":
+        from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
+        ax_right = fig.add_subplot(1, 2, 2, projection="3d")
+        right_is_3d = True
+    elif plot_mode == "xy_zr":
+        ax_right = fig.add_subplot(1, 2, 2)
+        right_is_3d = False
+    else:
+        raise ValueError(f"Unknown plot_mode={plot_mode!r}. Use 'xy_3d' or 'xy_zr'.")
+
+    def _scatter_right(mask: np.ndarray, **kwargs):
+        if right_is_3d:
+            return ax_right.scatter(h.x[mask], h.y[mask], h.z[mask], **kwargs)
+        return ax_right.scatter(h.z[mask], h.r[mask], **kwargs)
+    
+    def _sizes(mask: np.ndarray):
+        # s can be scalar OR array; keep it consistent everywhere
+        return (np.asarray(s)[mask] if np.ndim(s) else s)
 
     # Base scatter: colour by predicted cluster index
     # Use a colormap with enough distinct-ish colours
@@ -265,30 +329,46 @@ def plot_event(h: HitView, pred: np.ndarray, true: np.ndarray, counted: np.ndarr
     # plot truth-noise separately (so it doesn't steal cluster colours)
     base = (~pred_noise) & (~truth_noise)
 
-    ax_xy.scatter(h.x[base], h.y[base], c=pred_idx[base], cmap=cmap,
-                s=np.asarray(s)[base] if np.ndim(s) else s, linewidths=0.0, alpha=0.9)
-    ax_zr.scatter(h.z[base], h.r[base], c=pred_idx[base], cmap=cmap,
-                s=np.asarray(s)[base] if np.ndim(s) else s, linewidths=0.0, alpha=0.9)
+    if colour_by == "true":
+        # map truth IDs to compact indices for the colormap (exclude 0)
+        uniq_t = [t for t in np.unique(true) if t != 0]
+        t_to_idx = {t: i for i, t in enumerate(uniq_t)}
+        col = np.array([t_to_idx.get(int(t), -1) for t in true], dtype=np.int64)
+        cvals = col[base]
+    else:
+        cvals = pred_idx[base]
+
+    ax_xy.scatter(h.x[base], h.y[base], c=cvals, cmap=cmap,
+                s=_sizes(base), linewidths=0.0, alpha=0.9)
+    _scatter_right(base, c=cvals, cmap=cmap,
+                s=_sizes(base), alpha=0.85)
 
     if truth_noise.any():
         ax_xy.scatter(h.x[truth_noise], h.y[truth_noise],
                     marker=".", alpha=0.25,
-                    s=np.asarray(s)[truth_noise] if np.ndim(s) else s)
-        ax_zr.scatter(h.z[truth_noise], h.r[truth_noise],
-                    marker=".", alpha=0.25,
-                    s=np.asarray(s)[truth_noise] if np.ndim(s) else s)
+                    s=_sizes(truth_noise))
+        _scatter_right(truth_noise, marker=".", alpha=0.25,
+                    s=_sizes(truth_noise))
 
-    # predicted noise: show as x markers
+    # wrong hits outline
     if wrong.any():
-        ax_xy.scatter(h.x[wrong], h.y[wrong], facecolors="none", edgecolors="black",
-                    s=np.asarray(s)[wrong] if np.ndim(s) else s, linewidths=0.8, alpha=0.9)
-        ax_zr.scatter(h.z[wrong], h.r[wrong], facecolors="none", edgecolors="black",
-                    s=np.asarray(s)[wrong] if np.ndim(s) else s, linewidths=0.8, alpha=0.9)
+        ax_xy.scatter(h.x[wrong], h.y[wrong], facecolors= "none", edgecolors="black", s=_sizes(wrong), linewidths=0.9, alpha=0.95)
+
+        if right_is_3d:
+            # 3D: make the outline actually visible
+            s3 = np.asarray(_sizes(wrong), dtype=float) * 2.0
+            ax_right.scatter(h.x[wrong], h.y[wrong], h.z[wrong], s=s3, facecolors="none", edgecolors="black", linewidths=1.2, alpha=1.0, depthshade=False)
+        else:
+            _scatter_right(wrong, facecolors="none", edgecolors="black", s=_sizes(wrong), linewidths=0.9, alpha=0.95)
 
     # predicted noise: show as x markers
     if pred_noise.any():
-        ax_xy.scatter(h.x[pred_noise], h.y[pred_noise], marker="x", s=18, alpha=0.6)
-        ax_zr.scatter(h.z[pred_noise], h.r[pred_noise], marker="x", s=18, alpha=0.6)
+        ax_xy.scatter(h.x[pred_noise], h.y[pred_noise],
+                      marker="x", s=18, alpha=0.6)
+        if right_is_3d:
+            _scatter_right(pred_noise, marker="x", s=18, alpha=0.6, depthshade=False)
+        else:
+            _scatter_right(pred_noise, marker="x", s=18, alpha=0.6)
 
     # axes/labels (must NOT be inside the pred_noise block)
     ax_xy.set_title("XY: colour=pred cluster, outline=wrong")
@@ -296,9 +376,16 @@ def plot_event(h: HitView, pred: np.ndarray, true: np.ndarray, counted: np.ndarr
     ax_xy.set_ylabel("y")
     ax_xy.axis("equal")
 
-    ax_zr.set_title("ZR: colour=pred cluster, outline=wrong")
-    ax_zr.set_xlabel("z")
-    ax_zr.set_ylabel("r")
+    if right_is_3d:
+        ax_right.set_title("XYZ (3D): colour=pred cluster, outline=wrong")
+        ax_right.set_xlabel("x")
+        ax_right.set_ylabel("y")
+        ax_right.set_zlabel("z")
+        _set_axes_equal_3d(ax_right)
+    else:
+        ax_right.set_title("ZR: colour=pred cluster, outline=wrong")
+        ax_right.set_xlabel("z")
+        ax_right.set_ylabel("r")
 
     if title:
         fig.suptitle(title)
@@ -322,7 +409,7 @@ def plot_event(h: HitView, pred: np.ndarray, true: np.ndarray, counted: np.ndarr
     else:
         plt.show()
 
-def _docker_viz_cmd(project_root: Path, artefact_pkl: Path, *, tag: str, event_idx: int, outdir: Optional[Path]) -> list[str]:
+def _docker_viz_cmd(project_root: Path, artefact_pkl: Path, *, tag: str, event_idx: int, outdir: Optional[Path], plot_mode: str) -> list[str]:
     """
     Build docker run command that executes visualise_tracks.py inside llm-evaluation-sandbox:latest for a single model.
     """
@@ -379,6 +466,7 @@ def _docker_viz_cmd(project_root: Path, artefact_pkl: Path, *, tag: str, event_i
         "--model-path", f"/workspace/out/{artefact_pkl.name}",
         "--tag", tag,
         "--event-idx", str(event_idx),
+        "--plot-mode", plot_mode,
         "--out", f"/workspace/viz/event_{event_idx}.png",
     ]
 
@@ -396,7 +484,14 @@ def main():
     ap.add_argument("--loglevel", type=str, default="INFO")
     ap.add_argument("--out", type=str, default=None, help="If set, save plot to this path (PNG) instead of showing.")
     ap.add_argument("--outdir", type=str, default=None, help="Host output dir for plots (default: <modeldir>/viz)")
-
+    ap.add_argument("--geom-source", type=str, default="raw", choices=["raw", "input"],
+        help="Which coordinates to plot. "
+             "raw = load raw event from dataset pkl.gz and overlay predictions (recommended for benchmark). "
+             "input = interpret model input features as [r,theta,z,(layer)] (legacy behaviour).")
+    ap.add_argument("--plot-mode", type=str, default="xy_3d", choices=["xy_3d", "xy_zr"],
+        help="Right-hand panel: 'xy_3d' (XYZ 3D) or 'xy_zr' (ZR 2D). Default: xy_3d")
+    ap.add_argument("--colour-by", type=str, default="pred", choices=["pred", "true"],
+        help="Colour points by predicted cluster labels (pred) or by ground-truth track_id (true).")
     args = ap.parse_args()
 
     logging.basicConfig(level=getattr(logging, args.loglevel.upper(), logging.INFO))
@@ -410,8 +505,10 @@ def main():
             artefact_pkl=artefact_pkl,
             tag=args.tag,
             event_idx=int(args.event_idx),
+            plot_mode=str(args.plot_mode),
             outdir=outdir,
         )
+
         logging.info("Running visualisation in docker...")
         subprocess.run(cmd, check=True)
         return
@@ -507,17 +604,26 @@ def main():
 
     # Extract geometry (assumes columns are r,theta,z,layer)
     layer_col = None if args.layer_col < 0 else int(args.layer_col)
-    hv = extract_hits(
-        x_e,
-        feature_order=(int(args.r_col), int(args.theta_col), int(args.z_col), layer_col),
-    )
+    if args.geom_source == "raw":
+        try:
+            raw_evt = _load_raw_event(tag=args.tag, event_idx=int(args.event_idx))
+            hv = extract_hits(raw_evt)  # dict-path: uses hit_r/hit_theta/hit_z (REDVID) or x/y/z (TrackML)
+            log.info("Plotting RAW geometry from dataset file (geom-source=raw).")
+        except Exception as e:
+            log.warning("Failed to load raw geometry (%s). Falling back to geom-source=input.", e)
+            hv = extract_hits(
+                x_e,
+                feature_order=(int(args.r_col), int(args.theta_col), int(args.z_col), layer_col),
+            )
+    else:
+        hv = extract_hits(x_e, feature_order=(int(args.r_col), int(args.theta_col), int(args.z_col), layer_col))
 
     # Plot with model name in title
     model_name = Path(args.model_path).name
     model_name = model_name.replace("_model.pkl", "").replace("_state.pt", "")
     title = f"{model_name} | event {target_i} | FitAcc={fitacc_evt:.3f} ({correct_hits}/{denom}) | assigned={n_assigned}/{n_hits}"
 
-    plot_event(hv, pred=pred, true=true, counted=counted_mask, title=title, out=args.out)
+    plot_event(hv, pred=pred, true=true, counted=counted_mask, title=title, out=args.out, plot_mode=str(args.plot_mode), colour_by=str(args.colour_by))
 
 if __name__ == "__main__":
     main()

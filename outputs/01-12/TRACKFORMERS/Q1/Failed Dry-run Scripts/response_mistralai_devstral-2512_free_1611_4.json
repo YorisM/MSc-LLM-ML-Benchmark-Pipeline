@@ -1,0 +1,71 @@
+{
+  "LLMGeneration": {
+    "model": "mistralai/devstral-2512:free",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 4412,
+    "prompt_chars": 17811,
+    "response_tokens": 1374,
+    "response_chars": 5424,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0,
+    "generation_ms": 47173,
+    "code": "# ---------- IMPORTS ----------\nimport torch.nn.functional as F\nfrom torch_geometric.nn import GCNConv, global_mean_pool\nfrom torch_geometric.data import Data, Batch\nfrom sklearn.preprocessing import StandardScaler\nfrom sklearn.cluster import DBSCAN\nimport hdbscan\n\n#  -------- (OPTIONAL) CUSTOM DATASET  --------\nclass CustomDataset(Dataset):\n    def __init__(self, events, pre, train: bool = True, **kwargs):\n        self.events = events\n        self.pre = pre\n        self.train = train\n\n    def __len__(self):\n        return len(self.events)\n\n    def __getitem__(self, idx):\n        evt = self.events[idx]\n        X = np.column_stack([\n            evt[\"hit_r\"].astype(np.float32),\n            evt[\"hit_theta\"].astype(np.float32),\n            evt[\"hit_z\"].astype(np.float32),\n            evt[\"layer_id\"].astype(np.float32)\n        ])\n        y = evt[\"track_id\"].astype(np.int64)\n        X = self.pre.transform(X) if self.pre is not None else X\n        return Data(x=torch.from_numpy(X), y=torch.from_numpy(y))\n\n# ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.scaler = StandardScaler()\n        self.layer_scaler = StandardScaler()\n\n    def make_loader_cfg(self) -> dict:\n        return {\n            \"dataset_builder\": \"llm_script:CustomDataset\",\n            \"dataset_kwargs\": {},\n            \"loader_class\": \"torch_geometric.loader:DataLoader\",\n            \"batch_size\": 32,\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": False,\n            \"collate\": None,\n            \"extra_loader_kwargs\": {},\n            \"eval_overrides\": {\"shuffle\": False}\n        }\n\n    def fit(self, Xs):\n        all_features = np.concatenate(Xs, axis=0)\n        self.scaler.fit(all_features[:, :3])  # Scale r, theta, z\n        self.layer_scaler.fit(all_features[:, 3:4])  # Scale layer_id separately\n        return self\n\n    def transform(self, X):\n        X = X.numpy() if isinstance(X, torch.Tensor) else X\n        X[:, :3] = self.scaler.transform(X[:, :3])\n        X[:, 3:4] = self.layer_scaler.transform(X[:, 3:4])\n        return torch.from_numpy(X).float()\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# ---------- MODEL ARCHITECTURE ----------\nclass HitClassifier(nn.Module):\n    def __init__(self, example_batch_x):\n        super().__init__()\n        self.conv1 = GCNConv(4, 64)\n        self.conv2 = GCNConv(64, 128)\n        self.conv3 = GCNConv(128, 256)\n        self.fc1 = nn.Linear(256, 128)\n        self.fc2 = nn.Linear(128, 64)\n        self.fc3 = nn.Linear(64, 32)\n        self.cluster_head = nn.Linear(32, 1)\n\n    def forward(self, data):\n        x, edge_index = data.x, data.edge_index\n        x = F.relu(self.conv1(x, edge_index))\n        x = F.relu(self.conv2(x, edge_index))\n        x = F.relu(self.conv3(x, edge_index))\n        x = global_mean_pool(x, data.batch)\n        x = F.relu(self.fc1(x))\n        x = F.relu(self.fc2(x))\n        x = F.relu(self.fc3(x))\n        return self.cluster_head(x)\n\n    def predict_labels(self, data):\n        with torch.no_grad():\n            if isinstance(data, list):\n                all_labels = []\n                for batch in data:\n                    batch = batch.to(device)\n                    embeddings = self.forward(batch)\n                    labels = self._cluster_embeddings(embeddings.cpu().numpy())\n                    all_labels.append(torch.tensor(labels, dtype=torch.long))\n                return all_labels\n            else:\n                data = data.to(device)\n                embeddings = self.forward(data)\n                labels = self._cluster_embeddings(embeddings.cpu().numpy())\n                return torch.tensor(labels, dtype=torch.long)\n\n    def _cluster_embeddings(self, embeddings):\n        clusterer = hdbscan.HDBSCAN(min_cluster_size=4, min_samples=1, gen_min_span_tree=True)\n        labels = clusterer.fit_predict(embeddings)\n        labels[labels == -1] = 0  # Assign noise to 0\n        return labels\n\ndef make_model(example_batch_x):\n    return HitClassifier(example_batch_x)\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 50\n\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)\n    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=5)\n    criterion = nn.MSELoss()\n\n    train_loss, val_loss = [], []\n    train_acc, val_acc = [], []\n\n    for epoch in range(epochs):\n        model.train()\n        epoch_train_loss = 0.0\n        for data in train_loader:\n            data = data.to(device)\n            optimizer.zero_grad()\n            outputs = model(data)\n            loss = criterion(outputs, torch.zeros_like(outputs))\n            loss.backward()\n            optimizer.step()\n            epoch_train_loss += loss.item()\n\n        train_loss.append(epoch_train_loss / len(train_loader))\n\n        model.eval()\n        epoch_val_loss = 0.0\n        with torch.no_grad():\n            for data in val_loader:\n                data = data.to(device)\n                outputs = model(data)\n                loss = criterion(outputs, torch.zeros_like(outputs))\n                epoch_val_loss += loss.item()\n\n        val_loss.append(epoch_val_loss / len(val_loader))\n        scheduler.step(epoch_val_loss)\n\n        train_acc.append(0.0)\n        val_acc.append(0.0)\n\n    return model, train_loss, val_loss, train_acc, val_acc",
+    "reasoning": "",
+    "Outer_attempt": 4
+  },
+  "StaticChecks": {
+    "__timestamp": "2026-01-12T15:11:36Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2026-01-12T15:11:36Z",
+        "metrics": {
+          ".\\outputs\\01-12\\TRACKFORMERS\\Q1\\script_mistralai_devstral-2512_free_1611_4.py": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 230,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 230,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2026-01-12T15:12:01Z",
+    "passed": false,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/01-12/TRACKFORMERS/Q1/script_mistralai_devstral-2512_free_1611_4.py\nargv2=--dryrun\n#PROC_METRICS#{\"cpu_seconds_user\": 8.23, \"cpu_seconds_sys\": 0.77, \"max_rss_kb\": 703912, \"training_time_s\": 12.494, \"source\": \"proc_tree_ticks\"}\n#GPU_METRICS#{\"cuda_available\": true, \"name\": \"NVIDIA GeForce RTX 3050 Ti Laptop GPU\", \"total_mb\": 4096, \"peak_used_mb\": 0, \"avg_used_mb\": 0.0, \"avg_util_pct\": 0.0, \"peak_util_pct\": 0, \"per_process_gpu_mem\": false}\n",
+      "stderr": "resource_monitor.py: WARNING: cgroup v2 not detected; metrics may be degraded.\nTraceback (most recent call last):\n  File \"/workspace/outputs/01-12/TRACKFORMERS/Q1/script_mistralai_devstral-2512_free_1611_4.py\", line 299, in <module>\n    _run(dryrun=\"--dryrun\" in sys.argv)\n  File \"/workspace/outputs/01-12/TRACKFORMERS/Q1/script_mistralai_devstral-2512_free_1611_4.py\", line 230, in _run\n    first_batch = next(iter(train_loader))\n                  ^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/torch/utils/data/dataloader.py\", line 708, in __next__\n    data = self._next_data()\n           ^^^^^^^^^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/torch/utils/data/dataloader.py\", line 764, in _next_data\n    data = self._dataset_fetcher.fetch(index)  # may raise StopIteration\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/torch/utils/data/_utils/fetch.py\", line 52, in fetch\n    data = [self.dataset[idx] for idx in possibly_batched_index]\n            ~~~~~~~~~~~~^^^^^\n  File \"/workspace/outputs/01-12/TRACKFORMERS/Q1/script_mistralai_devstral-2512_free_1611_4.py\", line 80, in __getitem__\n    return Data(x=torch.from_numpy(X), y=torch.from_numpy(y))\n                  ^^^^^^^^^^^^^^^^^^^\nTypeError: expected np.ndarray (got Tensor)\n"
+    },
+    "return_code": 1
+  }
+}

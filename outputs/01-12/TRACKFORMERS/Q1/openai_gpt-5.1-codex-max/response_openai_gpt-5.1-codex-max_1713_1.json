@@ -1,0 +1,151 @@
+{
+  "LLMGeneration": {
+    "model": "openai/gpt-5.1-codex-max",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 4180,
+    "prompt_chars": 17811,
+    "response_tokens": 9879,
+    "response_chars": 9710,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.104015,
+    "generation_ms": 160313,
+    "code": "# ---------- IMPORTS ----------\nimport math\nimport torch\nimport torch.nn.functional as F\nfrom torch import nn\nfrom sklearn.cluster import DBSCAN\n\n# ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    # REQUIREMENTS\n    #   - IMPORTANT: All state must be picklable with the std-lib pickle module.\n    #   - May allocate NumPy arrays or Torch tensors internally, but: transform() must be deterministic.\n    #   - Store only derived parameters needed for transform i.e. do not store the raw data itself in the preprocessor object.\n\n    # TIPS\n    #   - IMPORTANT Default data flow: events[idx] -> split_X_y(evt) -> X, y\n    #   - When modifying data features or feature engineering: annotate tensor size as comments after each tensor operation to reduce dimension mismatches.\n\n    # Define and initialize any stateful components here\n\n    def __init__(self):\n        self.mean = None\n        self.std = None\n\n    def make_loader_cfg(self) -> dict:\n        # LoaderSpec-first: evaluator rebuilds loaders from this.\n        return {\n            \"dataset_builder\": \"utils.llm_io:EventDataset\",   # default harness dataset\n            \"dataset_kwargs\": {},\n\n            \"loader_class\": \"torch.utils.data:DataLoader\",    # or torch_geometric.loader:DataLoader\n            \"batch_size\": 64,\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": False,\n\n            # NO custom collate callables allowed. Choose one: \n            \"collate\": \"ragged_xy\",  # or \"identity\" or \"None\"\n            \"extra_loader_kwargs\": {},\n\n            # evaluation overrides (optional):\n            \"eval_overrides\": {\"shuffle\": False}\n        }\n\n    def fit(self, Xs):\n        # Xs: list of per-event X, each [N_hits_i, F_raw]\n        all_X = torch.cat(Xs, dim=0)  # [N_total, 4]\n        r = all_X[:, 0]\n        theta = all_X[:, 1]\n        z = all_X[:, 2]\n        layer = all_X[:, 3]\n        x = r * torch.cos(theta)\n        y = r * torch.sin(theta)\n        feats = torch.stack([r, theta, z, layer, x, y], dim=1)  # [N_total, 6]\n        self.mean = feats.mean(dim=0)\n        self.std = feats.std(dim=0) + 1e-6\n        return self\n\n    def transform(self, X):\n        # X: one event array/tensor [N_hits, F_raw]\n        r = X[:, 0]\n        theta = X[:, 1]\n        z = X[:, 2]\n        layer = X[:, 3]\n        x = r * torch.cos(theta)\n        y = r * torch.sin(theta)\n        feats = torch.stack([r, theta, z, layer, x, y], dim=1)  # [N_hits, 6]\n        normed = (feats - self.mean) / self.std  # [N_hits, 6]\n        sin_theta = torch.sin(theta).unsqueeze(1)  # [N_hits,1]\n        cos_theta = torch.cos(theta).unsqueeze(1)  # [N_hits,1]\n        out = torch.cat([normed, sin_theta, cos_theta], dim=1)  # [N_hits,8]\n        return out.to(torch.float32)  # MUST return torch.FloatTensor [N_hits, F_out] for the default EventDataset path.\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# ---------- MODEL ARCHITECTURE ----------\nclass HitClassifier(nn.Module):\n    def __init__(self, example_batch_x):\n        super().__init__()\n        if isinstance(example_batch_x, list):\n            in_dim = example_batch_x[0].shape[1]\n        else:\n            in_dim = example_batch_x.x.shape[1]\n        hidden = 64\n        emb_dim = 16\n        self.mlp = nn.Sequential(\n            nn.Linear(in_dim, hidden),\n            nn.ReLU(),\n            nn.Linear(hidden, hidden),\n            nn.ReLU(),\n            nn.Linear(hidden, emb_dim)\n        )\n\n    def forward(self, batch_x):\n        # Returns list of embeddings per event for ragged input\n        if isinstance(batch_x, list):\n            embs = []\n            for x in batch_x:\n                embs.append(self.mlp(x))  # [N_i, emb_dim]\n            return embs\n        else:\n            # PyG Batch\n            return self.mlp(batch_x.x)\n\n    def predict_labels(self, batch_x):\n        self.eval()\n        preds = []\n        if isinstance(batch_x, list):\n            with torch.no_grad():\n                embs_list = self.forward(batch_x)\n                for emb in embs_list:\n                    emb_cpu = emb.detach().cpu().numpy()\n                    # DBSCAN clustering on embeddings\n                    clustering = DBSCAN(eps=0.5, min_samples=3, metric='euclidean', n_jobs=1)\n                    labels = clustering.fit_predict(emb_cpu)  # [-1, 0, 1, ...]\n                    preds.append(torch.from_numpy(labels.astype('int64')))\n        else:\n            # PyG Batch case\n            with torch.no_grad():\n                emb = self.forward(batch_x)\n                emb_cpu = emb.detach().cpu().numpy()\n                clustering = DBSCAN(eps=0.5, min_samples=3, metric='euclidean', n_jobs=1)\n                labels = clustering.fit_predict(emb_cpu)\n                preds = torch.from_numpy(labels.astype('int64')).to(batch_x.x.device)\n        return preds\n\ndef make_model(example_batch_x):\n    return HitClassifier(example_batch_x)\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 8   # adjust if you wish\n\ndef contrastive_loss(embs_list, labels_list, temperature=0.2):\n    total_loss = 0.0\n    total_count = 0\n    for emb, y in zip(embs_list, labels_list):\n        mask = y > 0  # ignore noise\n        if mask.sum().item() <= 1:\n            continue\n        emb_pos = emb[mask]  # [N_pos, D]\n        y_pos = y[mask]      # [N_pos]\n        N = emb_pos.shape[0]\n        norm_emb = F.normalize(emb_pos, dim=1)  # [N_pos, D]\n        sim = torch.matmul(norm_emb, norm_emb.t()) / temperature  # [N_pos, N_pos]\n        diag = torch.eye(N, device=sim.device, dtype=torch.bool)\n        sim = sim.masked_fill(diag, -1e9)\n        y_mat = y_pos.unsqueeze(0) == y_pos.unsqueeze(1)  # [N_pos, N_pos]\n        for i in range(N):\n            pos_mask = y_mat[i] & (~diag[i])\n            if pos_mask.sum().item() == 0:\n                continue\n            neg_mask = (~diag[i])\n            denom = torch.logsumexp(sim[i][neg_mask], dim=0)\n            pos_sim = sim[i][pos_mask]\n            loss_i = -(pos_sim - denom).mean()\n            total_loss += loss_i\n            total_count += 1\n    if total_count == 0:\n        return torch.tensor(0.0, device=device, requires_grad=True)\n    return total_loss / total_count\n\ndef compute_fit_accuracy(y_true, y_pred):\n    # y_true: LongTensor [N], y_pred: LongTensor [N]\n    truth_mask = y_true > 0\n    total_true_hits = truth_mask.sum().item()\n    if total_true_hits == 0:\n        return 0.0\n    correct_hits = 0\n    unique_pred = torch.unique(y_pred)\n    for plab in unique_pred:\n        if plab.item() == -1:\n            continue\n        pred_mask = (y_pred == plab)\n        pred_hits = pred_mask.sum().item()\n        if pred_hits == 0:\n            continue\n        true_ids, counts = torch.unique(y_true[pred_mask], return_counts=True)\n        if true_ids.numel() == 0:\n            continue\n        max_idx = torch.argmax(counts)\n        true_id = true_ids[max_idx]\n        if true_id.item() == 0:\n            continue\n        hits_from_true = counts[max_idx].item()\n        total_hits_true_track = (y_true == true_id).sum().item()\n        purity = hits_from_true / pred_hits\n        efficiency = hits_from_true / total_hits_true_track\n        if pred_hits >= 4 and purity >= 0.5 and efficiency >= 0.5:\n            correct_hits += hits_from_true\n    return correct_hits / total_true_hits\n\ndef evaluate_accuracy(model, loader):\n    model.eval()\n    total_correct = 0\n    total_truth = 0\n    with torch.no_grad():\n        for batch in loader:\n            Xs, ys = batch\n            Xs = [x.to(device) for x in Xs]\n            ys = [y.to(device) for y in ys]\n            preds = model.predict_labels(Xs)\n            for y_true, y_pred in zip(ys, preds):\n                acc_hits = compute_fit_accuracy(y_true.cpu(), y_pred.cpu())\n                total_correct += acc_hits * (y_true > 0).sum().item()\n                total_truth += (y_true > 0).sum().item()\n    if total_truth == 0:\n        return 0.0\n    return total_correct / total_truth\n\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    model.to(device)\n    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)\n    train_loss_history = []\n    val_loss_history = []\n    train_acc_history = []\n    val_acc_history = []\n    for epoch in range(epochs):\n        model.train()\n        epoch_loss = 0.0\n        batches = 0\n        for batch in train_loader:\n            Xs, ys = batch\n            Xs = [x.to(device) for x in Xs]\n            ys = [y.to(device) for y in ys]\n            optimizer.zero_grad()\n            embs_list = model(Xs)  # list of embeddings\n            loss = contrastive_loss(embs_list, ys)\n            loss.backward()\n            optimizer.step()\n            epoch_loss += loss.item()\n            batches += 1\n        train_loss = epoch_loss / max(batches, 1)\n        train_loss_history.append(train_loss)\n        # Validation loss\n        model.eval()\n        val_epoch_loss = 0.0\n        val_batches = 0\n        with torch.no_grad():\n            for batch in val_loader:\n                Xs, ys = batch\n                Xs = [x.to(device) for x in Xs]\n                ys = [y.to(device) for y in ys]\n                embs_list = model(Xs)\n                loss = contrastive_loss(embs_list, ys)\n                val_epoch_loss += loss.item()\n                val_batches += 1\n        val_loss = val_epoch_loss / max(val_batches, 1)\n        val_loss_history.append(val_loss)\n        # Accuracy estimation\n        train_acc = evaluate_accuracy(model, train_loader)\n        val_acc = evaluate_accuracy(model, val_loader)\n        train_acc_history.append(train_acc)\n        val_acc_history.append(val_acc)\n    return model, train_loss_history, val_loss_history, train_acc_history, val_acc_history",
+    "reasoning": "",
+    "Outer_attempt": 1
+  },
+  "StaticChecks": {
+    "__timestamp": "2026-01-12T16:13:08Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2026-01-12T16:13:08Z",
+        "metrics": {
+          ".\\outputs\\01-12\\TRACKFORMERS\\Q1\\script_openai_gpt-5.1-codex-max_1713_1.py": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 314,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 314,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2026-01-12T16:13:48Z",
+    "passed": true,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/01-12/TRACKFORMERS/Q1/script_openai_gpt-5.1-codex-max_1713_1.py\nargv2=--dryrun\n#PROC_METRICS#{\"cpu_seconds_user\": 26.35, \"cpu_seconds_sys\": 3.47, \"max_rss_kb\": 1548208, \"training_time_s\": 30.212, \"source\": \"proc_tree_ticks\"}\n#GPU_METRICS#{\"cuda_available\": true, \"name\": \"NVIDIA GeForce RTX 3050 Ti Laptop GPU\", \"total_mb\": 4096, \"peak_used_mb\": 175, \"avg_used_mb\": 123.632, \"avg_util_pct\": 19.526, \"peak_util_pct\": 40, \"per_process_gpu_mem\": false}\nDry-run: skipping artefact manifest\n",
+      "stderr": "resource_monitor.py: WARNING: cgroup v2 not detected; metrics may be degraded.\n"
+    },
+    "return_code": 0
+  },
+  "Training": {
+    "__timestamp": "2026-01-13T17:30:27.701266+00:00",
+    "passed": true,
+    "resources": {
+      "wall_time_s": 27420.381,
+      "training_time_s": 27405.369,
+      "cpu_seconds_user": 24809.05,
+      "cpu_seconds_sys": 3794.12,
+      "disk_read_mb": null,
+      "disk_write_mb": null,
+      "max_rss_kb": 2153488,
+      "proc_source": "proc_tree_ticks",
+      "cuda_available": true,
+      "gpu_name": "NVIDIA GeForce RTX 3050 Ti Laptop GPU",
+      "gpu_total_mb": 4096,
+      "per_process_gpu_mem": false,
+      "gpu_peak_alloc_mb": 234,
+      "gpu_avg_util_pct": 32.307,
+      "gpu_peak_util_pct": 66,
+      "gpu_avg_used_mb": 226.71
+    },
+    "metrics": {
+      "epochs": 8,
+      "train_loss": [
+        3.7842252897837807,
+        3.1836254558865984,
+        3.0130122881087047,
+        2.924665693252806,
+        2.844411702383132,
+        2.7923259243132574,
+        2.7558625085013255,
+        2.7305055080898226
+      ],
+      "val_loss": [
+        3.3956443071365356,
+        3.068139433860779,
+        2.9701197147369385,
+        2.884205460548401,
+        2.818645626306534,
+        2.7748132050037384,
+        2.7448298633098602,
+        2.7225518226623535
+      ],
+      "train_acc": [
+        0.0005671466353217749,
+        0.0002821040258595357,
+        7.934175727299442e-05,
+        1.1754334410813988e-05,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "val_acc": [
+        0.0006708526301542373,
+        0.0002589255765507582,
+        0.00011769344388670829,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/01-12/TRACKFORMERS/Q1/openai_gpt-5.1-codex-max/script_openai_gpt-5.1-codex-max_1713_1.py\nargv2=\n#TRAIN_METRICS#{\"epochs\": 8, \"train_loss\": [3.7842252897837807, 3.1836254558865984, 3.0130122881087047, 2.924665693252806, 2.844411702383132, 2.7923259243132574, 2.7558625085013255, 2.7305055080898226], \"val_loss\": [3.3956443071365356, 3.068139433860779, 2.9701197147369385, 2.884205460548401, 2.818645626306534, 2.7748132050037384, 2.7448298633098602, 2.7225518226623535], \"train_acc\": [0.0005671466353217749, 0.0002821040258595357, 7.934175727299442e-05, 1.1754334410813988e-05, 0.0, 0.0, 0.0, 0.0], \"val_acc\": [0.0006708526301542373, 0.0002589255765507582, 0.00011769344388670829, 0.0, 0.0, 0.0, 0.0, 0.0]}\n#PROC_METRICS#{\"cpu_seconds_user\": 24809.05, \"cpu_seconds_sys\": 3794.12, \"max_rss_kb\": 2153488, \"training_time_s\": 27405.369, \"source\": \"proc_tree_ticks\"}\n#GPU_METRICS#{\"cuda_available\": true, \"name\": \"NVIDIA GeForce RTX 3050 Ti Laptop GPU\", \"total_mb\": 4096, \"peak_used_mb\": 234, \"avg_used_mb\": 226.71, \"avg_util_pct\": 32.307, \"peak_util_pct\": 66, \"per_process_gpu_mem\": false}\nHash manifest written â†’ openai_gpt-5.1-codex-max_1713_1_manifest.sha256\n",
+      "stderr": "resource_monitor.py: WARNING: cgroup v2 not detected; metrics may be degraded.\n"
+    }
+  },
+  "Evaluation": {
+    "__timestamp": "2026-01-13T18:13:15Z",
+    "passed": true,
+    "metrics": {
+      "ok": true,
+      "load_s": 10.13,
+      "eval_s": 3.48,
+      "FitAccuracy": 0.0
+    },
+    "runtime_s": 27.7
+  }
+}

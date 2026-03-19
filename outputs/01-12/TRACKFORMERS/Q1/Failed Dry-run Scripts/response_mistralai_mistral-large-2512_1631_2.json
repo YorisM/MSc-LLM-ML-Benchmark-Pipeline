@@ -1,0 +1,124 @@
+{
+  "LLMGeneration": {
+    "model": "mistralai/mistral-large-2512",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 4412,
+    "prompt_chars": 17811,
+    "response_tokens": 4163,
+    "response_chars": 17563,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.0084505,
+    "generation_ms": 71347,
+    "code": "# ---------- IMPORTS ----------\nimport torch\nimport torch.nn as nn\nimport torch.nn.functional as F\nfrom torch_geometric.nn import MessagePassing\nfrom torch_geometric.utils import add_self_loops, degree\nimport numpy as np\nfrom sklearn.preprocessing import StandardScaler\nfrom scipy.spatial import KDTree\nfrom collections import defaultdict\n\n# ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.scaler = StandardScaler()\n        self.layer_stats = None\n        self.r_stats = None\n        self.z_stats = None\n        self.theta_stats = None\n\n    def make_loader_cfg(self) -> dict:\n        return {\n            \"dataset_builder\": \"utils.llm_io:EventDataset\",\n            \"dataset_kwargs\": {},\n\n            \"loader_class\": \"torch.utils.data:DataLoader\",\n            \"batch_size\": 32,\n            \"shuffle\": True,\n            \"num_workers\": 4,\n            \"pin_memory\": True,\n\n            \"collate\": \"ragged_xy\",\n            \"extra_loader_kwargs\": {},\n\n            \"eval_overrides\": {\"shuffle\": False, \"num_workers\": 2}\n        }\n\n    def fit(self, Xs):\n        # Collect all hits for statistics\n        all_X = np.concatenate(Xs, axis=0)\n\n        # Fit scaler on all features except layer_id\n        self.scaler.fit(all_X[:, :3])\n\n        # Compute layer-wise statistics\n        layer_ids = all_X[:, 3]\n        unique_layers = np.unique(layer_ids)\n        self.layer_stats = {}\n        for layer in unique_layers:\n            mask = layer_ids == layer\n            self.layer_stats[layer] = {\n                'r_mean': np.mean(all_X[mask, 0]),\n                'r_std': np.std(all_X[mask, 0]),\n                'z_mean': np.mean(all_X[mask, 2]),\n                'z_std': np.std(all_X[mask, 2])\n            }\n\n        # Compute global statistics\n        self.r_stats = {'mean': np.mean(all_X[:, 0]), 'std': np.std(all_X[:, 0])}\n        self.z_stats = {'mean': np.mean(all_X[:, 2]), 'std': np.std(all_X[:, 2])}\n        self.theta_stats = {'mean': np.mean(all_X[:, 1]), 'std': np.std(all_X[:, 1])}\n\n        return self\n\n    def transform(self, X):\n        # X shape: [N_hits, 4]\n        X = X.clone().detach()\n\n        # Normalize r, theta, z features\n        X[:, :3] = torch.from_numpy(self.scaler.transform(X[:, :3].numpy())).float()\n\n        # Add layer-wise normalized features\n        layer_ids = X[:, 3].long()\n        for i, layer in enumerate(layer_ids):\n            if layer.item() in self.layer_stats:\n                stats = self.layer_stats[layer.item()]\n                X[i, 0] = (X[i, 0] - stats['r_mean']) / (stats['r_std'] + 1e-8)\n                X[i, 2] = (X[i, 2] - stats['z_mean']) / (stats['z_std'] + 1e-8)\n\n        # Add relative features\n        r = X[:, 0]\n        theta = X[:, 1]\n        z = X[:, 2]\n\n        # Add cylindrical coordinates differences\n        X = torch.cat([\n            X,\n            torch.sin(theta).unsqueeze(1),\n            torch.cos(theta).unsqueeze(1),\n            (r - self.r_stats['mean']) / (self.r_stats['std'] + 1e-8).unsqueeze(1),\n            (z - self.z_stats['mean']) / (self.z_stats['std'] + 1e-8).unsqueeze(1)\n        ], dim=1)  # [N_hits, 9]\n\n        return X\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# ---------- MODEL ARCHITECTURE ----------\nclass EdgeConv(MessagePassing):\n    def __init__(self, in_channels, out_channels):\n        super().__init__(aggr='max')\n        self.mlp = nn.Sequential(\n            nn.Linear(2 * in_channels, out_channels),\n            nn.BatchNorm1d(out_channels),\n            nn.ReLU(),\n            nn.Linear(out_channels, out_channels)\n        )\n\n    def forward(self, x, edge_index):\n        return self.propagate(edge_index, x=x)\n\n    def message(self, x_i, x_j):\n        tmp = torch.cat([x_i, x_j - x_i], dim=1)\n        return self.mlp(tmp)\n\nclass HitClassifier(nn.Module):\n    def __init__(self, example_batch_x):\n        super().__init__()\n\n        # Determine input features from example batch\n        if isinstance(example_batch_x, list):\n            in_features = example_batch_x[0].shape[1]\n        else:\n            in_features = example_batch_x.shape[1]\n\n        # Feature embedding\n        self.embedding = nn.Sequential(\n            nn.Linear(in_features, 128),\n            nn.BatchNorm1d(128),\n            nn.ReLU(),\n            nn.Linear(128, 64),\n            nn.BatchNorm1d(64),\n            nn.ReLU()\n        )\n\n        # Graph layers\n        self.conv1 = EdgeConv(64, 64)\n        self.conv2 = EdgeConv(64, 64)\n        self.conv3 = EdgeConv(64, 64)\n\n        # Attention mechanism\n        self.attention = nn.Sequential(\n            nn.Linear(64, 32),\n            nn.ReLU(),\n            nn.Linear(32, 1),\n            nn.Sigmoid()\n        )\n\n        # Output layers\n        self.output = nn.Sequential(\n            nn.Linear(64, 64),\n            nn.BatchNorm1d(64),\n            nn.ReLU(),\n            nn.Linear(64, 32),\n            nn.BatchNorm1d(32),\n            nn.ReLU(),\n            nn.Linear(32, 1)\n        )\n\n        # Track classification head\n        self.classifier = nn.Sequential(\n            nn.Linear(64, 64),\n            nn.BatchNorm1d(64),\n            nn.ReLU(),\n            nn.Linear(64, 32),\n            nn.BatchNorm1d(32),\n            nn.ReLU(),\n            nn.Linear(32, 1)\n        )\n\n        # Noise classification head\n        self.noise_classifier = nn.Sequential(\n            nn.Linear(64, 32),\n            nn.ReLU(),\n            nn.Linear(32, 1),\n            nn.Sigmoid()\n        )\n\n    def build_edges(self, x):\n        # Build edges based on spatial proximity\n        pos = x[:, :3]  # Use r, theta, z for edge building\n        kdtree = KDTree(pos.cpu().numpy())\n        edge_list = []\n\n        # Find 10 nearest neighbors for each hit\n        for i in range(pos.shape[0]):\n            _, indices = kdtree.query(pos[i].cpu().numpy(), k=11)  # 10 neighbors + self\n            for j in indices[1:]:  # Skip self\n                edge_list.append([i, j])\n\n        edge_index = torch.tensor(edge_list, dtype=torch.long, device=x.device).t()\n        return edge_index\n\n    def forward(self, batch_x):\n        if isinstance(batch_x, list):\n            # Handle ragged batch\n            all_embeddings = []\n            for x in batch_x:\n                x = x.to(next(self.parameters()).device)\n                edge_index = self.build_edges(x)\n\n                # Embed features\n                h = self.embedding(x)  # [N_hits, 64]\n\n                # Graph convolutions\n                h1 = self.conv1(h, edge_index)\n                h2 = self.conv2(h1, edge_index)\n                h3 = self.conv3(h2, edge_index)\n\n                # Attention\n                attn = self.attention(h3)\n                h = h3 * attn\n\n                all_embeddings.append(h)\n            return all_embeddings\n        else:\n            # Handle single event\n            edge_index = self.build_edges(batch_x)\n            h = self.embedding(batch_x)\n            h1 = self.conv1(h, edge_index)\n            h2 = self.conv2(h1, edge_index)\n            h3 = self.conv3(h2, edge_index)\n            attn = self.attention(h3)\n            h = h3 * attn\n            return h\n\n    def predict_labels(self, batch_x):\n        if isinstance(batch_x, list):\n            # Handle ragged batch\n            all_labels = []\n            for x in batch_x:\n                x = x.to(next(self.parameters()).device)\n                embeddings = self.forward(x)\n\n                # Predict track scores\n                track_scores = self.classifier(embeddings).squeeze(-1)  # [N_hits]\n\n                # Predict noise probabilities\n                noise_probs = self.noise_classifier(embeddings).squeeze(-1)  # [N_hits]\n\n                # Combine scores\n                scores = track_scores * (1 - noise_probs)\n\n                # Simple clustering: assign labels based on score thresholds\n                # This is a simplified approach - in practice you'd use a proper clustering algorithm\n                labels = torch.zeros(x.shape[0], dtype=torch.long, device=x.device) - 1  # -1 for noise\n\n                # Threshold for noise\n                noise_mask = noise_probs > 0.5\n                labels[noise_mask] = -1\n\n                # For non-noise hits, assign track IDs based on score similarity\n                non_noise_mask = ~noise_mask\n                if non_noise_mask.sum() > 0:\n                    non_noise_scores = scores[non_noise_mask]\n                    non_noise_embeddings = embeddings[non_noise_mask]\n\n                    # Simple clustering: assign same label to hits with similar scores\n                    # This is a placeholder - replace with proper clustering\n                    threshold = 0.1\n                    current_label = 1\n                    assigned = torch.zeros(non_noise_scores.shape[0], dtype=torch.bool, device=x.device)\n\n                    while not assigned.all():\n                        # Find highest score unassigned hit\n                        max_idx = torch.argmax(non_noise_scores * (~assigned).float())\n                        if assigned[max_idx]:\n                            break\n\n                        # Assign same label to hits with similar scores\n                        similar_mask = torch.abs(non_noise_scores - non_noise_scores[max_idx]) < threshold\n                        labels[non_noise_mask.nonzero().squeeze(1)[similar_mask]] = current_label\n                        assigned[similar_mask] = True\n                        current_label += 1\n\n                all_labels.append(labels)\n            return all_labels\n        else:\n            # Handle single event\n            embeddings = self.forward(batch_x)\n            track_scores = self.classifier(embeddings).squeeze(-1)\n            noise_probs = self.noise_classifier(embeddings).squeeze(-1)\n            scores = track_scores * (1 - noise_probs)\n\n            labels = torch.zeros(batch_x.shape[0], dtype=torch.long, device=batch_x.device) - 1\n            noise_mask = noise_probs > 0.5\n            labels[noise_mask] = -1\n\n            non_noise_mask = ~noise_mask\n            if non_noise_mask.sum() > 0:\n                non_noise_scores = scores[non_noise_mask]\n                threshold = 0.1\n                current_label = 1\n                assigned = torch.zeros(non_noise_scores.shape[0], dtype=torch.bool, device=batch_x.device)\n\n                while not assigned.all():\n                    max_idx = torch.argmax(non_noise_scores * (~assigned).float())\n                    if assigned[max_idx]:\n                        break\n\n                    similar_mask = torch.abs(non_noise_scores - non_noise_scores[max_idx]) < threshold\n                    labels[non_noise_mask.nonzero().squeeze(1)[similar_mask]] = current_label\n                    assigned[similar_mask] = True\n                    current_label += 1\n\n            return labels\n\ndef make_model(example_batch_x):\n    return HitClassifier(example_batch_x)\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 20\n\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    device = next(model.parameters()).device\n    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)\n    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)\n    criterion = nn.BCEWithLogitsLoss()\n\n    best_val_loss = float('inf')\n    patience = 5\n    patience_counter = 0\n\n    train_losses = []\n    val_losses = []\n    train_accs = []\n    val_accs = []\n\n    for epoch in range(epochs):\n        model.train()\n        total_loss = 0\n        total_hits = 0\n\n        for batch in train_loader:\n            Xs, ys = batch\n            Xs = [x.to(device) for x in Xs]\n            ys = [y.to(device) for y in ys]\n\n            optimizer.zero_grad()\n\n            # Forward pass\n            embeddings = model(Xs)\n\n            # Compute loss for each event in batch\n            batch_loss = 0\n            batch_hits = 0\n\n            for i, (x, y) in enumerate(zip(Xs, ys)):\n                # Create target for noise classification\n                noise_target = (y == 0).float().unsqueeze(1)\n\n                # Get embeddings for this event\n                h = embeddings[i]\n\n                # Noise classification loss\n                noise_logits = model.noise_classifier(h)\n                loss = criterion(noise_logits, noise_target)\n\n                # Track classification loss (simplified)\n                # We'll use a contrastive loss approach\n                track_mask = (y > 0)\n                if track_mask.sum() > 1:\n                    # Get embeddings for track hits\n                    track_embeddings = h[track_mask]\n                    track_ids = y[track_mask]\n\n                    # Create pairs of hits from same track\n                    unique_tracks = torch.unique(track_ids)\n                    for track in unique_tracks:\n                        mask = (track_ids == track)\n                        if mask.sum() > 1:\n                            # Positive pairs\n                            pos_pairs = track_embeddings[mask]\n                            pos_dist = F.pairwise_distance(pos_pairs.unsqueeze(1), pos_pairs.unsqueeze(0))\n                            pos_loss = pos_dist.mean()\n\n                            # Negative pairs (simplified)\n                            neg_mask = (track_ids != track)\n                            if neg_mask.sum() > 0:\n                                neg_embeddings = track_embeddings[neg_mask]\n                                neg_dist = F.pairwise_distance(pos_pairs.unsqueeze(1), neg_embeddings.unsqueeze(0))\n                                neg_loss = F.relu(1.0 - neg_dist).mean()\n                                loss += 0.1 * (pos_loss + neg_loss)\n\n                batch_loss += loss * x.shape[0]\n                batch_hits += x.shape[0]\n\n            batch_loss = batch_loss / batch_hits\n            batch_loss.backward()\n            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)\n            optimizer.step()\n\n            total_loss += batch_loss.item() * batch_hits\n            total_hits += batch_hits\n\n        train_loss = total_loss / total_hits\n        train_losses.append(train_loss)\n\n        # Validation\n        model.eval()\n        val_loss = 0\n        val_hits = 0\n\n        with torch.no_grad():\n            for batch in val_loader:\n                Xs, ys = batch\n                Xs = [x.to(device) for x in Xs]\n                ys = [y.to(device) for y in ys]\n\n                embeddings = model(Xs)\n\n                for i, (x, y) in enumerate(zip(Xs, ys)):\n                    noise_target = (y == 0).float().unsqueeze(1)\n                    h = embeddings[i]\n                    noise_logits = model.noise_classifier(h)\n                    loss = criterion(noise_logits, noise_target)\n\n                    track_mask = (y > 0)\n                    if track_mask.sum() > 1:\n                        track_embeddings = h[track_mask]\n                        track_ids = y[track_mask]\n                        unique_tracks = torch.unique(track_ids)\n\n                        for track in unique_tracks:\n                            mask = (track_ids == track)\n                            if mask.sum() > 1:\n                                pos_pairs = track_embeddings[mask]\n                                pos_dist = F.pairwise_distance(pos_pairs.unsqueeze(1), pos_pairs.unsqueeze(0))\n                                pos_loss = pos_dist.mean()\n\n                                neg_mask = (track_ids != track)\n                                if neg_mask.sum() > 0:\n                                    neg_embeddings = track_embeddings[neg_mask]\n                                    neg_dist = F.pairwise_distance(pos_pairs.unsqueeze(1), neg_embeddings.unsqueeze(0))\n                                    neg_loss = F.relu(1.0 - neg_dist).mean()\n                                    loss += 0.1 * (pos_loss + neg_loss)\n\n                    val_loss += loss * x.shape[0]\n                    val_hits += x.shape[0]\n\n        val_loss = val_loss / val_hits\n        val_losses.append(val_loss)\n\n        # Simple accuracy monitoring (not the actual FitAccuracy)\n        train_acc = compute_simple_accuracy(model, train_loader, device)\n        val_acc = compute_simple_accuracy(model, val_loader, device)\n        train_accs.append(train_acc)\n        val_accs.append(val_acc)\n\n        print(f\"Epoch {epoch+1}/{epochs} - Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}, \"\n              f\"Train Acc: {train_acc:.4f}, Val Acc: {val_acc:.4f}\")\n\n        # Early stopping\n        if val_loss < best_val_loss:\n            best_val_loss = val_loss\n            patience_counter = 0\n        else:\n            patience_counter += 1\n            if patience_counter >= patience:\n                print(f\"Early stopping at epoch {epoch+1}\")\n                break\n\n        scheduler.step()\n\n    return model, train_losses, val_losses, train_accs, val_accs\n\ndef compute_simple_accuracy(model, loader, device):\n    model.eval()\n    correct = 0\n    total = 0\n\n    with torch.no_grad():\n        for batch in loader:\n            Xs, ys = batch\n            Xs = [x.to(device) for x in Xs]\n            ys = [y.to(device) for y in ys]\n\n            preds = model.predict_labels(Xs)\n\n            for pred, y in zip(preds, ys):\n                # Simple accuracy: count hits where noise prediction matches\n                noise_mask = (y == 0)\n                pred_noise = (pred == -1)\n                correct += (noise_mask == pred_noise).sum().item()\n                total += y.shape[0]\n\n    return correct / total if total > 0 else 0",
+    "reasoning": "",
+    "Outer_attempt": 2
+  },
+  "StaticChecks": {
+    "__timestamp": "2026-01-12T15:31:32Z",
+    "PyLint": {
+      "passed": true,
+      "messages": [
+        {
+          "type": "error",
+          "module": "script_mistralai_mistral-large-2512_1631_2",
+          "obj": "train_model",
+          "line": 426,
+          "column": 39,
+          "endLine": 426,
+          "endColumn": 106,
+          "path": "outputs\\01-12\\TRACKFORMERS\\Q1\\script_mistralai_mistral-large-2512_1631_2.py",
+          "symbol": "not-callable",
+          "message": "F.pairwise_distance is not callable",
+          "message-id": "E1102"
+        },
+        {
+          "type": "error",
+          "module": "script_mistralai_mistral-large-2512_1631_2",
+          "obj": "train_model",
+          "line": 433,
+          "column": 43,
+          "endLine": 433,
+          "endColumn": 115,
+          "path": "outputs\\01-12\\TRACKFORMERS\\Q1\\script_mistralai_mistral-large-2512_1631_2.py",
+          "symbol": "not-callable",
+          "message": "F.pairwise_distance is not callable",
+          "message-id": "E1102"
+        },
+        {
+          "type": "error",
+          "module": "script_mistralai_mistral-large-2512_1631_2",
+          "obj": "train_model",
+          "line": 480,
+          "column": 43,
+          "endLine": 480,
+          "endColumn": 110,
+          "path": "outputs\\01-12\\TRACKFORMERS\\Q1\\script_mistralai_mistral-large-2512_1631_2.py",
+          "symbol": "not-callable",
+          "message": "F.pairwise_distance is not callable",
+          "message-id": "E1102"
+        },
+        {
+          "type": "error",
+          "module": "script_mistralai_mistral-large-2512_1631_2",
+          "obj": "train_model",
+          "line": 486,
+          "column": 47,
+          "endLine": 486,
+          "endColumn": 119,
+          "path": "outputs\\01-12\\TRACKFORMERS\\Q1\\script_mistralai_mistral-large-2512_1631_2.py",
+          "symbol": "not-callable",
+          "message": "F.pairwise_distance is not callable",
+          "message-id": "E1102"
+        }
+      ]
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2026-01-12T15:31:32Z",
+        "metrics": {
+          ".\\outputs\\01-12\\TRACKFORMERS\\Q1\\script_mistralai_mistral-large-2512_1631_2.py": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 445,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 445,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2026-01-12T15:31:57Z",
+    "passed": false,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/01-12/TRACKFORMERS/Q1/script_mistralai_mistral-large-2512_1631_2.py\nargv2=--dryrun\n#PROC_METRICS#{\"cpu_seconds_user\": 9.26, \"cpu_seconds_sys\": 0.74, \"max_rss_kb\": 775464, \"training_time_s\": 12.717, \"source\": \"proc_tree_ticks\"}\n#GPU_METRICS#{\"cuda_available\": true, \"name\": \"NVIDIA GeForce RTX 3050 Ti Laptop GPU\", \"total_mb\": 4096, \"peak_used_mb\": 0, \"avg_used_mb\": 0.0, \"avg_util_pct\": 0.0, \"peak_util_pct\": 0, \"per_process_gpu_mem\": false}\n",
+      "stderr": "resource_monitor.py: WARNING: cgroup v2 not detected; metrics may be degraded.\nTraceback (most recent call last):\n  File \"/workspace/outputs/01-12/TRACKFORMERS/Q1/script_mistralai_mistral-large-2512_1631_2.py\", line 633, in <module>\n    _run(dryrun=\"--dryrun\" in sys.argv)\n  File \"/workspace/outputs/01-12/TRACKFORMERS/Q1/script_mistralai_mistral-large-2512_1631_2.py\", line 564, in _run\n    first_batch = next(iter(train_loader))\n                  ^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/torch/utils/data/dataloader.py\", line 708, in __next__\n    data = self._next_data()\n           ^^^^^^^^^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/torch/utils/data/dataloader.py\", line 1480, in _next_data\n    return self._process_data(data)\n           ^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/torch/utils/data/dataloader.py\", line 1505, in _process_data\n    data.reraise()\n  File \"/opt/venv/lib/python3.12/site-packages/torch/_utils.py\", line 733, in reraise\n    raise exception\nAttributeError: Caught AttributeError in DataLoader worker process 0.\nOriginal Traceback (most recent call last):\n  File \"/opt/venv/lib/python3.12/site-packages/torch/utils/data/_utils/worker.py\", line 349, in _worker_loop\n    data = fetcher.fetch(index)  # type: ignore[possibly-undefined]\n           ^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/torch/utils/data/_utils/fetch.py\", line 52, in fetch\n    data = [self.dataset[idx] for idx in possibly_batched_index]\n            ~~~~~~~~~~~~^^^^^\n  File \"/workspace/utils/llm_io.py\", line 200, in __getitem__\n    X = self.pre.transform(X) if self.pre is not None else X\n        ^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/outputs/01-12/TRACKFORMERS/Q1/script_mistralai_mistral-large-2512_1631_2.py\", line 141, in transform\n    (r - self.r_stats['mean']) / (self.r_stats['std'] + 1e-8).unsqueeze(1),\n                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAttributeError: 'numpy.float32' object has no attribute 'unsqueeze'. Did you mean: 'squeeze'?\n\n"
+    },
+    "return_code": 1
+  }
+}

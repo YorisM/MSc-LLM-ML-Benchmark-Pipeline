@@ -1,0 +1,71 @@
+{
+  "LLMGeneration": {
+    "model": "x-ai/grok-code-fast-1",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 4310,
+    "prompt_chars": 17811,
+    "response_tokens": 8918,
+    "response_chars": 9200,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.01420444,
+    "generation_ms": 105416,
+    "code": "# ---------- IMPORTS ----------\nimport torch\nfrom torch import nn\nfrom torch.nn import functional as F\nfrom sklearn.preprocessing import StandardScaler\nimport hdbscan\nimport numpy as np\n\n# ----------- MODEL ARCHITECTURE ----------\nclass HitClassifier(nn.Module):\n    def __init__(self, example_batch_x):\n        super().__init__()\n        # F = example_batch_x[0][0].shape[1]  # assuming 4\n        self.d_model = 64\n        self.emb_dim = 64\n        self.num_heads = 8\n        self.num_layers = 6\n        self.encoder = nn.TransformerEncoder(\n            nn.TransformerEncoderLayer(self.d_model, self.num_heads, batch_first=True, dim_feedforward=256),\n            self.num_layers\n        )\n        self.feature_proj = nn.Linear(4, self.d_model)\n        self.is_noise_head = nn.Linear(self.d_model, 2)  # 0: not noise, 1: noise\n        self.track_embed = nn.Linear(self.d_model, self.emb_dim)\n        self.dropout = nn.Dropout(0.1)\n        # Example batch_x is list of X, but since __init__, to get F\n\n    def forward(self, batch_x):\n        # batch_x: list of [N_i, 4]\n        padded_X = nn.utils.rnn.pad_sequence(batch_x, batch_first=True, padding_value=0)  # [batch_size, max_len, 4]\n        lengths = torch.tensor([len(x) for x in batch_x], device=padded_X.device)\n        max_len = padded_X.shape[1]\n        # src_key_padding_mask: True for pad positions\n        src_key_padding_mask = torch.zeros(len(batch_x), max_len, dtype=torch.bool, device=padded_X.device)\n        for i, l in enumerate(lengths):\n            src_key_padding_mask[i, l:] = True\n        embeddings = self.feature_proj(padded_X)  # [batch_size, max_len, d_model]\n        embeddings = self.dropout(embeddings)\n        output = self.encoder(embeddings, src_key_padding_mask=src_key_padding_mask)  # [batch_size, max_len, d_model]\n        is_noise_logits = self.is_noise_head(output)  # [batch_size, max_len, 2]\n        track_embeddings = self.track_embed(output)  # [batch_size, max_len, emb_dim]\n        return {\n            'is_noise_logits': is_noise_logits,\n            'track_embeddings': track_embeddings,\n            'lengths': lengths,\n            'max_len': max_len\n        }\n\n    def predict_labels(self, batch_x):\n        with torch.no_grad():\n            out = self.forward(batch_x)\n            is_noise_logits = out['is_noise_logits']\n            track_emb = out['track_embeddings']  # [batch_size, max_len, emb_dim]\n            lengths = out['lengths']\n            max_len = out['max_len']\n            all_labels = []\n            for i, l in enumerate(lengths):\n                length = int(l.item())\n                logits = is_noise_logits[i, :length]  # [length, 2]\n                probs = torch.softmax(logits, dim=1)\n                is_noise = torch.argmax(probs, dim=1)  # [length] 0 or 1\n                emb = track_emb[i, :length].cpu().numpy()  # [length, emb_dim]\n                labels = torch.full(length, -1, dtype=torch.long)\n                not_noise_mask = (is_noise == 0).cpu().numpy()\n                if np.sum(not_noise_mask) == 0:\n                    all_labels.append(labels)\n                    continue\n                emb_not_noise = emb[not_noise_mask]\n                clusterer = hdbscan.HDBSCAN(min_cluster_size=4, min_samples=1)\n                cluster_ids = clusterer.fit_predict(emb_not_noise)\n                # cluster_ids: array of -1 or 0 to num_clusters-1\n                cluster_ids = cluster_ids.copy()\n                cluster_ids += 1  # now -1 stays -1, 0+ becomes 1+\n                cluster_ids[cluster_ids == 0] = -1  # -1+1=0, back to -1 for noise\n                labels[not_noise_mask] = torch.tensor(cluster_ids, dtype=torch.long).to(device='cpu')\n                all_labels.append(labels.to(device='cpu'))\n        return all_labels\n\n\ndef make_model(example_batch_x):\n    return HitClassifier(example_batch_x)\n\n# ---------- PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.scaler = StandardScaler()\n\n    def make_loader_cfg(self):\n        return {\n            \"dataset_builder\": \"utils.llm_io:EventDataset\",   # default harness dataset\n            \"dataset_kwargs\": {},\n            \"loader_class\": \"torch.utils.data:DataLoader\",    # or torch_geometric.loader:DataLoader\n            \"batch_size\": 32,  # smaller for memory\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": False,\n            \"collate\": \"ragged_xy\",  # or \"identity\" or \"None\"\n            \"extra_loader_kwargs\": {},\n            \"eval_overrides\": {\"shuffle\": False}\n        }\n\n    def fit(self, Xs):\n        all_X = torch.cat(Xs, 0).numpy()  # [sum N, 4]\n        self.scaler.fit(all_X)\n        return self\n\n    def transform(self, X):\n        # X: [N, 4]\n        normalized = self.scaler.transform(X.numpy()).astype(np.float32)\n        return torch.from_numpy(normalized)  # [N, 4]\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n# ---------- MODEL TRAINING ----------\ndef train_model(model, train_loader, val_loader, epochs):\n    model = model.to(device)\n    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4, weight_decay=1e-4)\n    # scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.5)\n    train_losses = []\n    val_losses = []\n    for epoch in range(epochs):\n        model.train()\n        epoch_loss = 0.0\n        num_batches = 0\n        for batch in train_loader:\n            Xs, ys = batch\n            Xs = [x.to(device) for x in Xs]\n            ys = [y.to(device) for y in ys]\n            out = model(Xs)\n            loss = 0.0\n            for i in range(len(Xs)):\n                y = ys[i]\n                length = out['lengths'][i]\n                is_noise_logits = out['is_noise_logits'][i, :length]  # [length, 2]\n                target = (y == 0).long()  # 0: not noise, 1: noise\n                loss += F.cross_entropy(is_noise_logits, target, reduction='mean')\n                track_emb = out['track_embeddings'][i, :length]  # [length, emb_dim]\n                not_noise_mask = (y != 0)\n                if not_noise_mask.sum() == 0:\n                    continue\n                emb = track_emb[not_noise_mask]\n                y_tracks = y[not_noise_mask]\n                unique_tracks, inv_indices = torch.unique(y_tracks, return_inverse=True)\n                centers = []\n                for j in range(len(unique_tracks)):\n                    mask = (inv_indices == j)\n                    if mask.sum() == 0:\n                        centers.append(torch.zeros(model.emb_dim, device=device))\n                        continue\n                    center = emb[mask].mean(dim=0)\n                    centers.append(center)\n                centers = torch.stack(centers)  # [num_tracks, emb_dim]\n                for k in range(len(emb)):\n                    diff = emb[k] - centers[inv_indices[k]]\n                    loss += (diff ** 2).sum()\n            loss = loss / len(Xs)  # average over events in batch\n            optimizer.zero_grad()\n            loss.backward()\n            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)\n            optimizer.step()\n            epoch_loss += loss.item()\n            num_batches += 1\n        train_losses.append(epoch_loss / num_batches if num_batches > 0 else 0)\n        # scheduler.step()\n        model.eval()\n        epoch_loss = 0.0\n        num_batches = 0\n        with torch.no_grad():\n            for batch in val_loader:\n                Xs, ys = batch\n                Xs = [x.to(device) for x in Xs]\n                ys = [y.to(device) for y in ys]\n                out = model(Xs)\n                loss = 0.0\n                for i in range(len(Xs)):\n                    y = ys[i]\n                    length = out['lengths'][i]\n                    is_noise_logits = out['is_noise_logits'][i, :length]\n                    target = (y == 0).long()\n                    loss += F.cross_entropy(is_noise_logits, target, reduction='mean')\n                    track_emb = out['track_embeddings'][i, :length]\n                    not_noise_mask = (y != 0)\n                    if not_noise_mask.sum() == 0:\n                        continue\n                    emb = track_emb[not_noise_mask]\n                    y_tracks = y[not_noise_mask]\n                    unique_tracks, inv_indices = torch.unique(y_tracks, return_inverse=True)\n                    centers = []\n                    for j in range(len(unique_tracks)):\n                        mask = (inv_indices == j)\n                        if mask.sum() == 0:\n                            centers.append(torch.zeros(model.emb_dim, device=device))\n                            continue\n                        center = emb[mask].mean(dim=0)\n                        centers.append(center)\n                    centers = torch.stack(centers)\n                    for k in range(len(emb)):\n                        diff = emb[k] - centers[inv_indices[k]]\n                        loss += (diff ** 2).sum()\n                loss = loss / len(Xs)\n                epoch_loss += loss.item()\n                num_batches += 1\n        val_losses.append(epoch_loss / num_batches if num_batches > 0 else 0)\n    return model, train_losses, val_losses, None, None\n\nEPOCHS = 15  # adjusted",
+    "reasoning": "",
+    "Outer_attempt": 1
+  },
+  "StaticChecks": {
+    "__timestamp": "2026-01-12T15:38:09Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2026-01-12T15:38:09Z",
+        "metrics": {
+          ".\\outputs\\01-12\\TRACKFORMERS\\Q1\\script_x-ai_grok-code-fast-1_1638_1.py": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 286,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 286,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2026-01-12T15:38:38Z",
+    "passed": false,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/01-12/TRACKFORMERS/Q1/script_x-ai_grok-code-fast-1_1638_1.py\nargv2=--dryrun\n#PROC_METRICS#{\"cpu_seconds_user\": 9.77, \"cpu_seconds_sys\": 1.31, \"max_rss_kb\": 1159788, \"training_time_s\": 16.295, \"source\": \"proc_tree_ticks\"}\n#GPU_METRICS#{\"cuda_available\": true, \"name\": \"NVIDIA GeForce RTX 3050 Ti Laptop GPU\", \"total_mb\": 4096, \"peak_used_mb\": 147, \"avg_used_mb\": 33.077, \"avg_util_pct\": 1.615, \"peak_util_pct\": 21, \"per_process_gpu_mem\": false}\n",
+      "stderr": "resource_monitor.py: WARNING: cgroup v2 not detected; metrics may be degraded.\n/opt/venv/lib/python3.12/site-packages/torch/nn/modules/transformer.py:508: UserWarning: The PyTorch API of nested tensors is in prototype stage and will change in the near future. We recommend specifying layout=torch.jagged when constructing a nested tensor, as this layout receives active development, has better operator coverage, and works with torch.compile. (Triggered internally at /pytorch/aten/src/ATen/NestedTensorImpl.cpp:178.)\n  output = torch._nested_tensor_from_mask(\nTraceback (most recent call last):\n  File \"/workspace/challenges/TRACKFORMERS/utils_trackformers.py\", line 133, in build_trackformers_model\n    out = model.predict_labels(Xs)\n          ^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/outputs/01-12/TRACKFORMERS/Q1/script_x-ai_grok-code-fast-1_1638_1.py\", line 114, in predict_labels\n    labels = torch.full(length, -1, dtype=torch.long)\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nTypeError: full() received an invalid combination of arguments - got (int, int, dtype=torch.dtype), but expected one of:\n * (tuple of ints size, Number fill_value, *, tuple of names names, torch.dtype dtype = None, torch.layout layout = None, torch.device device = None, bool pin_memory = False, bool requires_grad = False)\n * (tuple of ints size, Number fill_value, *, Tensor out = None, torch.dtype dtype = None, torch.layout layout = None, torch.device device = None, bool pin_memory = False, bool requires_grad = False)\n\n\nThe above exception was the direct cause of the following exception:\n\nTraceback (most recent call last):\n  File \"/workspace/outputs/01-12/TRACKFORMERS/Q1/script_x-ai_grok-code-fast-1_1638_1.py\", line 352, in <module>\n    _run(dryrun=\"--dryrun\" in sys.argv)\n  File \"/workspace/outputs/01-12/TRACKFORMERS/Q1/script_x-ai_grok-code-fast-1_1638_1.py\", line 287, in _run\n    model = build_trackformers_model(mode, first_batch, make_model, device)\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/utils/suffix_utils.py\", line 204, in build_trackformers_model\n    return _impl(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/challenges/TRACKFORMERS/utils_trackformers.py\", line 135, in build_trackformers_model\n    raise RuntimeError(\"predict_labels() crashed in torch_ragged_xy lane.\") from e\nRuntimeError: predict_labels() crashed in torch_ragged_xy lane.\n"
+    },
+    "return_code": 1
+  }
+}

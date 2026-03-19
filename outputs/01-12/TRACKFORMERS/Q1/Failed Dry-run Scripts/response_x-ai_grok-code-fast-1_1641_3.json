@@ -1,0 +1,71 @@
+{
+  "LLMGeneration": {
+    "model": "x-ai/grok-code-fast-1",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "mode": "chat",
+    "prompt_tokens": 4310,
+    "prompt_chars": 17811,
+    "response_tokens": 5844,
+    "response_chars": 8848,
+    "reasoning_tokens": null,
+    "reasoning_chars": 0,
+    "Inner attempt": 1,
+    "cost_usd": 0.00959344,
+    "generation_ms": 64704,
+    "code": "# ---------- IMPORTS ----------\nimport torch.nn.functional as F\nfrom torch_geometric.data import Data\nfrom torch_geometric.utils import from_scipy_sparse_matrix\nfrom sklearn.neighbors import kneighbors_graph\nimport hdbscan\n\n#  -------- (OPTIONAL) CUSTOM DATASET  --------\nclass CustomDataset(Dataset):\n    def __init__(self, events, pre, train: bool = True):\n        self.events = events\n        self.pre = pre\n\n    def __len__(self):\n        return len(self.events)\n\n    def __getitem__(self, idx):\n        X, y = split_X_y(self.events[idx])\n        if self.pre is not None:\n            X = self.pre.transform(X)\n        # X: [N, 4] float32, x, y, z, layer\n        pos = X.numpy()\n        k = 10\n        adj_coo = kneighbors_graph(pos, k, mode='connectivity')\n        edge_index, _ = from_scipy_sparse_matrix(adj_coo)\n        data = Data(x=X.float(), y=y.long(), edge_index=edge_index)\n        return data\n\n\n# ----------- (OPTIONAL) PRE-PROCESSING ----------\nclass MyPreprocessor:\n    def __init__(self):\n        self.mean = None\n        self.std = None\n\n    def make_loader_cfg(self) -> dict:\n        return {\n            \"dataset_builder\": \"llm_script:CustomDataset\",\n            \"dataset_kwargs\": {},\n\n            \"loader_class\": \"torch_geometric.loader:DataLoader\",\n            \"batch_size\": 64,\n            \"shuffle\": True,\n            \"num_workers\": 0,\n            \"pin_memory\": False,\n\n            \"collate\": None,\n            \"extra_loader_kwargs\": {},\n\n            \"eval_overrides\": {\"shuffle\": False}\n        }\n\n    def fit(self, Xs):\n        # Xs: list of [N_i, F_raw]\n        all_X = torch.cat(Xs, dim=0)  # [total_N, 4]\n        self.mean = all_X.mean(dim=0)\n        self.std = all_X.std(dim=0)\n        return self\n\n    def transform(self, X):\n        # X: [N, 4] raw: r, theta, z, layer\n        r, theta, z, layer = X.unbind(dim=1)\n        x = r * torch.cos(theta)\n        y = r * torch.sin(theta)\n        X_cart = torch.stack([x, y, z, layer], dim=1)  # [N, 4] x,y,z,layer\n        X_cart = (X_cart - self.mean) / (self.std + 1e-8)\n        return X_cart  # [N, 4]\n\n\ndef make_preprocessor():\n    return MyPreprocessor()\n\n\n# ---------- MODEL ARCHITECTURE ----------\nclass HitClassifier(nn.Module):\n    def __init__(self, example_batch_x):\n        super().__init__()\n        from torch_geometric.nn import GATConv\n        input_dim = example_batch_x.shape[1]\n        self.conv1 = GATConv(input_dim, 64, heads=8)\n        self.conv2 = GATConv(64 * 8, 64, heads=4)\n        self.conv3 = GATConv(64 * 4, 32)\n\n    def forward(self, G):\n        # G.x: [N, 4], G.edge_index: [2, E]\n        x, edge_index = G.x, G.edge_index\n        x = F.relu(self.conv1(x, edge_index))\n        x = F.relu(self.conv2(x, edge_index))\n        x = F.relu(self.conv3(x, edge_index))\n        return x  # [N, 32] embeddings\n\n    def predict_labels(self, G):\n        # G: Batch\n        with torch.no_grad():\n            emb = self.forward(G)  # [N, 32]\n            batch = G.batch  # [N]\n            unique_events = batch.unique()\n            labels = torch.zeros_like(G.y, dtype=torch.long) - 1\n            for e in unique_events:\n                mask = batch == e\n                e_emb = emb[mask].cpu().numpy()\n                clusterer = hdbscan.HDBSCAN(min_cluster_size=4, metric='euclidean')\n                e_labels = clusterer.fit_predict(e_emb)\n                e_labels[e_labels == -1] = -1  # noise remains -1\n                labels[mask] = torch.tensor(e_labels, dtype=torch.long, device=G.x.device)\n            return labels  # [N] long tensor\n\n\ndef make_model(example_batch_x):\n    return HitClassifier(example_batch_x)\n\n\n# ---------- MODEL TRAINING ----------\nEPOCHS = 20\ndef train_model(model: nn.Module, train_loader, val_loader, epochs: int):\n    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)\n    train_loss = []\n    val_loss = []\n    train_acc = []\n    val_acc = []\n\n    for epoch in range(epochs):\n        model.train()\n        total_loss = 0\n        total_acc = 0\n        num_events = 0\n        for G in train_loader:\n            G = G.to(device)\n            emb = model(G)  # [N, 32]\n            ys = G.y  # [N]\n            batch = G.batch  # [N]\n            unique_events = batch.unique()\n            loss = 0\n            acc_sum = 0\n            events = 0\n            for e in unique_events:\n                mask = batch == e\n                e_emb = emb[mask]\n                e_ys = ys[mask]\n                unique_track_ids = e_ys.unique()\n                track_ids_no_noise = unique_track_ids[unique_track_ids > 0]\n                n_tracks = len(track_ids_no_noise)\n                if n_tracks == 0:\n                    continue\n                # compute centroids\n                centroids = []\n                for tid in track_ids_no_noise:\n                    centroids.append(e_emb[e_ys == tid].mean(dim=0))\n                centroids = torch.stack(centroids)  # [n_tracks, 32]\n                # only non-noise hits\n                valid_mask = e_ys > 0\n                e_emb_valid = e_emb[valid_mask]  # [N_valid, 32]\n                e_ys_valid = e_ys[valid_mask]  # [N_valid]\n                if len(e_emb_valid) == 0:\n                    continue\n                dists = torch.cdist(e_emb_valid, centroids)  # [N_valid, n_tracks]\n                # map tid to 0..n_tracks-1\n                tid_to_idx = {tid.item(): i for i, tid in enumerate(track_ids_no_noise)}\n                target = torch.tensor([tid_to_idx[tid.item()] for tid in e_ys_valid],\n                                      dtype=torch.long, device=device)\n                logits = -dists\n                loss += F.cross_entropy(logits, target)\n                pred = logits.argmax(dim=1)\n                acc_sum += (pred == target).float().sum().item() / len(target)\n                events += 1\n            if events > 0:\n                loss /= events\n                total_loss += loss.item()\n                total_acc += acc_sum / events\n                num_events += 1\n            else:\n                loss = torch.tensor(0., device=device)\n            optimizer.zero_grad()\n            loss.backward()\n            optimizer.step()\n        if num_events > 0:\n            train_loss.append(total_loss / num_events)\n            train_acc.append(total_acc / num_events)\n        else:\n            train_loss.append(0.)\n            train_acc.append(0.)\n\n        # validation\n        model.eval()\n        total_val_loss = 0\n        total_val_acc = 0\n        num_val_events = 0\n        with torch.no_grad():\n            for G in val_loader:\n                G = G.to(device)\n                emb = model(G)\n                ys = G.y\n                batch = G.batch\n                unique_events = batch.unique()\n                val_loss = 0\n                val_acc_sum = 0\n                events = 0\n                for e in unique_events:\n                    mask = batch == e\n                    e_emb = emb[mask]\n                    e_ys = ys[mask]\n                    unique_track_ids = e_ys.unique()\n                    track_ids_no_noise = unique_track_ids[unique_track_ids > 0]\n                    n_tracks = len(track_ids_no_noise)\n                    if n_tracks == 0:\n                        continue\n                    centroids = []\n                    for tid in track_ids_no_noise:\n                        centroids.append(e_emb[e_ys == tid].mean(dim=0))\n                    centroids = torch.stack(centroids)\n                    valid_mask = e_ys > 0\n                    e_emb_valid = e_emb[valid_mask]\n                    e_ys_valid = e_ys[valid_mask]\n                    if len(e_emb_valid) == 0:\n                        continue\n                    dists = torch.cdist(e_emb_valid, centroids)\n                    tid_to_idx = {tid.item(): i for i, tid in enumerate(track_ids_no_noise)}\n                    target = torch.tensor([tid_to_idx[tid.item()] for tid in e_ys_valid],\n                                          dtype=torch.long, device=device)\n                    logits = -dists\n                    val_loss += F.cross_entropy(logits, target).item()\n                    pred = logits.argmax(dim=1)\n                    val_acc_sum += (pred == target).float().sum().item() / len(target)\n                    events += 1\n                if events > 0:\n                    val_loss /= events\n                    total_val_loss += val_loss\n                    total_val_acc += val_acc_sum / events\n                    num_val_events += 1\n        if num_val_events > 0:\n            val_loss.append(total_val_loss / num_val_events)\n            val_acc.append(total_val_acc / num_val_events)\n        else:\n            val_loss.append(0.)\n            val_acc.append(0.)\n\n        print(f\"Epoch {epoch+1}/{epochs}, Train Loss: {train_loss[-1]:.4f}, Val Loss: {val_loss[-1]:.4f}\")\n\n    return model, train_loss, val_loss, train_acc, val_acc",
+    "reasoning": "",
+    "Outer_attempt": 3
+  },
+  "StaticChecks": {
+    "__timestamp": "2026-01-12T15:41:13Z",
+    "PyLint": {
+      "passed": true,
+      "messages": []
+    },
+    "Bandit": {
+      "passed": true,
+      "results": {
+        "errors": [],
+        "generated_at": "2026-01-12T15:41:13Z",
+        "metrics": {
+          ".\\outputs\\01-12\\TRACKFORMERS\\Q1\\script_x-ai_grok-code-fast-1_1641_3.py": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 303,
+            "nosec": 0,
+            "skipped_tests": 0
+          },
+          "_totals": {
+            "CONFIDENCE.HIGH": 1,
+            "CONFIDENCE.LOW": 0,
+            "CONFIDENCE.MEDIUM": 0,
+            "CONFIDENCE.UNDEFINED": 0,
+            "SEVERITY.HIGH": 0,
+            "SEVERITY.LOW": 0,
+            "SEVERITY.MEDIUM": 1,
+            "SEVERITY.UNDEFINED": 0,
+            "loc": 303,
+            "nosec": 0,
+            "skipped_tests": 0
+          }
+        },
+        "results": []
+      }
+    }
+  },
+  "DryRun": {
+    "__timestamp": "2026-01-12T15:41:39Z",
+    "passed": false,
+    "STD": {
+      "stdout": "argv0=/usr/local/bin/train.sh\nargv1=outputs/01-12/TRACKFORMERS/Q1/script_x-ai_grok-code-fast-1_1641_3.py\nargv2=--dryrun\n#PROC_METRICS#{\"cpu_seconds_user\": 9.81, \"cpu_seconds_sys\": 0.84, \"max_rss_kb\": 883160, \"training_time_s\": 14.237, \"source\": \"proc_tree_ticks\"}\n#GPU_METRICS#{\"cuda_available\": true, \"name\": \"NVIDIA GeForce RTX 3050 Ti Laptop GPU\", \"total_mb\": 4096, \"peak_used_mb\": 103, \"avg_used_mb\": 20.545, \"avg_util_pct\": 0.364, \"peak_util_pct\": 3, \"per_process_gpu_mem\": false}\n",
+      "stderr": "resource_monitor.py: WARNING: cgroup v2 not detected; metrics may be degraded.\nTraceback (most recent call last):\n  File \"/workspace/outputs/01-12/TRACKFORMERS/Q1/script_x-ai_grok-code-fast-1_1641_3.py\", line 384, in <module>\n    _run(dryrun=\"--dryrun\" in sys.argv)\n  File \"/workspace/outputs/01-12/TRACKFORMERS/Q1/script_x-ai_grok-code-fast-1_1641_3.py\", line 319, in _run\n    model = build_trackformers_model(mode, first_batch, make_model, device)\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/utils/suffix_utils.py\", line 204, in build_trackformers_model\n    return _impl(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/challenges/TRACKFORMERS/utils_trackformers.py\", line 142, in build_trackformers_model\n    model = make_model(G).to(device)\n            ^^^^^^^^^^^^^\n  File \"/workspace/outputs/01-12/TRACKFORMERS/Q1/script_x-ai_grok-code-fast-1_1641_3.py\", line 161, in make_model\n    return HitClassifier(example_batch_x)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/outputs/01-12/TRACKFORMERS/Q1/script_x-ai_grok-code-fast-1_1641_3.py\", line 130, in __init__\n    input_dim = example_batch_x.shape[1]\n                ^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/torch_geometric/data/data.py\", line 561, in __getattr__\n    return getattr(self._store, key)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/torch_geometric/data/storage.py\", line 96, in __getattr__\n    raise AttributeError(\nAttributeError: 'GlobalStorage' object has no attribute 'shape'\n"
+    },
+    "return_code": 1
+  }
+}
